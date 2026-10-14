@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gammons/slk/internal/core"
+	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/slack-go/slack"
 )
 
@@ -15,23 +16,24 @@ import (
 // core.UserProfile the profile dialog renders. at is the time used to
 // resolve the user's timezone abbreviation (America/Los_Angeles at a
 // given instant may be PST or PDT).
-func toCoreProfile(u *slack.User, at time.Time) core.UserProfile {
+func toCoreProfile(u *slackclient.UserProfile, at time.Time) core.UserProfile {
 	teamID := u.TeamID
 	return core.UserProfile{
-		UserID:      u.ID,
-		TeamID:      teamID,
-		Handle:      u.Name,
-		RealName:    u.RealName,
-		DisplayName: u.Profile.DisplayName,
-		Title:       u.Profile.Title,
-		Pronouns:    u.Profile.Pronouns,
-		Email:       u.Profile.Email,
-		Phone:       u.Profile.Phone,
-		TZ:          u.TZ,
-		TZAbbrev:    zoneAbbrev(u.TZ, at),
-		TZOffset:    u.TZOffset,
-		IsBot:       u.IsBot || u.IsAppUser,
-		Deleted:     u.Deleted,
+		UserID:          u.ID,
+		TeamID:          teamID,
+		Handle:          u.Name,
+		RealName:        u.RealName,
+		DisplayName:     u.Profile.DisplayName,
+		Title:           u.Profile.Title,
+		Pronouns:        u.Profile.Pronouns,
+		Email:           u.Profile.Email,
+		Phone:           u.Profile.Phone,
+		TZ:              u.TZ,
+		TZAbbrev:        zoneAbbrev(u.TZ, at),
+		TZOffset:        u.TZOffset,
+		IsBot:           u.IsBot || u.IsAppUser,
+		Deleted:         u.Deleted,
+		HuddleChannelID: u.HuddleStateChannelID,
 	}
 }
 
@@ -118,9 +120,9 @@ func (c *profileCache) Profile(ctx context.Context, teamID, userID string) (core
 
 // newProfileFetch builds the per-workspace profile fetch function used
 // by ProfileService, from a lookup that resolves a workspace's
-// GetUserInfoContext-shaped function by team ID. Separated from the
-// live *workspaceRouter so it can be tested without a live *slack.Client.
-func newProfileFetch(lookup func(teamID string) (getUser func(ctx context.Context, userID string) (*slack.User, error), ok bool)) func(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
+// users.info function by team ID. Separated from the live
+// *workspaceRouter so it can be tested without a live *slack.Client.
+func newProfileFetch(lookup func(teamID string) (getUser func(ctx context.Context, userID string) (*slackclient.UserProfile, error), ok bool)) func(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
 	return func(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
 		getUser, ok := lookup(teamID)
 		if !ok {

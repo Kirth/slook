@@ -44,7 +44,6 @@ import (
 	"github.com/gammons/slk/internal/ui/themeswitcher"
 	"github.com/gammons/slk/internal/ui/workspace"
 	"github.com/gammons/slk/internal/wake"
-	"github.com/slack-go/slack"
 	"golang.design/x/clipboard"
 	"golang.org/x/term"
 )
@@ -1094,7 +1093,7 @@ func run() error {
 			},
 		}))
 
-		profileFetch := newProfileFetch(func(teamID string) (func(context.Context, string) (*slack.User, error), bool) {
+		profileFetch := newProfileFetch(func(teamID string) (func(context.Context, string) (*slackclient.UserProfile, error), bool) {
 			wctx := router.ByID(teamID)
 			if wctx == nil || wctx.Client == nil {
 				return nil, false

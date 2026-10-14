@@ -16,6 +16,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gammons/slk/internal/slackurl"
 	"github.com/gammons/slk/internal/ui/wintree"
 )
 
@@ -46,6 +47,7 @@ var commands = map[string]commandFunc{
 	"only":     cmdOnlyWindow,
 	"on":       cmdOnlyWindow,
 	"activity": cmdActivity,
+	"huddle":   cmdHuddle,
 }
 
 // cmdActivity opens the Activity view (mentions, thread replies,
@@ -54,6 +56,22 @@ var commands = map[string]commandFunc{
 func cmdActivity(a *App, _ commandArgs) tea.Cmd {
 	a.sidebar.SelectActivityRow()
 	return func() tea.Msg { return ActivityViewActivatedMsg{} }
+}
+
+// cmdHuddle copies the huddle deep link for the active conversation —
+// https://app.slack.com/huddle/<TEAM>/<CHANNEL>, the same link Slack's
+// own "Copy huddle link" produces. The link is always copied: opening
+// it with no huddle active is what Slack's web client itself does
+// (it shows the conversation's huddle panel), so knowing whether a
+// huddle is live is not a precondition. Threads share their parent
+// conversation's huddle, so a.threadPanel.ChannelID() is deliberately
+// not consulted. The H key calls this same handler.
+func cmdHuddle(a *App, _ commandArgs) tea.Cmd {
+	if a.activeChannelID == "" {
+		return toastWithClear(a, "No conversation open", 2*time.Second)
+	}
+	url := slackurl.HuddleURL(a.activeTeamID, a.activeChannelID)
+	return tea.Batch(a.clipboardWrite(url), toastWithClear(a, "Copied huddle link", 2*time.Second))
 }
 
 // cmdSplit / cmdVSplit create a stacked / side-by-side split of the

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gammons/slk/internal/core"
+	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/slack-go/slack"
 )
 
@@ -30,7 +31,7 @@ func TestToCoreProfile_MapsFields(t *testing.T) {
 		},
 	}
 	at := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	got := toCoreProfile(u, at)
+	got := toCoreProfile(&slackclient.UserProfile{User: u}, at)
 
 	want := core.UserProfile{
 		UserID:      "U1",
@@ -54,10 +55,22 @@ func TestToCoreProfile_MapsFields(t *testing.T) {
 }
 
 func TestToCoreProfile_IsBotFromIsAppUser(t *testing.T) {
-	u := &slack.User{ID: "U2", IsAppUser: true}
-	got := toCoreProfile(u, time.Now())
+	got := toCoreProfile(&slackclient.UserProfile{User: &slack.User{ID: "U2", IsAppUser: true}}, time.Now())
 	if !got.IsBot {
 		t.Error("IsAppUser should map to IsBot=true")
+	}
+}
+
+func TestToCoreProfile_HuddleChannelID(t *testing.T) {
+	u := &slackclient.UserProfile{
+		User:                 &slack.User{ID: "U3", TeamID: "T1"},
+		HuddleStateChannelID: "C9",
+	}
+	if got := toCoreProfile(u, time.Now()).HuddleChannelID; got != "C9" {
+		t.Errorf("HuddleChannelID = %q, want C9", got)
+	}
+	if got := toCoreProfile(&slackclient.UserProfile{User: &slack.User{ID: "U3"}}, time.Now()).HuddleChannelID; got != "" {
+		t.Errorf("HuddleChannelID = %q, want empty without the field", got)
 	}
 }
 
@@ -162,8 +175,8 @@ func TestProfileCache_KeyedByTeam(t *testing.T) {
 }
 
 func TestProfileFetch_RateLimitWrapped(t *testing.T) {
-	lookup := func(teamID string) (func(context.Context, string) (*slack.User, error), bool) {
-		return func(ctx context.Context, userID string) (*slack.User, error) {
+	lookup := func(teamID string) (func(context.Context, string) (*slackclient.UserProfile, error), bool) {
+		return func(ctx context.Context, userID string) (*slackclient.UserProfile, error) {
 			return nil, &slack.RateLimitedError{RetryAfter: 30 * time.Second}
 		}, true
 	}
@@ -180,7 +193,7 @@ func TestProfileFetch_RateLimitWrapped(t *testing.T) {
 }
 
 func TestProfileFetch_UnknownWorkspace(t *testing.T) {
-	lookup := func(teamID string) (func(context.Context, string) (*slack.User, error), bool) {
+	lookup := func(teamID string) (func(context.Context, string) (*slackclient.UserProfile, error), bool) {
 		return nil, false
 	}
 	fetch := newProfileFetch(lookup)
@@ -192,8 +205,8 @@ func TestProfileFetch_UnknownWorkspace(t *testing.T) {
 }
 
 func TestProfileFetch_DeadlineExceededPassesThrough(t *testing.T) {
-	lookup := func(teamID string) (func(context.Context, string) (*slack.User, error), bool) {
-		return func(ctx context.Context, userID string) (*slack.User, error) {
+	lookup := func(teamID string) (func(context.Context, string) (*slackclient.UserProfile, error), bool) {
+		return func(ctx context.Context, userID string) (*slackclient.UserProfile, error) {
 			return nil, context.DeadlineExceeded
 		}, true
 	}
