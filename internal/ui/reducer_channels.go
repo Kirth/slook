@@ -329,6 +329,9 @@ func (a *App) retargetActiveChannel(id, name, chType string) tea.Cmd {
 	debuglog.General("compose: channel selected channel=%s chType=%s readOnlyMark=%v unsendable=%v",
 		id, chType, a.readOnlyChannels[id], a.unsendableChannels[id])
 	a.setComposeDisabled(a.readOnlyChannels[id] || a.unsendableChannels[id], "channel_switch")
+	// A caller may have entered insert mode first (reopening a DM); the
+	// hidden composer must not keep taking keys.
+	dropCmd := a.dropInsertIfComposeDisabled()
 	a.typingOut.ResetThrottle() // reset typing throttle for new channel
 	a.compose.SetChannel(name)
 	a.compose.SetActiveChannel(id)
@@ -358,9 +361,9 @@ func (a *App) retargetActiveChannel(id, name, chType string) tea.Cmd {
 	a.statusbar.SetSyncing(false)
 	// Only an app/bot DM can reject a send outright.
 	if chType == "app" {
-		return teaCmd(a.channels.MessagingCapability(ids.ChannelID(id)))
+		return tea.Batch(dropCmd, teaCmd(a.channels.MessagingCapability(ids.ChannelID(id))))
 	}
-	return nil
+	return dropCmd
 }
 
 // reduceChannelSelected handles ChannelSelectedMsg. Extracted from
