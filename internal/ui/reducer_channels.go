@@ -323,11 +323,12 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 // the reducer.
 func (a *App) retargetActiveChannel(id, name, chType string) tea.Cmd {
 	a.activeChannelID = id
-	// Sendable unless a failed send marked this channel read-only; a
-	// probe (below) may still disable it later.
-	debuglog.General("compose: channel selected channel=%s chType=%s readOnlyMark=%v",
-		id, chType, a.readOnlyChannels[id])
-	a.setComposeDisabled(a.readOnlyChannels[id], "channel_switch")
+	// Sendable unless a failed send marked this channel read-only or an
+	// earlier probe found it unsendable; the probe fired below
+	// overwrites the latter.
+	debuglog.General("compose: channel selected channel=%s chType=%s readOnlyMark=%v unsendable=%v",
+		id, chType, a.readOnlyChannels[id], a.unsendableChannels[id])
+	a.setComposeDisabled(a.readOnlyChannels[id] || a.unsendableChannels[id], "channel_switch")
 	a.typingOut.ResetThrottle() // reset typing throttle for new channel
 	a.compose.SetChannel(name)
 	a.compose.SetActiveChannel(id)

@@ -197,6 +197,21 @@ func TestProbeUnsendableBlocksThreadReply(t *testing.T) {
 	}
 }
 
+func TestUnsendableVerdictSeedsComposerOnReturn(t *testing.T) {
+	a := NewApp()
+	selectChannel(a, "X")
+	a.Update(ChannelMessagingCapabilityMsg{ChannelID: "X", CanSend: false})
+	selectChannel(a, "Y")
+	if a.composeDisabled {
+		t.Fatal("composer of Y disabled by X's verdict")
+	}
+
+	selectChannel(a, "X")
+	if !a.composeDisabled {
+		t.Error("composer not disabled on returning to a channel the probe found unsendable")
+	}
+}
+
 func TestReadOnlyThreadReplyFailure(t *testing.T) {
 	a := NewApp()
 	selectChannel(a, "C1")
