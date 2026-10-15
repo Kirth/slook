@@ -52,3 +52,16 @@ opening the copied link happens in Slack's own clients.
   should still pin `huddle_state_channel_id` the way `huddle_state` was
   pinned; until then the dialog simply shows no link when Slack does
   not send the field, which degrades to today's behavior.
+
+## Review follow-ups
+
+- **Thread channel.** The Threads view opens a thread without moving
+  `a.activeChannelID`, so `H` uses the focused pane's channel
+  (`focusedContentPane`) and falls back to the active channel.
+- **Profile freshness.** The dialog's 5-minute profile cache would hide a
+  huddle that starts (or moves) inside the TTL. The dialog is now
+  stale-while-revalidate: `ProfileService.Cached` is shown at once and
+  `Profile` — wired to `profileCache.Fresh`, which always fetches and
+  refreshes the cache — runs behind it on every open. A failed refresh
+  behind a shown profile is ignored (`Model.SetError`), so a background
+  429 never replaces good data with the error line.

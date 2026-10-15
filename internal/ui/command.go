@@ -63,14 +63,20 @@ func cmdActivity(a *App, _ commandArgs) tea.Cmd {
 // own "Copy huddle link" produces. The link is always copied: opening
 // it with no huddle active is what Slack's web client itself does
 // (it shows the conversation's huddle panel), so knowing whether a
-// huddle is live is not a precondition. Threads share their parent
-// conversation's huddle, so a.threadPanel.ChannelID() is deliberately
-// not consulted. The H key calls this same handler.
+// huddle is live is not a precondition. A focused thread pane names
+// its own parent channel, which the Threads view can open without
+// moving a.activeChannelID, so the focused pane's channel wins and
+// the active channel is the fallback (sidebar focus). The H key calls
+// this same handler.
 func cmdHuddle(a *App, _ commandArgs) tea.Cmd {
-	if a.activeChannelID == "" {
+	channelID := a.activeChannelID
+	if _, paneChannel, ok := a.focusedContentPane(); ok && paneChannel != "" {
+		channelID = paneChannel
+	}
+	if channelID == "" {
 		return toastWithClear(a, "No conversation open", 2*time.Second)
 	}
-	url := slackurl.HuddleURL(a.activeTeamID, a.activeChannelID)
+	url := slackurl.HuddleURL(a.activeTeamID, channelID)
 	return tea.Batch(a.clipboardWrite(url), toastWithClear(a, "Copied huddle link", 2*time.Second))
 }
 

@@ -93,6 +93,32 @@ func newProfileCache(ttl time.Duration, now func() time.Time, fetch func(ctx con
 	}
 }
 
+// Cached returns userID's profile if a fetch within ttl is on hand,
+// without fetching.
+func (c *profileCache) Cached(teamID, userID string) (core.UserProfile, bool) {
+	c.mu.Lock()
+	entry, ok := c.entries[teamID+"/"+userID]
+	c.mu.Unlock()
+	if ok && c.now().Sub(entry.fetchedAt) < c.ttl {
+		return entry.profile, true
+	}
+	return core.UserProfile{}, false
+}
+
+// Fresh always fetches live and, on success, refreshes the cached entry
+// Cached serves. The dialog uses it as its refresh behind a cached
+// render, so the huddle a person is in is never older than the open.
+func (c *profileCache) Fresh(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
+	profile, err := c.fetch(ctx, teamID, userID)
+	if err != nil {
+		return core.UserProfile{}, err
+	}
+	c.mu.Lock()
+	c.entries[teamID+"/"+userID] = profileCacheEntry{profile: profile, fetchedAt: c.now()}
+	c.mu.Unlock()
+	return profile, nil
+}
+
 // Profile returns userID's profile in workspace teamID, from cache if
 // fresh, otherwise from a live fetch. Successful fetches are cached
 // for ttl; errors are not cached.

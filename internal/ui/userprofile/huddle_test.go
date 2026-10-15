@@ -1,6 +1,7 @@
 package userprofile
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -169,5 +170,25 @@ func TestClickAt_NoHuddleIconNoHit(t *testing.T) {
 				t.Fatalf("ClickAt(%d, %d) = true with no copiable row shown", x, y)
 			}
 		}
+	}
+}
+
+// A refresh that fails behind an already-shown (cached) profile keeps
+// that profile on screen; with nothing shown it still reports the error.
+func TestSetError_KeepsAProfileAlreadyShown(t *testing.T) {
+	m := loadedWithHuddle("C9")
+	if !m.SetError("T1", "U1", context.DeadlineExceeded) {
+		t.Fatal("SetError = false, want the failure consumed")
+	}
+	if got := m.HuddleURL(); got == "" {
+		t.Error("profile was replaced by the error; want the cached view kept")
+	}
+
+	fresh := New()
+	fresh.Open(Seed{TeamID: "T1", UserID: "U1"})
+	fresh.SetError("T1", "U1", context.DeadlineExceeded)
+	out := fresh.ViewOverlay(80, 24, "", Live{Now: time.Now()})
+	if !containsAll(out, "Couldn't load full profile") {
+		t.Errorf("a failed first load should show the error:\n%s", ansi.Strip(out))
 	}
 }

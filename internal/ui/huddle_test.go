@@ -100,3 +100,19 @@ func TestHuddleToast_Clears(t *testing.T) {
 		t.Errorf("statusbar = %q after the clear tick, want the toast gone", got)
 	}
 }
+
+// A thread opened from the Threads view belongs to another channel
+// than a.activeChannelID; the focused thread pane's channel wins.
+func TestHuddleKey_FocusedThreadUsesItsOwnChannel(t *testing.T) {
+	a, copied := copyHuddleApp(t, withMessages(testMessageItems(3)...))
+	a.threadPanel.SetThread(testMessageItems(1)[0], nil, "C2", "1.0")
+	a.threadVisible = true
+	a.focusedPanel = PanelThread
+
+	_, cmd := a.Update(keyPress('H'))
+	drainHuddleBatch(t, cmd)
+
+	if *copied != "https://app.slack.com/huddle/T1/C2" {
+		t.Errorf("clipboard = %q, want the thread's own channel C2", *copied)
+	}
+}

@@ -1100,8 +1100,12 @@ func run() error {
 			}
 			return wctx.Client.GetUserProfileContext, true
 		})
+		profiles := newProfileCache(5*time.Minute, time.Now, profileFetch)
 		app.SetProfileService(core.NewProfileService(core.ProfileServiceFuncs{
-			Profile: newProfileCache(5*time.Minute, time.Now, profileFetch).Profile,
+			// Profile always fetches; Cached lets the dialog show the last
+			// result instantly while that refresh runs.
+			Profile: profiles.Fresh,
+			Cached:  profiles.Cached,
 		}))
 
 		upload := func(channelID, threadTS, caption string, attachments []core.PendingAttachment) core.Cmd {

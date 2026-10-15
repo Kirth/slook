@@ -150,10 +150,15 @@ func (m *Model) SetProfile(teamID, userID string, p core.UserProfile) bool {
 }
 
 // SetError applies a failed fetch, with the same staleness guard as
-// SetProfile.
+// SetProfile. A failure after a profile is already showing (a cached
+// one, whose refresh failed) is consumed and leaves that profile on
+// screen: the error line would say "couldn't load" over data we have.
 func (m *Model) SetError(teamID, userID string, err error) bool {
 	if !m.visible || teamID != m.seed.TeamID || userID != m.seed.UserID {
 		return false
+	}
+	if m.state == stateLoaded {
+		return true
 	}
 	m.err = err
 	m.state = stateFailed

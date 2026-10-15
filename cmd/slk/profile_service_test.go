@@ -217,3 +217,55 @@ func TestProfileFetch_DeadlineExceededPassesThrough(t *testing.T) {
 		t.Fatalf("errors.Is(err, context.DeadlineExceeded) = false; err = %v", err)
 	}
 }
+
+// Fresh bypasses the TTL, and what it fetched is what Cached serves.
+func TestProfileCache_FreshRefreshesWhatCachedServes(t *testing.T) {
+	channel := ""
+	fetch := func(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
+		return core.UserProfile{UserID: userID, HuddleChannelID: channel}, nil
+	}
+	now := time.Now()
+	c := newProfileCache(5*time.Minute, func() time.Time { return now }, fetch)
+
+	if _, ok := c.Cached("T1", "U1"); ok {
+		t.Fatal("Cached before any fetch = hit, want miss")
+	}
+	if _, err := c.Fresh(context.Background(), "T1", "U1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := c.Cached("T1", "U1"); !ok || got.HuddleChannelID != "" {
+		t.Fatalf("Cached = %+v, %v; want the no-huddle profile", got, ok)
+	}
+
+	channel = "C9" // a huddle starts inside the TTL
+	if got, _ := c.Fresh(context.Background(), "T1", "U1"); got.HuddleChannelID != "C9" {
+		t.Errorf("Fresh served %q, want the live C9", got.HuddleChannelID)
+	}
+	if got, _ := c.Cached("T1", "U1"); got.HuddleChannelID != "C9" {
+		t.Errorf("Cached after Fresh = %q, want C9", got.HuddleChannelID)
+	}
+
+	now = now.Add(6 * time.Minute)
+	if _, ok := c.Cached("T1", "U1"); ok {
+		t.Error("Cached past the TTL = hit, want miss")
+	}
+}
+
+func TestProfileCache_FreshErrorKeepsTheCachedEntry(t *testing.T) {
+	fail := false
+	fetch := func(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
+		if fail {
+			return core.UserProfile{}, errors.New("boom")
+		}
+		return core.UserProfile{UserID: userID}, nil
+	}
+	c := newProfileCache(5*time.Minute, time.Now, fetch)
+	_, _ = c.Fresh(context.Background(), "T1", "U1")
+	fail = true
+	if _, err := c.Fresh(context.Background(), "T1", "U1"); err == nil {
+		t.Fatal("want the error")
+	}
+	if _, ok := c.Cached("T1", "U1"); !ok {
+		t.Error("a failed refresh dropped the cached entry")
+	}
+}
