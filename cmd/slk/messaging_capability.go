@@ -32,6 +32,12 @@ func probeMessagingCapability(ctx context.Context, post boot.PostFunc, chID stri
 		debuglog.General("compose: conversations.view probe failed channel=%s err=%q (fail-open)", chID, err)
 		return ui.ChannelMessagingCapabilityMsg{ChannelID: chID, CanSend: true}
 	}
+	// Slack may ignore the channel param and answer for the last-viewed
+	// conversation; that verdict is not about this channel.
+	if view.Channel.ID != chID {
+		debuglog.General("compose: conversations.view answered for another channel channel=%s got=%s (fail-open)", chID, view.Channel.ID)
+		return ui.ChannelMessagingCapabilityMsg{ChannelID: chID, CanSend: true}
+	}
 	return capabilityResult(chID, "conversations.view", view.AppHome)
 }
 

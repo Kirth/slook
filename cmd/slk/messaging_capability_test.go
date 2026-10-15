@@ -60,6 +60,10 @@ func TestProbeMessagingCapability(t *testing.T) {
 			"conversations.info": {err: boom},
 			"conversations.view": {body: viewReadOnlyBody},
 		}, false, []string{"conversations.info", "conversations.view"}},
+		{"view answer for another channel fails open", map[string]answer{
+			"conversations.info": {body: `{"ok":true}`},
+			"conversations.view": {body: `{"ok":true,"channel":{"id":"DOTHER"},"app_home":{"app_id":"A000","messages_tab_enabled":true,"messages_tab_read_only_enabled":true}}`},
+		}, true, []string{"conversations.info", "conversations.view"}},
 		{"both fail open", map[string]answer{
 			"conversations.info": {err: boom},
 			"conversations.view": {err: boom},
