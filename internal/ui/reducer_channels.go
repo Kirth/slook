@@ -99,8 +99,13 @@ var reduceChannels reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		return cmd, true
 
 	case ChannelMessagingCapabilityMsg:
-		// Drop a result for a channel the user has since navigated
-		// away from.
+		if a.unsendableChannels == nil {
+			a.unsendableChannels = map[string]bool{}
+		}
+		a.unsendableChannels[m.ChannelID] = !m.CanSend
+		// The verdict is recorded for every channel (thread replies
+		// consult it); only the active channel's composer state follows
+		// it.
 		if m.ChannelID == a.activeChannelID {
 			// A read-only mark from a failed send outlives the probe.
 			a.setComposeDisabled(!m.CanSend || a.readOnlyChannels[m.ChannelID], "probe")

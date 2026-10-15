@@ -17,7 +17,10 @@ import (
 	"github.com/gammons/slk/internal/debuglog"
 )
 
-const readOnlyToast = "This conversation is read-only"
+const (
+	readOnlyToast      = "This conversation is read-only"
+	appUnsendableToast = "You can't send messages to this app"
+)
 
 // isReadOnlySendError reports whether a send failure reason is Slack
 // refusing the post because the conversation is read-only for the user.
@@ -40,7 +43,7 @@ func (a *App) composeBlockedText() string {
 	if a.readOnlyChannels[a.activeChannelID] {
 		return readOnlyToast
 	}
-	return "You can't send messages to this app"
+	return appUnsendableToast
 }
 
 // dropInsertIfComposeDisabled takes the user out of insert mode on the

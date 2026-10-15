@@ -155,6 +155,48 @@ func TestReadOnlyFailureInInsertModeLeavesInsert(t *testing.T) {
 	}
 }
 
+func TestProbeUnsendableBlocksThreadReply(t *testing.T) {
+	sends := func(a *App) bool {
+		a.SetMode(ModeInsert)
+		a.focusedPanel = PanelThread
+		a.threadVisible = true
+		a.threadCompose.SetValue("reply")
+		_, cmd := a.Update(keyCode(tea.KeyEnter))
+		for _, m := range drainCmd(cmd) {
+			if _, ok := m.(SendThreadReplyMsg); ok {
+				return true
+			}
+		}
+		return false
+	}
+
+	a := NewApp()
+	selectChannel(a, "C1")
+	showThread(t, a)
+	a.Update(ChannelMessagingCapabilityMsg{ChannelID: "C1", CanSend: false})
+	if sends(a) {
+		t.Error("thread reply sent in an app DM the probe found unsendable")
+	}
+	if got := statusbarText(a); !strings.Contains(got, "can't send messages to this app") {
+		t.Errorf("statusbar = %q, want the app notice", got)
+	}
+
+	// A later writable verdict lifts the block.
+	a.Update(ChannelMessagingCapabilityMsg{ChannelID: "C1", CanSend: true})
+	if !sends(a) {
+		t.Error("thread reply blocked after a CanSend:true probe")
+	}
+
+	// A verdict for another channel does not block this thread.
+	b := NewApp()
+	selectChannel(b, "C1")
+	showThread(t, b)
+	b.Update(ChannelMessagingCapabilityMsg{ChannelID: "C2", CanSend: false})
+	if !sends(b) {
+		t.Error("an unrelated channel's verdict blocked this thread")
+	}
+}
+
 func TestReadOnlyThreadReplyFailure(t *testing.T) {
 	a := NewApp()
 	selectChannel(a, "C1")
