@@ -43,6 +43,18 @@ func BenchmarkView(b *testing.B) {
 	}
 }
 
+// BenchmarkViewCold changes the highlight every frame, so each View renders.
+func BenchmarkViewCold(b *testing.B) {
+	m := benchModel(benchBody)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		m.Highlight(i % 2)
+		_ = m.View()
+	}
+}
+
 // Truncation adds a width measurement and a re-slice.
 func BenchmarkViewTruncatedBody(b *testing.B) {
 	m := benchModel(strings.Repeat("überlange nachricht ", 40))
