@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -53,6 +54,54 @@ func TestWorkspacePresenceIDsOwnsSnapshot(t *testing.T) {
 	wctx.Channels = append(wctx.Channels, sidebar.ChannelItem{Type: "dm", DMUserID: "U3"})
 	if want := []string{"USELF", "U1"}; !slices.Equal(ids, want) {
 		t.Fatalf("snapshot = %v, want %v", ids, want)
+	}
+}
+
+func TestOnConnectPresenceSnapshotRacesConversationOpened(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/users.getPresence":
+			_, _ = w.Write([]byte(`{"ok":true,"presence":"active"}`))
+		case "/api/dnd.info":
+			_, _ = w.Write([]byte(`{"ok":true,"dnd_enabled":false}`))
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+			http.Error(w, `{"ok":false,"error":"unexpected_path"}`, http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	for attempt := range 20 {
+		t.Run(fmt.Sprintf("connect-%d", attempt), func(t *testing.T) {
+			done := make(chan struct{})
+			wctx := &WorkspaceContext{
+				Client: newTestClient(t, srv), TeamID: "T1", UserID: "USELF",
+				UserNames: newUserNameStore(nil),
+				Channels:  []sidebar.ChannelItem{{ID: "D1", Type: "dm", DMUserID: "U1"}},
+			}
+			h := &rtmEventHandler{wsCtx: wctx, program: sendFunc(func(msg tea.Msg) {
+				if _, ok := msg.(ui.StatusChangeMsg); ok {
+					close(done)
+				}
+			})}
+			h.OnConnect()
+			for i := range 300 {
+				ch := slack.Channel{}
+				ch.ID = fmt.Sprintf("D%04d", i)
+				ch.IsIM = true
+				ch.User = fmt.Sprintf("UP%04d", i)
+				h.OnConversationOpened(ch)
+			}
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("presence bootstrap did not finish")
+			}
+			if got := len(wctx.Channels); got != 301 {
+				t.Fatalf("len(Channels) = %d, want 301", got)
+			}
+		})
 	}
 }
 
