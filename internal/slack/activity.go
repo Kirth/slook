@@ -58,6 +58,14 @@ type rawActivityInner struct {
 	Message    *rawActivityMessage  `json:"message"`
 	Reaction   *rawActivityReaction `json:"reaction"`
 	BundleInfo *rawActivityBundle   `json:"bundle_info"`
+
+	SavedReminder *rawSavedReminder `json:"saved_reminder_payload"`
+}
+
+// rawSavedReminder is a saved_reminder item's payload: the saved item
+// and its due time. No observed reminder points at a message.
+type rawSavedReminder struct {
+	ItemType string `json:"item_type"`
 }
 
 type rawActivityMessage struct {
@@ -108,10 +116,6 @@ type rawLatestEntry struct {
 //
 // Returns (zero, err) on network failure or ok=false JSON, mirroring
 // callListThreadSubscriptions / ListThreadSubscriptions.
-//
-// TODO(activity): activity.markRead — marking items read is out of scope
-// for the MVP; opening an item marks the underlying conversation read via
-// existing paths and the feed reflects server read state on next fetch.
 func (c *Client) GetActivityFeed(ctx context.Context, limit int, cursor string, unreadOnly bool) (ActivityFeedResult, error) {
 	body, err := c.callActivityFeed(ctx, limit, cursor, unreadOnly)
 	if err != nil {
@@ -159,7 +163,16 @@ func parseActivityFeed(body []byte) (ActivityFeedResult, error) {
 			debuglog.General("activity.feed: skipping unparseable item: %v", err)
 			continue
 		}
-		items = append(items, flattenActivityItem(raw))
+		item := flattenActivityItem(raw)
+		if item.ChannelID == "" && item.Type != "saved_reminder" {
+			// No conversation to open (issue #285). Saved reminders
+			// never have one; anything else is an unrecognised type, or
+			// a known one in a shape flattenActivityItem does not
+			// expect, and is only diagnosable from the raw JSON.
+			debuglog.General("activity.feed: item with no channel ref type=%q key=%q is_unread=%v raw=%s",
+				raw.Item.Type, raw.Key, raw.IsUnread, rawJSON)
+		}
+		items = append(items, item)
 	}
 	return ActivityFeedResult{
 		Items:      items,
@@ -220,6 +233,12 @@ func flattenActivityItem(raw rawActivityItem) ActivityItem {
 		if m := payloadMessage(raw.Item.BundleInfo); m != nil {
 			out.ChannelID = m.Channel
 			out.TS = m.TS
+		}
+	case "saved_reminder":
+		// A reminder from Slack's Later list. There is no conversation
+		// to open, so ChannelID and TS stay empty.
+		if r := raw.Item.SavedReminder; r != nil {
+			out.Subtype = r.ItemType
 		}
 	default:
 		// Unknown type: best-effort channel/ts if a message is present,
@@ -415,4 +434,33 @@ func parseActivityMessages(body []byte) (map[string]ActivityMessage, error) {
 		}
 	}
 	return out, nil
+}
+
+// activityReadEntry is one item in an activity.markRead / markUnread
+// request. Slack requires all three fields.
+type activityReadEntry struct {
+	Type   string `json:"type"`
+	Key    string `json:"key"`
+	FeedTS string `json:"feed_ts"`
+}
+
+// SetActivityRead marks one Activity item read or unread via Slack's
+// internal activity.markRead / activity.markUnread, the calls behind the
+// web client's "Mark as read/unread". Every feed item carries the type,
+// key and feed_ts they need, so this works for items slk cannot open.
+// ok:false is an error carrying Slack's error string.
+func (c *Client) SetActivityRead(ctx context.Context, itemType, key, feedTS string, read bool) error {
+	method := "activity.markUnread"
+	if read {
+		method = "activity.markRead"
+	}
+	entries, err := json.Marshal([]activityReadEntry{{Type: itemType, Key: key, FeedTS: feedTS}})
+	if err != nil {
+		return fmt.Errorf("marshaling %s entries: %w", method, err)
+	}
+	raw, err := c.postForm(ctx, method, url.Values{"entries": {string(entries)}})
+	if err != nil {
+		return err
+	}
+	return parseOKResponse(method, raw)
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -225,14 +226,26 @@ func TestNonHTTPBracketedSurvives(t *testing.T) {
 	}
 }
 
-// TestDateTokenRendersFallback covers Slack's <!date^TS^FORMAT|FALLBACK>
-// token (emitted by Linear/Jira/etc. unfurls). We render the precomputed
-// fallback text and never leak the raw token or its format string.
-func TestDateTokenRendersFallback(t *testing.T) {
+// TestDateTokenRendersFormatted covers Slack's <!date^TS^FORMAT|FALLBACK>
+// token (emitted by Linear/Jira/etc. unfurls). The FORMAT string is
+// expanded against the timestamp in the local timezone — this is what
+// the official clients do, and what calendar apps rely on to show event
+// times. The test never leaks the raw token or its format string, and
+// the expected date is computed in the local zone so the assertion
+// holds in every CI timezone.
+func TestDateTokenRendersFormatted(t *testing.T) {
 	in := "<https://linear.app/truelist-io/team/TRU/all|Truelist> | <!date^1779996974^{date_short_pretty}|May 28, 2026>"
+	// 1779996974 is 2026-05-28 19:36 UTC: local day is 28 (UTC−) or 29
+	// (UTC+). Both days take the "th" ordinal, hardcoded here so a bug
+	// in ordinalSuffix cannot pass its own test.
+	ts := time.Unix(1779996974, 0)
+	if d := ts.Day(); d != 28 && d != 29 {
+		t.Fatalf("fixture moved: day %d, expected 28 or 29", d)
+	}
+	wantDate := ts.Format("Jan 2") + "th, 2026"
 	out := ansi.Strip(RenderSlackMarkdown(in, nil, nil))
-	if !strings.Contains(out, "May 28, 2026") {
-		t.Errorf("missing fallback date: %q", out)
+	if !strings.Contains(out, wantDate) {
+		t.Errorf("missing formatted date %q: %q", wantDate, out)
 	}
 	if strings.Contains(out, "<!date") {
 		t.Errorf("raw date token leaked: %q", out)

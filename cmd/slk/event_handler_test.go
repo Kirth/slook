@@ -14,6 +14,7 @@ import (
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/core"
 	slackclient "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/sidebar"
@@ -909,6 +910,70 @@ func TestOnEphemeralMessage_DisplaysButTouchesNoDurableState(t *testing.T) {
 	}
 	if got := item.LegacyAttachments[0].Actions[1]; got.ID != "2" || got.Name != "ignore" {
 		t.Errorf("Actions[1] = %+v, want id 2 from the raw frame", got)
+	}
+}
+
+// A bot's working indicator reaches the UI tagged with the workspace
+// it came from, the empty status that clears it included.
+func TestOnAssistantStatus_SendsBotStatus(t *testing.T) {
+	var sent []tea.Msg
+	h := &rtmEventHandler{
+		program:     sendFunc(func(msg tea.Msg) { sent = append(sent, msg) }),
+		workspaceID: "T1",
+	}
+	h.OnAssistantStatus(slackclient.AssistantStatus{ChannelID: "C1", ThreadTS: "100.1", BotUserID: "UBOT", Status: "Thinking..."})
+	h.OnAssistantStatus(slackclient.AssistantStatus{ChannelID: "C1", ThreadTS: "100.1", BotUserID: "UBOT"})
+
+	want := []tea.Msg{
+		ui.BotStatusMsg{WorkspaceID: "T1", ChannelID: "C1", ThreadTS: "100.1", BotUserID: "UBOT", Status: "Thinking..."},
+		ui.BotStatusMsg{WorkspaceID: "T1", ChannelID: "C1", ThreadTS: "100.1", BotUserID: "UBOT"},
+	}
+	if len(sent) != len(want) {
+		t.Fatalf("sent %d messages, want %d: %+v", len(sent), len(want), sent)
+	}
+	for i := range want {
+		if sent[i] != want[i] {
+			t.Errorf("sent[%d] = %#v, want %#v", i, sent[i], want[i])
+		}
+	}
+}
+
+// An app slk has never seen must not stay "U… is working...": its
+// status asks for its name, which reaches the UI as UserResolvedMsg.
+func TestOnAssistantStatus_ResolvesAnUnknownApp(t *testing.T) {
+	db := newTestDB(t)
+	watch := newResolvedWatch(1, func(m ui.UserResolvedMsg) bool { return m.UserID == "UBOT" })
+	batcher := &fakeBatcher{res: []edge.User{edgeUserRecord("UBOT", "atlas", "Atlas", "", "T1", 1, true)}}
+	wctx := &WorkspaceContext{TeamID: "T1", UserNames: newUserNameStore(nil)}
+	wctx.UserResolver = newUserResolver("T1", nil, db, nil, watch.send, batcher, nil)
+	wctx.UserResolver.names = wctx.UserNames
+	h := &rtmEventHandler{workspaceID: "T1", wsCtx: wctx, db: db, userNames: wctx.UserNames}
+
+	h.OnAssistantStatus(slackclient.AssistantStatus{ChannelID: "C1", ThreadTS: "100.1", BotUserID: "UBOT", Status: "Thinking..."})
+
+	<-watch.done // no timeout: a resolver never asked hangs, and go test names the test
+	for _, m := range watch.messages() {
+		if u, ok := m.(ui.UserResolvedMsg); ok && u.UserID == "UBOT" && u.DisplayName != "Atlas" {
+			t.Errorf("UBOT resolved as %q, want Atlas", u.DisplayName)
+		}
+	}
+}
+
+func TestOnAssistantStatus_KnownAppIsNotLookedUp(t *testing.T) {
+	db := newTestDB(t)
+	batcher := &fakeBatcher{}
+	wctx := &WorkspaceContext{TeamID: "T1", UserNames: newUserNameStore(map[string]string{"UBOT": "Atlas"})}
+	wctx.UserResolver = newUserResolver("T1", nil, db, nil, nil, batcher, nil)
+	h := &rtmEventHandler{workspaceID: "T1", wsCtx: wctx, db: db, userNames: wctx.UserNames}
+
+	h.OnAssistantStatus(slackclient.AssistantStatus{ChannelID: "C1", ThreadTS: "100.1", BotUserID: "UBOT", Status: "Thinking..."})
+
+	r := wctx.UserResolver
+	r.pendingMu.Lock()
+	queued, armed := len(r.pending), r.flushTimer != nil
+	r.pendingMu.Unlock()
+	if queued != 0 || armed {
+		t.Errorf("a named app queued %d lookup(s) (flush armed: %v), want none", queued, armed)
 	}
 }
 

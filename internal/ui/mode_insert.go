@@ -191,6 +191,9 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 			return cmd
 		}
 		if isSend {
+			if cmd, ok := a.trySlashCommand(PanelThread, &a.threadCompose, a.threadPanel.ChannelID(), a.threadPanel.ThreadTS()); ok {
+				return cmd
+			}
 			if len(a.threadCompose.Attachments()) > 0 {
 				cmd := a.submitWithAttachments(&a.threadCompose)
 				if a.threadCompose.Uploading() {
@@ -242,6 +245,9 @@ func handleInsertMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		return cmd
 	}
 	if isSend {
+		if cmd, ok := a.trySlashCommand(PanelMessages, &a.compose, a.activeChannelID, ""); ok {
+			return cmd
+		}
 		if len(a.compose.Attachments()) > 0 {
 			cmd := a.submitWithAttachments(&a.compose)
 			if a.compose.Uploading() {

@@ -42,7 +42,7 @@ func usergroupDisplay(groups map[string]string, id, label string) string {
 //	<url>            -> url (mailto: scheme dropped from display)
 //	<!here> etc.     -> @here / @channel / @everyone
 //	<!subteam^S1|@eng> -> @eng (unlabeled form -> @group)
-//	<!date^..|fall>  -> fall
+//	<!date^..|fall>  -> local-formatted date (fallback on malformed)
 //	&amp; &lt; &gt;  -> & < >
 //
 // Either resolver may be nil; unknown IDs fall back to the raw ID.
@@ -56,9 +56,7 @@ func FlattenMrkdwnWithUserGroups(text string, resolveUser, resolveChannel func(i
 	// Date tokens first: their payload never contains other entity
 	// forms, and handling them up front keeps specialMentionRe from
 	// having to exclude `<!date...>`.
-	text = dateTokenRe.ReplaceAllStringFunc(text, func(match string) string {
-		return dateTokenRe.FindStringSubmatch(match)[1]
-	})
+	text = dateTokenRe.ReplaceAllStringFunc(text, renderDateToken)
 
 	text = linkWithLabelRe.ReplaceAllStringFunc(text, func(match string) string {
 		return linkWithLabelRe.FindStringSubmatch(match)[2]

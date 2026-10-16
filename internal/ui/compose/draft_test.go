@@ -303,3 +303,83 @@ func TestSetActiveChannelDoesNotTouchDrafts(t *testing.T) {
 		t.Errorf("SetActiveChannel altered the visible draft: %q", got)
 	}
 }
+
+func TestOfferDraftFillsTheEmptyVisibleComposer(t *testing.T) {
+	m := New("general")
+	m.SetDraftContext("T1", "C1", "")
+	if !m.OfferDraft("T1", "C1", "", "/giphy cats") {
+		t.Fatal("OfferDraft = false, want true for the empty visible conversation")
+	}
+	if got := m.Value(); got != "/giphy cats" {
+		t.Errorf("value = %q, want the offered text", got)
+	}
+}
+
+func TestOfferDraftKeepsNewerVisibleText(t *testing.T) {
+	m := New("general")
+	m.SetDraftContext("T1", "C1", "")
+	m.SetValue("something newer")
+	if m.OfferDraft("T1", "C1", "", "/giphy cats") {
+		t.Fatal("OfferDraft = true, want false over existing text")
+	}
+	if got := m.Value(); got != "something newer" {
+		t.Errorf("value = %q, want the newer text kept", got)
+	}
+}
+
+func TestOfferDraftKeepsVisibleAttachments(t *testing.T) {
+	m := New("general")
+	m.SetDraftContext("T1", "C1", "")
+	m.AddAttachment(core.PendingAttachment{Filename: "a.png", Bytes: []byte{1}})
+	if m.OfferDraft("T1", "C1", "", "/giphy cats") {
+		t.Fatal("OfferDraft = true, want false while attachments are pending")
+	}
+}
+
+func TestOfferDraftStoresForAnInactiveConversation(t *testing.T) {
+	m := New("general")
+	m.SetDraftContext("T1", "C2", "")
+	if !m.OfferDraft("T1", "C1", "", "/giphy cats") {
+		t.Fatal("OfferDraft = false, want true for an inactive conversation with no draft")
+	}
+	if got := m.Value(); got != "" {
+		t.Errorf("visible value = %q, want untouched", got)
+	}
+	m.SetDraftContext("T1", "C1", "")
+	if got := m.Value(); got != "/giphy cats" {
+		t.Errorf("after switching back: value = %q, want the stored draft", got)
+	}
+}
+
+func TestOfferDraftKeepsAnInactiveDraft(t *testing.T) {
+	m := New("general")
+	m.SetDraftContext("T1", "C1", "")
+	m.SetValue("half a thought")
+	m.SetDraftContext("T1", "C2", "")
+	if m.OfferDraft("T1", "C1", "", "/giphy cats") {
+		t.Fatal("OfferDraft = true, want false over a stored draft")
+	}
+	m.SetDraftContext("T1", "C1", "")
+	if got := m.Value(); got != "half a thought" {
+		t.Errorf("value = %q, want the stored draft kept", got)
+	}
+}
+
+func TestOfferDraftThreadKeyIsDistinct(t *testing.T) {
+	m := New("general")
+	m.SetDraftContext("T1", "C1", "10.0")
+	if !m.OfferDraft("T1", "C1", "10.0", "/giphy cats") {
+		t.Fatal("OfferDraft = false, want true for the visible thread")
+	}
+	if got := m.Value(); got != "/giphy cats" {
+		t.Errorf("value = %q, want the offered text", got)
+	}
+}
+
+func TestOfferDraftRejectsEmpty(t *testing.T) {
+	m := New("general")
+	m.SetDraftContext("T1", "C1", "")
+	if m.OfferDraft("T1", "C1", "", "") || m.OfferDraft("T1", "", "", "x") {
+		t.Fatal("OfferDraft = true for empty text or channel, want false")
+	}
+}

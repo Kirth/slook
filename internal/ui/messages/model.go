@@ -1499,6 +1499,7 @@ func (m *Model) renderMessageEntry(i int, width int, cs cacheStyles, stats *entr
 		EditedMark:      true,
 		BroadcastLabel:  true,
 		ImageHits:       true,
+		SixelRows:       true,
 		stats:           stats,
 	}
 	if m.avatarFn != nil {
@@ -1777,6 +1778,16 @@ func (m *Model) HitTest(row, col int) (msgIdx, attIdx int, fileID string, ok boo
 		return 0, 0, "", false
 	}
 	return h.Ref, h.Aux, h.Key, true
+}
+
+// HitTestImage is HitTest returning the message's ts instead of its
+// index, the form the App's click routing shares with the thread pane.
+func (m *Model) HitTestImage(row, col int) (ts string, attIdx int, ok bool) {
+	msgIdx, attIdx, fileID, ok := m.HitTest(row, col)
+	if !ok || fileID == "" || msgIdx < 0 || msgIdx >= len(m.messages) {
+		return "", 0, false
+	}
+	return m.messages[msgIdx].TS, attIdx, true
 }
 
 // HitTestReaction returns the (message index, reaction emoji name) at

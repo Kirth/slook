@@ -1,0 +1,53 @@
+{
+ "method": "chat.command",
+ "form": [
+  [
+   "token",
+   "xoxc-REDACTED"
+  ],
+  [
+   "command",
+   "/remind"
+  ],
+  [
+   "disp",
+   "/remind"
+  ],
+  [
+   "blocks",
+   "[{\"type\":\"rich_text\",\"elements\":[{\"type\":\"rich_text_section\",\"elements\":[{\"type\":\"text\",\"text\":\"me test in 1 minute\"}]}]}]"
+  ],
+  [
+   "channel",
+   "D0EXAMPLE01"
+  ],
+  [
+   "client_token",
+   "web-1791803277000"
+  ],
+  [
+   "team_id",
+   "T0EXAMPLE01"
+  ],
+  [
+   "_x_reason",
+   "executeCommand"
+  ],
+  [
+   "_x_mode",
+   "online"
+  ],
+  [
+   "_x_sonic",
+   "true"
+  ],
+  [
+   "_x_app_name",
+   "client"
+  ]
+ ],
+ "response": {
+  "ok": true,
+  "keep_input": false
+ }
+}

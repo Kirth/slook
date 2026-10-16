@@ -1,0 +1,8 @@
+{
+ "type": "message",
+ "subtype": "message_deleted",
+ "channel": "C0EXAMPLE02",
+ "hidden": true,
+ "deleted_ts": "1791802160.000400",
+ "event_ts": "1791802165.004700"
+}

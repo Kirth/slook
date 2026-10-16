@@ -300,12 +300,21 @@ func (k *KittyRenderer) RenderKey(key string, target image.Point) Render {
 //
 // Reference: https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders
 //
+// The upload is preceded by `a=d,d=I` for the same id, which drops every
+// existing placement of it. Ids restart at 2 each run, so a terminal can
+// still hold placements an earlier slk process made under this id at a
+// different c×r. Ghostty (through 1.3.x) keeps them across a re-transmit
+// and sizes placeholder cells from whichever virtual placement it finds
+// first, which fitted the image preview and avatars into a 2x1 emoji's
+// grid.
+//
 // The whole upload must be emitted in one Write. Continuation chunks
 // carry no image id, while KittyOutput serializes individual Write
 // calls rather than complete uploads.
 func emitKittyUpload(w io.Writer, id uint32, payload string, cols, rows int) error {
 	const chunk = 4096
 	var sb strings.Builder
+	sb.WriteString(forTerminal(fmt.Sprintf("\x1b_Ga=d,d=I,i=%d,q=2\x1b\\", id)))
 	for i := 0; i < len(payload); i += chunk {
 		end := i + chunk
 		more := 1

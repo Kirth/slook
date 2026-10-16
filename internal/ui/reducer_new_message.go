@@ -50,7 +50,25 @@ var reduceNewMessagePicker reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, boo
 		a.newMessagePicker.Close()
 		a.newMessageInFlightID = 0
 		a.newMessageCancelled = false
-		a.SetMode(ModeInsert)
+		prefill := a.newMessagePrefill.text
+		a.newMessagePrefill = msgPrefill{}
+		var keptDraft tea.Cmd
+		if prefill != "" && !a.compose.OfferDraft(a.activeTeamID, m.ChannelID, "", prefill) {
+			keptDraft = func() tea.Msg {
+				return ToastMsg{Text: "Kept your existing draft there; the /msg text was not added"}
+			}
+		}
+		// An action dialog may already be up (it opened when /msg
+		// cleared the composer): leave it be and let it hand the user
+		// back to insert mode, in the opened conversation, when it
+		// closes.
+		var focus tea.Cmd
+		if a.shownPrompt != nil {
+			a.shownPromptInsert, a.shownPromptThread = true, false
+		} else {
+			a.SetMode(ModeInsert)
+			focus = a.compose.Focus()
+		}
 
 		channelType := "dm"
 		if len(m.UserIDs) > 1 {
@@ -64,18 +82,21 @@ var reduceNewMessagePicker reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, boo
 		emitSelected := func() tea.Msg {
 			return ChannelSelectedMsg{ID: channelID, Type: channelType}
 		}
-		return tea.Batch(emitSelected, a.compose.Focus()), true
+		return tea.Batch(emitSelected, focus, keptDraft), true
 
 	case NewMessageFailedMsg:
 		if !newMessageResultIsCurrent(a, m.RequestID) {
 			return nil, true
 		}
 		debuglog.General("new-message: OpenConversation failed: %v", m.Err)
-		// Stay in ModeNewMessage; modal stays visible; clear the
-		// in-flight so a follow-up submit gets a fresh ID. Surface
-		// the error via a toast (the existing app-wide notification
-		// channel) so the user knows the submit didn't go through.
+		// Clear the in-flight so a follow-up submit gets a fresh ID.
+		// From the picker, stay in ModeNewMessage with the modal
+		// visible; from /msg there is no modal, so give the typed
+		// command back to its composer. Surface the error via a toast
+		// (the existing app-wide notification channel) so the user
+		// knows the submit didn't go through.
 		a.newMessageInFlightID = 0
+		a.abandonMsgPrefill()
 		errText := m.Err.Error()
 		return func() tea.Msg { return ToastMsg{Text: "Open DM failed: " + errText} }, true
 	}

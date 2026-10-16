@@ -277,6 +277,11 @@ func reduceNewMessage(a *App, m NewMessageMsg) tea.Cmd {
 			m.ChannelID, m.Message.TS)
 		return nil
 	}
+	// An app's message ends its "working" status in this channel even
+	// when the clearing ai_assistant_status never arrives.
+	if m.Message.UserID != "" {
+		a.typing.ClearBot(m.ChannelID, m.Message.UserID)
+	}
 	// Model writes fan out to EVERY window viewing the channel,
 	// focused or not (Phase 3): visible-but-unfocused windows show
 	// realtime traffic too.

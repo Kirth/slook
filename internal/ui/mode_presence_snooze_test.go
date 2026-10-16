@@ -25,8 +25,8 @@ func snoozeSetup(digits string, calls *[]statusCall) func(*testing.T, *App) {
 }
 
 // snoozeSetupNoSetter is snoozeSetup with no status setter installed,
-// so the handler's `if a.presenceSvc != nil` guard
-// (mode_presence_snooze.go:41) is driven down its false branch. Every
+// so the `if a.presenceSvc != nil` guard in `applyPresenceAction`
+// (presence_action.go) is driven down its false branch. Every
 // other row in this table installs a setter, so without this one that
 // branch is never taken — and Go statement coverage would not say so,
 // because the guarded call is on the same statement line.

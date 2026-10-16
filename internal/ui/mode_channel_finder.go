@@ -14,8 +14,6 @@ package ui
 
 import (
 	tea "charm.land/bubbletea/v2"
-
-	"github.com/gammons/slk/internal/ids"
 )
 
 func handleChannelFinderMode(a *App, msg tea.KeyMsg) tea.Cmd {
@@ -34,20 +32,7 @@ func handleChannelFinderMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		if result.Type == "threads" {
 			return func() tea.Msg { return ThreadsViewActivatedMsg{} }
 		}
-		// Already-joined: switch immediately. Not joined: kick off
-		// a join command; ChannelJoinedMsg will fold the channel
-		// into the sidebar and switch to it.
-		if result.Joined {
-			a.sidebar.SelectByID(result.ID)
-			return func() tea.Msg {
-				return ChannelSelectedMsg{ID: result.ID, Name: result.Name, Type: result.Type}
-			}
-		}
-		channels := a.channels
-		id, name := ids.ChannelID(result.ID), result.Name
-		return func() tea.Msg {
-			return channels.Join(id, name)
-		}
+		return a.openChannel(*result)
 	}
 
 	// Check if finder closed itself (Esc).

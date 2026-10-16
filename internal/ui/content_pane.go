@@ -9,7 +9,7 @@ import (
 // pane (messages.Model) and the thread pane (thread.Model). The two
 // share their scroll, selection and rendering code (Phase 3), and the
 // App's mirror pairs collapse onto this interface. What only one pane
-// has (images, loading, the thread's parent) stays off it.
+// has (image context, loading, the thread's parent) stays off it.
 type contentPane interface {
 	SelectedMessage() (messages.MessageItem, bool)
 	ReactionNavActive() bool
@@ -20,6 +20,7 @@ type contentPane interface {
 	SelectedReaction() (emoji string, isPlus bool)
 	ChromeHeight() int
 	HitTestReaction(row, col int) (idx int, emoji string, ok bool)
+	HitTestImage(row, col int) (ts string, attIdx int, ok bool)
 	BeginSelectionAt(y, x int)
 	ExtendSelectionAt(y, x int)
 	EndSelection() (string, bool)

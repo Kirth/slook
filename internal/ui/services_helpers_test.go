@@ -234,3 +234,7 @@ func (a *App) setProfileFetcherForTest(fn func(ctx context.Context, teamID, user
 func (a *App) setInteractionPressForTest(fn func(ids.ChannelID, ids.MessageTS, int, string, string, blocks.LegacyAction, bool) error) {
 	a.SetInteractionService(core.NewInteractionService(core.InteractionServiceFuncs{PressAttachmentAction: fn}))
 }
+
+func (a *App) setCommandRunnerForTest(fn func(string, ids.ChannelID, ids.ThreadTS, string, string) error) {
+	a.SetCommandService(core.NewCommandService(core.CommandServiceFuncs{Run: fn}))
+}

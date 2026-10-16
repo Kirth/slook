@@ -35,6 +35,10 @@ const (
 	cardStride       = cardContentLines + 1
 )
 
+// reminderHint fills line 2 of a Slack reminder's card: the feed carries
+// no reminder text.
+const reminderHint = "Open Slack to see this reminder"
+
 // Local styles, kept package-private and built from the shared color tokens
 // so theme changes propagate via styles.Apply().
 func mutedStyle() lipgloss.Style {
@@ -409,6 +413,24 @@ func (m *Model) UnreadCount() int {
 	return n
 }
 
+// SetItemRead sets the read state of the item with the given key and
+// reports whether there was one: the list may have been refetched since
+// the caller took the item. The item stays in the list either way; with
+// the unread-only filter on, it goes on the next fetch.
+func (m *Model) SetItemRead(key string, read bool) bool {
+	for i := range m.items {
+		if m.items[i].Key != key {
+			continue
+		}
+		if m.items[i].IsUnread == read {
+			m.items[i].IsUnread = !read
+			m.dirty()
+		}
+		return true
+	}
+	return false
+}
+
 func (m *Model) clampSelection() {
 	if m.selected < 0 {
 		m.selected = 0
@@ -607,6 +629,9 @@ func (m *Model) renderCard(it core.ActivityItem, width int, selected bool) (stri
 	// The renderer leaves plain text unstyled, so set the base text colour
 	// here (the message pane does the same via styles.MessageText). Only
 	// the foreground: a background would paint over the selection tint.
+	if it.Type == "saved_reminder" && preview == "" {
+		preview = mutedStyle().Render(reminderHint)
+	}
 	preview = strings.ReplaceAll(preview, "\n", " ")
 	if selected {
 		// The renderer restores the theme background after each styled
@@ -626,11 +651,12 @@ func (m *Model) renderCard(it core.ActivityItem, width int, selected bool) (stri
 
 // contextLabel renders the natural-language activity context for line 1:
 // "Mention in #ch" / "Thread in #ch" / "Reacted in #ch" / "DM" (no channel
-// for DMs). Empty for unknown types.
+// for DMs). An unrecognised type is labelled with the type itself; see
+// fallbackVerb.
 func (m *Model) contextLabel(it core.ActivityItem) string {
 	verb := contextVerb(it.Type)
 	if verb == "" {
-		return ""
+		verb = fallbackVerb(it.Type)
 	}
 	if isDMItem(it.Type) {
 		return mutedStyle().Render(verb)
@@ -668,9 +694,23 @@ func contextVerb(itemType string) string {
 		return "Reacted"
 	case "dm", "bot_dm_bundle":
 		return "DM"
+	case "saved_reminder":
+		return "Reminder"
 	default:
 		return ""
 	}
+}
+
+// fallbackVerb labels an item type contextVerb does not know, from the
+// type itself ("saved_reminder" -> "Saved reminder"). Such an item may
+// carry no message ref, leaving the card no author and no body, so
+// without this label it rendered as a blank row (issue #285).
+func fallbackVerb(itemType string) string {
+	if itemType == "" {
+		return "Unknown activity"
+	}
+	s := strings.ReplaceAll(itemType, "_", " ")
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // authorStyle renders the actor name in bold so it anchors the card.
@@ -719,7 +759,8 @@ func (m *Model) wrapLine(line string, contentWidth int, selected bool) string {
 
 // activityGlyph returns the leading glyph for a row keyed on the item type:
 // "@" for mentions, the sidebar's thread flag for thread replies, a star
-// for reactions, and the sidebar's DM dot for DMs. Each is one column wide
+// for reactions, the sidebar's DM dot for DMs, and a clock face for
+// reminders. Each is one column wide
 // and has no colour-emoji form, so terminals agree on its width. Pure (no
 // styling) so it can be unit-tested.
 func activityGlyph(itemType string) string {
@@ -733,6 +774,8 @@ func activityGlyph(itemType string) string {
 		return "✦"
 	case "dm", "bot_dm_bundle":
 		return "●"
+	case "saved_reminder":
+		return "◷"
 	default:
 		return "•"
 	}

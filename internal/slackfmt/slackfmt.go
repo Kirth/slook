@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	userMentionRe    = regexp.MustCompile(`<@([A-Z0-9]+)>`)
-	channelMentionRe = regexp.MustCompile(`<#[A-Z0-9]+\|([^>]+)>`)
+	userMentionRe = regexp.MustCompile(`<@([A-Z0-9]+)>`)
+	// Group 1 is the channel ID, group 2 its label.
+	channelMentionRe = regexp.MustCompile(`<#([A-Z0-9]+)\|([^>]+)>`)
 	// Group 1 is the usergroup ID; group 2 the optional embedded label.
 	// Labeled forms normalize to "@label"; bare forms resolve through the
 	// caller's workspace-scoped usergroup map.
@@ -42,6 +43,35 @@ func MentionedUserIDs(text string) []string {
 	return ids
 }
 
+// MentionedChannelIDs returns the channel IDs of every <#C…|name>
+// mention in text, in order, duplicates included. This is the form the
+// composer sends (compose.TranslateMentionsForSend).
+func MentionedChannelIDs(text string) []string {
+	mentions := MentionedChannels(text)
+	ids := make([]string, 0, len(mentions))
+	for _, m := range mentions {
+		ids = append(ids, m.ID)
+	}
+	return ids
+}
+
+// ChannelMention is one <#C…|label> mention: the channel's ID and the
+// name the text carries for it.
+type ChannelMention struct {
+	ID, Label string
+}
+
+// MentionedChannels returns every <#C…|label> mention in text, in order,
+// duplicates included.
+func MentionedChannels(text string) []ChannelMention {
+	matches := channelMentionRe.FindAllStringSubmatch(text, -1)
+	mentions := make([]ChannelMention, 0, len(matches))
+	for _, m := range matches {
+		mentions = append(mentions, ChannelMention{ID: m[1], Label: m[2]})
+	}
+	return mentions
+}
+
 // StripMarkup converts Slack mrkdwn to plain text, resolving user mentions
 // against userNames. Bare <!subteam^ID> tokens can't be resolved without a
 // usergroup map, so they fall back to "@group"; use StripMarkupWithUserGroups
@@ -53,7 +83,7 @@ func StripMarkup(text string, userNames map[string]string) string {
 // StripMarkupWithUserGroups is StripMarkup with a workspace-scoped Slack
 // usergroup map (ID -> handle) for resolving bare <!subteam^ID> tokens.
 func StripMarkupWithUserGroups(text string, userNames, userGroups map[string]string) string {
-	text = channelMentionRe.ReplaceAllString(text, "#$1")
+	text = channelMentionRe.ReplaceAllString(text, "#$2")
 	text = linkWithLabelRe.ReplaceAllString(text, "$2")
 	text = linkBareRe.ReplaceAllStringFunc(text, func(match string) string {
 		url := linkBareRe.FindStringSubmatch(match)[1]

@@ -260,3 +260,41 @@ func TestPreview_SwapImageInvalidatesRenderMemo(t *testing.T) {
 		t.Error("SwapImage did not invalidate the render memo; preview would show the old image")
 	}
 }
+
+// Issue #199: with kitty, cycling between sibling images of the same
+// pixel size kept showing the first one. The preview rendered through
+// KittyRenderer.Render, whose source key is the image's bounds and the
+// cell target, so a second same-size image got the first one's id and
+// was never uploaded. Each file needs its own kitty image.
+func TestPreview_KittySameSizeSiblingsGetTheirOwnImage(t *testing.T) {
+	saved := KittyOutput
+	defer func() { KittyOutput = saved }()
+	var out bytes.Buffer
+	KittyOutput = &out
+	// A fresh renderer: the shared one remembers uploads across tests,
+	// so on a repeat run (-count=2) nothing would be uploaded.
+	savedRenderer := kittyRendererInstance
+	defer func() { kittyRendererInstance = savedRenderer }()
+	kittyRendererInstance = NewKittyRenderer(NewRegistry())
+
+	p := NewPreview(PreviewInput{
+		Name: "a.png", FileID: "F199A", Img: makeSolid(720, 515, color.RGBA{255, 0, 0, 255}),
+		SiblingCount: 2, SiblingIndex: 0,
+	})
+	p.View(60, 30, ProtoKitty)
+	firstID := p.memo.ID
+
+	out.Reset()
+	p.SwapImage(PreviewInput{
+		Name: "b.png", FileID: "F199B", Img: makeSolid(720, 515, color.RGBA{0, 0, 255, 255}),
+		SiblingCount: 2, SiblingIndex: 1,
+	})
+	p.View(60, 30, ProtoKitty)
+
+	if p.memo.ID == firstID {
+		t.Fatalf("second sibling reused kitty image id %d; the terminal keeps showing the first image", firstID)
+	}
+	if !strings.Contains(out.String(), "a=T") {
+		t.Error("second sibling was never uploaded to the terminal")
+	}
+}

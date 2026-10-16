@@ -1,0 +1,56 @@
+{
+ "method": "blocks.actions",
+ "form": [
+  [
+   "token",
+   "xoxc-REDACTED"
+  ],
+  [
+   "service_id",
+   "B0EXAMPLE01"
+  ],
+  [
+   "app_id",
+   "A0F827J2C"
+  ],
+  [
+   "service_team_id",
+   "T0EXAMPLE01"
+  ],
+  [
+   "actions",
+   "[{\"action_id\":\"cancel\",\"block_id\":\"giphy:ephemeral_preview\",\"text\":{\"type\":\"plain_text\",\"text\":\"Cancel\",\"emoji\":true},\"value\":\"{\\\"command\\\":\\\"\\\\/giphy\\\",\\\"text\\\":\\\"gorilla\\\",\\\"giphy_id\\\":\\\"1TM8yYG2kMInpK69Rc\\\",\\\"giphy_url\\\":\\\"https:\\\\/\\\\/giphy.com\\\\/gifs\\\\/trending-viral-bakerxr-1TM8yYG2kMInpK69Rc\\\",\\\"image_url\\\":\\\"https:\\\\/\\\\/media1.giphy.com\\\\/media\\\\/1TM8yYG2kMInpK69Rc\\\\/giphy-downsized.gif?cid=REDACTED&ep=v1_gifs_translate&rid=giphy-downsized.gif&ct=g\\\",\\\"attribution\\\":{\\\"name\\\":\\\"XR\\\",\\\"url\\\":\\\"https:\\\\/\\\\/giphy.com\\\\/channel\\\\/BasedXR\\\\/\\\",\\\"is_clip\\\":false},\\\"giphy_session_id\\\":\\\"00000000-0000-0000-0000-000000000000\\\",\\\"rating\\\":\\\"r\\\",\\\"type\\\":\\\"gif\\\",\\\"image\\\":{\\\"send\\\":{\\\"width\\\":\\\"216\\\",\\\"height\\\":\\\"216\\\",\\\"size\\\":\\\"600815\\\"}}}\",\"type\":\"button\"}]"
+  ],
+  [
+   "container",
+   "{\"type\":\"message_attachment\",\"message_ts\":\"1791801459.000100\",\"attachment_id\":1,\"channel_id\":\"C0EXAMPLE01\",\"is_ephemeral\":true}"
+  ],
+  [
+   "client_token",
+   "web-1791801464757"
+  ],
+  [
+   "state",
+   "{\"values\":{}}"
+  ],
+  [
+   "_x_reason",
+   "dispatch_action_to_developer"
+  ],
+  [
+   "_x_mode",
+   "online"
+  ],
+  [
+   "_x_sonic",
+   "true"
+  ],
+  [
+   "_x_app_name",
+   "client"
+  ]
+ ],
+ "response": {
+  "ok": true
+ }
+}

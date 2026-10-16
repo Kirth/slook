@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/ui"
 )
 
 // The Activity closures must resolve the workspace they were asked for,
@@ -40,5 +41,25 @@ func TestActivityClosures_ResolveRequestedTeamNotActive(t *testing.T) {
 				t.Fatalf("%s for unconnected T2 = %#v, want nil", c.name, msg)
 			}
 		})
+	}
+}
+
+// SetRead must always answer, even for a workspace that is not
+// connected, so the UI can undo its optimistic change. Like the other
+// closures it resolves the requested team: T1 is active with a nil
+// Client, so going through it would panic.
+func TestActivitySetRead_UnconnectedTeamReportsError(t *testing.T) {
+	router := newWorkspaceRouter()
+	active := &WorkspaceContext{TeamID: "T1"}
+	router.Add(active)
+	router.Set(active)
+
+	msg := activitySetReadFunc(router)("T2", core.ActivityItem{Key: "k1", Type: "at_user", FeedTS: "1.1"}, true)
+	got, ok := msg.(ui.ActivityReadSetMsg)
+	if !ok {
+		t.Fatalf("SetRead returned %#v, want ui.ActivityReadSetMsg", msg)
+	}
+	if got.TeamID != "T2" || got.Key != "k1" || !got.Read || got.Err == nil {
+		t.Fatalf("SetRead for unconnected T2 = %+v, want TeamID T2, Key k1, Read true and an error", got)
 	}
 }

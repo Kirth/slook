@@ -1,0 +1,33 @@
+{
+ "type": "message",
+ "subtype": "bot_message",
+ "channel": "D0EXAMPLE01",
+ "text": ":thumbsup: I will remind you “test” at 7:08AM today.",
+ "blocks": [
+  {
+   "type": "rich_text",
+   "block_id": "MDs",
+   "elements": [
+    {
+     "type": "rich_text_section",
+     "elements": [
+      {
+       "type": "emoji",
+       "name": "thumbsup",
+       "unicode": "1f44d"
+      },
+      {
+       "type": "text",
+       "text": " I will remind you “test” at 7:08AM today."
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "user": "USLACKBOT",
+ "bot_id": "B01",
+ "ts": "1791803277.000200",
+ "is_ephemeral": true,
+ "event_ts": "1791803277.009500"
+}

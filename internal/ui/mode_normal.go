@@ -14,7 +14,8 @@
 //   - theme cycle: Alt-Y / Alt-Shift-Y apply the next / previous
 //     theme, wrapping around (saved per workspace, like Ctrl-Y)
 //   - message ops: y (copy message), Y/C (copy permalink), E (edit), D (delete),
-//     U (mark unread), O/v (open image preview)
+//     U (mark unread), m (set mark), ' (jump to mark), O/v (open image
+//     preview)
 //   - reaction nav sub-state: r enters; arrows + Enter select
 //     (delegated to handleReactionNav, for either content pane)
 //   - window commands: Ctrl-W prefix arms a pending sub-state; the
@@ -60,6 +61,21 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		case key.Matches(msg, a.keys.Escape):
 			return nil
 		}
+	}
+
+	// m pending sub-state: the next key names the mark to set
+	// (intercepted FIRST, like ctrl+w above).
+	if a.pendingMark {
+		a.pendingMark = false
+		a.statusbar.SetHelpHint(a.defaultHelpHint())
+		return a.handleMarkChord(msg)
+	}
+
+	// ' pending sub-state: the next key names the mark to jump to.
+	if a.pendingJumpMark {
+		a.pendingJumpMark = false
+		a.statusbar.SetHelpHint(a.defaultHelpHint())
+		return a.handleJumpChord(msg)
 	}
 
 	// Reaction-nav sub-state (intercept before normal keys).
@@ -332,8 +348,36 @@ func handleNormalMode(a *App, msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, a.keys.DownloadFile):
 		return a.downloadFilesOfSelected()
 
+	case a.view == ViewActivity && a.focusedPanel == PanelMessages && key.Matches(msg, a.keys.MarkUnread):
+		// In the Activity view U toggles the selected item's read
+		// state. The channel pane is hidden behind the view, so the
+		// arm below would mark a message nobody can see.
+		it, ok := a.activityView.SelectedItem()
+		if !ok {
+			return nil
+		}
+		return a.setActivityItemRead(it, it.IsUnread)
+
 	case key.Matches(msg, a.keys.MarkUnread):
 		return a.markUnreadOfSelected()
+
+	case key.Matches(msg, a.keys.MarkSet):
+		a.pendingMark = true
+		a.statusbar.SetHelpHint("m…")
+		return nil
+
+	case key.Matches(msg, a.keys.JumpMark):
+		// With the jump overlay enabled (the default), ' opens the
+		// marks list; a letter then jumps immediately from there, so
+		// 'a behaves exactly as it does with the overlay suppressed.
+		if a.showJumpOverlay {
+			cmd := a.openMarksOverlay()
+			a.SetMode(ModeMarks)
+			return cmd
+		}
+		a.pendingJumpMark = true
+		a.statusbar.SetHelpHint("'…")
+		return nil
 
 	case key.Matches(msg, a.keys.NextUnread):
 		return a.jumpToUnread(1)

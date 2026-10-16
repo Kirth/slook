@@ -1,0 +1,59 @@
+{
+ "type": "message",
+ "channel": "C0EXAMPLE02",
+ "text": "monkey",
+ "blocks": [
+  {
+   "type": "image",
+   "block_id": "79Jgk",
+   "image_url": "https://media3.giphy.com/media/H5C8CevNMbpBqNqFjl/giphy.gif?cid=REDACTED&ep=v1_gifs_translate&rid=giphy.gif&ct=g",
+   "alt_text": "monkey",
+   "title": {
+    "type": "plain_text",
+    "text": "monkey",
+    "emoji": true
+   },
+   "image_width": 220,
+   "image_height": 293,
+   "image_bytes": 34369,
+   "is_animated": true,
+   "fallback": "220x293px image"
+  },
+  {
+   "type": "context",
+   "block_id": "hvgEK",
+   "elements": [
+    {
+     "type": "image",
+     "image_url": "https://a.slack-edge.com/dc483/img/plugins/giphy/service_32.png",
+     "alt_text": "giphy logo"
+    },
+    {
+     "type": "mrkdwn",
+     "text": "Posted using /giphy",
+     "verbatim": false
+    }
+   ]
+  }
+ ],
+ "user": "U0EXAMPLE01",
+ "bot_id": "B0EXAMPLE01",
+ "bot_profile": {
+  "id": "B0EXAMPLE01",
+  "deleted": false,
+  "name": "giphy",
+  "updated": 1769132253,
+  "app_id": "A0F827J2C",
+  "icons": {
+   "image_36": "https://a.slack-edge.com/dc483/img/plugins/giphy/service_72.png",
+   "image_48": "https://a.slack-edge.com/dc483/img/plugins/giphy/service_48.png",
+   "image_72": "https://a.slack-edge.com/dc483/img/plugins/giphy/service_72.png"
+  },
+  "team_id": "T0EXAMPLE01"
+ },
+ "team": "T0EXAMPLE01",
+ "thread_ts": "1791758997.192499",
+ "suppress_notification": false,
+ "event_ts": "1791802164.948239",
+ "ts": "1791802164.948239"
+}

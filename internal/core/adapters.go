@@ -99,6 +99,27 @@ func (i interactionAdapter) PressAttachmentAction(channelID ids.ChannelID, messa
 	return i.fns.PressAttachmentAction(channelID, messageTS, attachmentID, callbackID, serviceID, action, ephemeral)
 }
 
+// CommandServiceFuncs bundles the closures behind a CommandService. A nil
+// func makes its method return errors.ErrUnsupported.
+type CommandServiceFuncs struct {
+	Run func(teamID string, channelID ids.ChannelID, threadTS ids.ThreadTS, command, args string) error
+}
+
+// NewCommandService builds a CommandService from fns. Used by
+// cmd/slk/main.go (production wiring) and tests.
+func NewCommandService(fns CommandServiceFuncs) CommandService {
+	return commandAdapter{fns: fns}
+}
+
+type commandAdapter struct{ fns CommandServiceFuncs }
+
+func (c commandAdapter) Run(teamID string, channelID ids.ChannelID, threadTS ids.ThreadTS, command, args string) error {
+	if c.fns.Run == nil {
+		return errors.ErrUnsupported
+	}
+	return c.fns.Run(teamID, channelID, threadTS, command, args)
+}
+
 // ThreadServiceFuncs is the closure bundle accepted by
 // NewThreadService. Any field may be nil; the resulting service
 // no-ops that operation (and returns the zero value for read paths).
@@ -172,30 +193,44 @@ func (t threadAdapter) ThreadLastRead(channelID ids.ChannelID, threadTS ids.Thre
 	return t.fns.ThreadLastRead(channelID, threadTS)
 }
 
-// NewActivityService builds an ActivityService from closures. Either
-// may be nil; the resulting service no-ops that operation (returns a
-// nil Msg).
-func NewActivityService(fetch ActivityFetchFunc, hydrate ActivityHydrateFunc) ActivityService {
-	return activityAdapter{fetch: fetch, hydrate: hydrate}
+// ActivityServiceFuncs is the closure bundle accepted by
+// NewActivityService. Any field may be nil; the resulting service
+// no-ops that operation (returns a nil Msg).
+type ActivityServiceFuncs struct {
+	Fetch   ActivityFetchFunc
+	Hydrate ActivityHydrateFunc
+	SetRead ActivitySetReadFunc
+}
+
+// NewActivityService builds an ActivityService from an
+// ActivityServiceFuncs bundle.
+func NewActivityService(fns ActivityServiceFuncs) ActivityService {
+	return activityAdapter{fns: fns}
 }
 
 type activityAdapter struct {
-	fetch   ActivityFetchFunc
-	hydrate ActivityHydrateFunc
+	fns ActivityServiceFuncs
 }
 
 func (a activityAdapter) Fetch(teamID ids.TeamID, limit int, unreadOnly bool) Msg {
-	if a.fetch == nil {
+	if a.fns.Fetch == nil {
 		return nil
 	}
-	return a.fetch(teamID, limit, unreadOnly)
+	return a.fns.Fetch(teamID, limit, unreadOnly)
 }
 
 func (a activityAdapter) Hydrate(teamID ids.TeamID, refs map[string][]string) Msg {
-	if a.hydrate == nil {
+	if a.fns.Hydrate == nil {
 		return nil
 	}
-	return a.hydrate(teamID, refs)
+	return a.fns.Hydrate(teamID, refs)
+}
+
+func (a activityAdapter) SetRead(teamID ids.TeamID, item ActivityItem, read bool) Msg {
+	if a.fns.SetRead == nil {
+		return nil
+	}
+	return a.fns.SetRead(teamID, item, read)
 }
 
 // MessageServiceFuncs is the closure bundle accepted by
@@ -714,6 +749,10 @@ type ActivityFetchFunc func(teamID ids.TeamID, limit int, unreadOnly bool) Msg
 // ActivityHydrateFunc fetches message bodies for a page's refs.
 // Returns the resulting Msg (typically ActivityBodiesLoadedMsg).
 type ActivityHydrateFunc func(teamID ids.TeamID, refs map[string][]string) Msg
+
+// ActivitySetReadFunc marks one Activity item read (read=true) or
+// unread in teamID's feed.
+type ActivitySetReadFunc func(teamID ids.TeamID, item ActivityItem, read bool) Msg
 
 type ReactionAddFunc func(channelID ids.ChannelID, messageTS ids.MessageTS, emoji string) error
 type ReactionRemoveFunc func(channelID ids.ChannelID, messageTS ids.MessageTS, emoji string) error

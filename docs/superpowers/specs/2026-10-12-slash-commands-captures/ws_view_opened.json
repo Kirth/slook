@@ -1,0 +1,90 @@
+{
+ "type": "view_opened",
+ "view_id": "V0EXAMPLE01",
+ "root_view_id": "V0EXAMPLE01",
+ "previous_view_id": null,
+ "timeout_range": 10000,
+ "client_token": "web-1791802169822",
+ "title": {
+  "type": "plain_text",
+  "text": "Giphy",
+  "emoji": true
+ },
+ "submit": {
+  "type": "plain_text",
+  "text": "Search",
+  "emoji": true
+ },
+ "close": {
+  "type": "plain_text",
+  "text": "Cancel",
+  "emoji": true
+ },
+ "view_type": "modal",
+ "app_id": "A0F827J2C",
+ "app_installed_team_id": "T0EXAMPLE01",
+ "view": {
+  "id": "V0EXAMPLE01",
+  "team_id": "T0EXAMPLE01",
+  "type": "modal",
+  "blocks": [
+   {
+    "type": "input",
+    "block_id": "giphy:search_term",
+    "label": {
+     "type": "plain_text",
+     "text": "Search for a gif",
+     "emoji": true
+    },
+    "optional": false,
+    "dispatch_action": false,
+    "element": {
+     "type": "plain_text_input",
+     "action_id": "search_term",
+     "placeholder": {
+      "type": "plain_text",
+      "text": "Search Giphy",
+      "emoji": true
+     },
+     "max_length": 1000,
+     "dispatch_action_config": {
+      "trigger_actions_on": [
+       "on_enter_pressed"
+      ]
+     }
+    }
+   }
+  ],
+  "private_metadata": "",
+  "callback_id": "giphy:search",
+  "state": {
+   "values": {}
+  },
+  "hash": "1791802169.OiD6M0Kv",
+  "title": {
+   "type": "plain_text",
+   "text": "Giphy",
+   "emoji": true
+  },
+  "clear_on_close": false,
+  "notify_on_close": false,
+  "close": {
+   "type": "plain_text",
+   "text": "Cancel",
+   "emoji": true
+  },
+  "submit": {
+   "type": "plain_text",
+   "text": "Search",
+   "emoji": true
+  },
+  "previous_view_id": null,
+  "root_view_id": "V0EXAMPLE01",
+  "app_id": "A0F827J2C",
+  "external_id": "",
+  "app_installed_team_id": "T0EXAMPLE01",
+  "bot_id": "B0EXAMPLE01"
+ },
+ "channel_id": null,
+ "event_ts": "1791802169.005200"
+}

@@ -1,0 +1,78 @@
+{
+ "type": "message",
+ "subtype": "message_changed",
+ "message": {
+  "subtype": "bot_message",
+  "text": "",
+  "is_ephemeral": true,
+  "attachments": [
+   {
+    "id": 1,
+    "blocks": [
+     {
+      "type": "image",
+      "block_id": "+MTOt",
+      "image_url": "https://media3.giphy.com/media/H5C8CevNMbpBqNqFjl/giphy.gif?cid=REDACTED&ep=v1_gifs_translate&rid=giphy.gif&ct=g",
+      "alt_text": "monkey",
+      "title": {
+       "type": "plain_text",
+       "text": "monkey",
+       "emoji": true
+      },
+      "image_width": 220,
+      "image_height": 293,
+      "image_bytes": 34369,
+      "is_animated": true,
+      "fallback": "220x293px image"
+     },
+     {
+      "type": "actions",
+      "block_id": "giphy:ephemeral_preview",
+      "elements": [
+       {
+        "type": "button",
+        "action_id": "post",
+        "text": {
+         "type": "plain_text",
+         "text": "Send",
+         "emoji": true
+        },
+        "style": "primary",
+        "value": "{\"command\":\"\\/giphy\",\"text\":\"monkey\",\"giphy_id\":\"H5C8CevNMbpBqNqFjl\",\"giphy_url\":\"https:\\/\\/giphy.com\\/gifs\\/moodman-monkey-side-eye-sideeye-H5C8CevNMbpBqNqFjl\",\"image_url\":\"https:\\/\\/media3.giphy.com\\/media\\/H5C8CevNMbpBqNqFjl\\/giphy.gif?cid=REDACTED&ep=v1_gifs_translate&rid=giphy.gif&ct=g\",\"attribution\":null,\"giphy_session_id\":\"00000000-0000-0000-0000-000000000000\",\"rating\":\"r\",\"type\":\"gif\",\"image\":{\"send\":{\"width\":\"220\",\"height\":\"293\",\"size\":\"34369\"}},\"thread_ts\":1791758997192499}"
+       },
+       {
+        "type": "button",
+        "action_id": "shuffle",
+        "text": {
+         "type": "plain_text",
+         "text": "Shuffle",
+         "emoji": true
+        },
+        "value": "{\"command\":\"\\/giphy\",\"text\":\"monkey\",\"giphy_id\":\"H5C8CevNMbpBqNqFjl\",\"giphy_url\":\"https:\\/\\/giphy.com\\/gifs\\/moodman-monkey-side-eye-sideeye-H5C8CevNMbpBqNqFjl\",\"image_url\":\"https:\\/\\/media3.giphy.com\\/media\\/H5C8CevNMbpBqNqFjl\\/giphy.gif?cid=REDACTED&ep=v1_gifs_translate&rid=giphy.gif&ct=g\",\"attribution\":null,\"giphy_session_id\":\"00000000-0000-0000-0000-000000000000\",\"rating\":\"r\",\"type\":\"gif\",\"image\":{\"send\":{\"width\":\"220\",\"height\":\"293\",\"size\":\"34369\"}},\"thread_ts\":1791758997192499}"
+       },
+       {
+        "type": "button",
+        "action_id": "cancel",
+        "text": {
+         "type": "plain_text",
+         "text": "Cancel",
+         "emoji": true
+        },
+        "value": "{\"command\":\"\\/giphy\",\"text\":\"monkey\",\"giphy_id\":\"H5C8CevNMbpBqNqFjl\",\"giphy_url\":\"https:\\/\\/giphy.com\\/gifs\\/moodman-monkey-side-eye-sideeye-H5C8CevNMbpBqNqFjl\",\"image_url\":\"https:\\/\\/media3.giphy.com\\/media\\/H5C8CevNMbpBqNqFjl\\/giphy.gif?cid=REDACTED&ep=v1_gifs_translate&rid=giphy.gif&ct=g\",\"attribution\":null,\"giphy_session_id\":\"00000000-0000-0000-0000-000000000000\",\"rating\":\"r\",\"type\":\"gif\",\"image\":{\"send\":{\"width\":\"220\",\"height\":\"293\",\"size\":\"34369\"}},\"thread_ts\":1791758997192499}"
+       }
+      ]
+     }
+    ],
+    "fallback": "giphy: https://giphy.com/gifs/moodman-monkey-side-eye-sideeye-H5C8CevNMbpBqNqFjl"
+   }
+  ],
+  "type": "message",
+  "bot_id": "B0EXAMPLE01",
+  "thread_ts": "1791758997.192499",
+  "ts": "1791802160.000400"
+ },
+ "channel": "C0EXAMPLE02",
+ "hidden": true,
+ "ts": "1791802163.000000",
+ "event_ts": "1791802163.004600"
+}

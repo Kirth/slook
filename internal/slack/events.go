@@ -20,6 +20,15 @@ import (
 // It is NOT a read/unread signal. See OnThreadMarked.
 type Subscribed bool
 
+// PendingEventHandler optionally supplies local work to the WebSocket event
+// owner. Producers signal PendingEvents (which must not be closed); the owner
+// calls OnPendingEvents serially with all EventHandler callbacks, even when no
+// incoming Slack frame arrives. A nil channel disables local work.
+type PendingEventHandler interface {
+	PendingEvents() <-chan struct{}
+	OnPendingEvents()
+}
+
 // EventHandler processes real-time events from Slack.
 type EventHandler interface {
 	// OnMessage delivers a new or edited message. subtype mirrors
@@ -33,11 +42,19 @@ type EventHandler interface {
 	// app's slash-command reply. Slack never returns these from
 	// history, so receivers must not persist them.
 	OnEphemeralMessage(m EphemeralMessage)
+	// OnViewOpened delivers view_opened: an app opened a modal for the
+	// current user, typically in answer to a slash command (bare
+	// /giphy). title is the modal's title. slk cannot show modals yet;
+	// see docs/superpowers/specs/2026-10-12-app-modals-research.md.
+	OnViewOpened(title string)
 	OnMessageDeleted(channelID, ts string)
 	OnReactionAdded(channelID, ts, userID, emoji string)
 	OnReactionRemoved(channelID, ts, userID, emoji string)
 	OnPresenceChange(userID, presence string)
 	OnUserTyping(channelID, userID string)
+	// OnAssistantStatus is delivered for ai_assistant_status: an app
+	// set or cleared its "working" indicator on a thread.
+	OnAssistantStatus(s AssistantStatus)
 	OnConnect()
 	OnDisconnect()
 	OnSelfPresenceChange(presence string)
@@ -169,6 +186,18 @@ type EphemeralMessage struct {
 	ActionIDs [][]string
 }
 
+// AssistantStatus is an app's "working" indicator on one thread, from an
+// ai_assistant_status event: what the app's assistant.threads.setStatus
+// (or agents.sessions.setStatus) call looks like to a client. An empty
+// Status clears the indicator. Slack also drops it on its own two
+// minutes after it was set.
+type AssistantStatus struct {
+	ChannelID string
+	ThreadTS  string
+	BotUserID string
+	Status    string
+}
+
 // wsEvent is the minimal structure for identifying a WebSocket event type.
 type wsEvent struct {
 	Type    string `json:"type"`
@@ -283,6 +312,16 @@ type wsTypingEvent struct {
 	Type    string `json:"type"`
 	Channel string `json:"channel"`
 	User    string `json:"user"`
+}
+
+// wsAssistantStatusEvent represents an ai_assistant_status event. Its
+// status_type ("banner" in every capture so far) is not decoded: slk
+// draws every status the same way.
+type wsAssistantStatusEvent struct {
+	ChannelID string `json:"channel_id"`
+	ThreadTS  string `json:"thread_ts"`
+	BotUserID string `json:"bot_user_id"`
+	Status    string `json:"status"`
 }
 
 // wsMemberChannelEvent represents member_joined_channel /
@@ -497,7 +536,7 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			debuglog.WS("message raw fields: %s", topLevelFields(data))
 		}
 		switch msg.SubType {
-		case "", "bot_message", "thread_broadcast", "file_share":
+		case "", "bot_message", "thread_broadcast", "file_share", "me_message":
 			if msg.IsEphemeral {
 				dispatchEphemeral(data, msg, handler)
 				break
@@ -507,7 +546,8 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			// message but with the subtype preserved so the UI can
 			// label it. file_share is a regular message that has one
 			// or more files attached (Slack's V2 upload flow uses
-			// this subtype).
+			// this subtype). me_message is a /me line; the UI renders it
+			// in italics.
 			debuglog.WS("message: channel=%s user=%s ts=%s subtype=%q thread_ts=%s files=%d",
 				msg.Channel, msg.User, msg.TS, msg.SubType, msg.ThreadTS, len(msg.Files))
 			handler.OnMessage(msg.Channel, msg.User, msg.TS, msg.Text, msg.ThreadTS, msg.SubType, false, msg.Files, msg.Blocks, msg.Attachments, msg.BotID, msg.Username)
@@ -570,6 +610,27 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			return
 		}
 		handler.OnSelfPresenceChange(evt.Presence)
+
+	case "view_opened":
+		var evt struct {
+			Title struct {
+				Text string `json:"text"`
+			} `json:"title"`
+			View struct {
+				Title struct {
+					Text string `json:"text"`
+				} `json:"title"`
+			} `json:"view"`
+		}
+		if err := json.Unmarshal(data, &evt); err != nil {
+			return
+		}
+		title := evt.Title.Text
+		if title == "" {
+			title = evt.View.Title.Text
+		}
+		debuglog.WS("view_opened: title=%q", title)
+		handler.OnViewOpened(title)
 
 	case "dnd_updated":
 		var evt wsDNDUpdatedEvent
@@ -670,6 +731,15 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 		}
 		debuglog.WS("user_typing: channel=%s user=%s", evt.Channel, evt.User)
 		handler.OnUserTyping(evt.Channel, evt.User)
+
+	case "ai_assistant_status":
+		var evt wsAssistantStatusEvent
+		if err := json.Unmarshal(data, &evt); err != nil {
+			return
+		}
+		debuglog.WS("ai_assistant_status: channel=%s thread=%s bot=%s status=%q",
+			evt.ChannelID, evt.ThreadTS, evt.BotUserID, evt.Status)
+		handler.OnAssistantStatus(AssistantStatus(evt))
 
 	case "member_joined_channel":
 		var evt wsMemberChannelEvent

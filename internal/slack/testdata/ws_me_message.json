@@ -1,0 +1,29 @@
+{
+ "type": "message",
+ "subtype": "me_message",
+ "channel": "D0EXAMPLE01",
+ "text": "waves",
+ "blocks": [
+  {
+   "type": "rich_text",
+   "block_id": "KvXz6",
+   "elements": [
+    {
+     "type": "rich_text_section",
+     "elements": [
+      {
+       "type": "text",
+       "text": "waves"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "user": "U0EXAMPLE01",
+ "team": "T0EXAMPLE01",
+ "source_team": "T0EXAMPLE01",
+ "user_team": "T0EXAMPLE01",
+ "event_ts": "1791803261.761229",
+ "ts": "1791803261.761229"
+}

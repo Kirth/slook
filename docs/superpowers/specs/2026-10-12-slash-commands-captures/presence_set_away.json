@@ -1,0 +1,28 @@
+{
+ "method": "presence.set",
+ "form": [
+  [
+   "token",
+   "xoxc-REDACTED"
+  ],
+  [
+   "presence",
+   "away"
+  ],
+  [
+   "_x_mode",
+   "online"
+  ],
+  [
+   "_x_sonic",
+   "true"
+  ],
+  [
+   "_x_app_name",
+   "client"
+  ]
+ ],
+ "response": {
+  "ok": true
+ }
+}

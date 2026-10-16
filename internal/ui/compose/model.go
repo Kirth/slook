@@ -976,6 +976,31 @@ func (m *Model) restoreDraft(d draft) {
 	m.dirty()
 }
 
+// OfferDraft makes text the draft of the conversation (teamID,
+// channelID, threadTS) — the visible composer when that is the
+// conversation it is bound to, otherwise the stored inactive draft — but
+// only when that conversation has no draft (no text, no attachments), so
+// it never overwrites something newer. Reports whether it wrote. Puts a
+// slash command that did not run back, and pre-fills /msg's text.
+func (m *Model) OfferDraft(teamID, channelID, threadTS, text string) bool {
+	if channelID == "" || text == "" {
+		return false
+	}
+	key := draftKey{teamID: teamID, channelID: channelID, threadTS: threadTS}
+	if key == m.activeKey {
+		if m.input.Value() != "" || len(m.pending) > 0 {
+			return false
+		}
+		m.restoreDraft(draft{text: text})
+		return true
+	}
+	if d, ok := m.drafts[key]; ok && !d.isEmpty() {
+		return false
+	}
+	m.drafts[key] = draft{text: text}
+	return true
+}
+
 // closePickers ends every completion session (mention, channel, emoji)
 // so no stale start-offset survives a text replacement. A leftover
 // offset indexing a shorter value is the slice-bounds panic source.

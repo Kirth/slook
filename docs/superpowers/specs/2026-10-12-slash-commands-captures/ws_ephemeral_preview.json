@@ -1,0 +1,72 @@
+{
+ "type": "message",
+ "subtype": "bot_message",
+ "channel": "C0EXAMPLE02",
+ "text": "",
+ "bot_id": "B0EXAMPLE01",
+ "ts": "1791802160.000400",
+ "attachments": [
+  {
+   "id": 1,
+   "blocks": [
+    {
+     "type": "image",
+     "block_id": "qo6VE",
+     "image_url": "https://media1.giphy.com/media/Rfwlp9c5bA7R3s7Y5D/giphy-downsized.gif?cid=REDACTED&ep=v1_gifs_translate&rid=giphy-downsized.gif&ct=g",
+     "alt_text": "monkey",
+     "title": {
+      "type": "plain_text",
+      "text": "monkey",
+      "emoji": true
+     },
+     "image_width": 174,
+     "image_height": 216,
+     "image_bytes": 473203,
+     "is_animated": true,
+     "fallback": "174x216px image"
+    },
+    {
+     "type": "actions",
+     "block_id": "giphy:ephemeral_preview",
+     "elements": [
+      {
+       "type": "button",
+       "action_id": "post",
+       "text": {
+        "type": "plain_text",
+        "text": "Send",
+        "emoji": true
+       },
+       "style": "primary",
+       "value": "{\"command\":\"\\/giphy\",\"text\":\"monkey\",\"giphy_id\":\"Rfwlp9c5bA7R3s7Y5D\",\"giphy_url\":\"https:\\/\\/giphy.com\\/gifs\\/dance-ai-monkey-Rfwlp9c5bA7R3s7Y5D\",\"image_url\":\"https:\\/\\/media1.giphy.com\\/media\\/Rfwlp9c5bA7R3s7Y5D\\/giphy-downsized.gif?cid=REDACTED&ep=v1_gifs_translate&rid=giphy-downsized.gif&ct=g\",\"attribution\":{\"name\":\"Max\",\"url\":\"https:\\/\\/giphy.com\\/channel\\/immax045\\/\",\"is_clip\":false},\"giphy_session_id\":\"00000000-0000-0000-0000-000000000000\",\"rating\":\"r\",\"type\":\"gif\",\"image\":{\"send\":{\"width\":\"174\",\"height\":\"216\",\"size\":\"473203\"}},\"thread_ts\":1791758997192499}"
+      },
+      {
+       "type": "button",
+       "action_id": "shuffle",
+       "text": {
+        "type": "plain_text",
+        "text": "Shuffle",
+        "emoji": true
+       },
+       "value": "{\"command\":\"\\/giphy\",\"text\":\"monkey\",\"giphy_id\":\"Rfwlp9c5bA7R3s7Y5D\",\"giphy_url\":\"https:\\/\\/giphy.com\\/gifs\\/dance-ai-monkey-Rfwlp9c5bA7R3s7Y5D\",\"image_url\":\"https:\\/\\/media1.giphy.com\\/media\\/Rfwlp9c5bA7R3s7Y5D\\/giphy-downsized.gif?cid=REDACTED&ep=v1_gifs_translate&rid=giphy-downsized.gif&ct=g\",\"attribution\":{\"name\":\"Max\",\"url\":\"https:\\/\\/giphy.com\\/channel\\/immax045\\/\",\"is_clip\":false},\"giphy_session_id\":\"00000000-0000-0000-0000-000000000000\",\"rating\":\"r\",\"type\":\"gif\",\"image\":{\"send\":{\"width\":\"174\",\"height\":\"216\",\"size\":\"473203\"}},\"thread_ts\":1791758997192499}"
+      },
+      {
+       "type": "button",
+       "action_id": "cancel",
+       "text": {
+        "type": "plain_text",
+        "text": "Cancel",
+        "emoji": true
+       },
+       "value": "{\"command\":\"\\/giphy\",\"text\":\"monkey\",\"giphy_id\":\"Rfwlp9c5bA7R3s7Y5D\",\"giphy_url\":\"https:\\/\\/giphy.com\\/gifs\\/dance-ai-monkey-Rfwlp9c5bA7R3s7Y5D\",\"image_url\":\"https:\\/\\/media1.giphy.com\\/media\\/Rfwlp9c5bA7R3s7Y5D\\/giphy-downsized.gif?cid=REDACTED&ep=v1_gifs_translate&rid=giphy-downsized.gif&ct=g\",\"attribution\":{\"name\":\"Max\",\"url\":\"https:\\/\\/giphy.com\\/channel\\/immax045\\/\",\"is_clip\":false},\"giphy_session_id\":\"00000000-0000-0000-0000-000000000000\",\"rating\":\"r\",\"type\":\"gif\",\"image\":{\"send\":{\"width\":\"174\",\"height\":\"216\",\"size\":\"473203\"}},\"thread_ts\":1791758997192499}"
+      }
+     ]
+    }
+   ],
+   "fallback": "giphy: https://giphy.com/gifs/dance-ai-monkey-Rfwlp9c5bA7R3s7Y5D"
+  }
+ ],
+ "thread_ts": "1791758997.192499",
+ "is_ephemeral": true,
+ "event_ts": "1791802160.004500"
+}

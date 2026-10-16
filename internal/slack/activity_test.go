@@ -1,6 +1,9 @@
 package slackclient
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,5 +231,75 @@ func TestActivityMsgKey_NoCollision(t *testing.T) {
 	// separator prevents "C1","2.3" from matching "C","12.3").
 	if core.ActivityMsgKey("C1", "2.3") == core.ActivityMsgKey("C", "12.3") {
 		t.Fatal("ActivityMsgKey collision across a shifted channel/ts boundary")
+	}
+}
+
+// The saved_reminder payload as captured live from activity.feed
+// (2026-10-12). It names a saved item and its due time, and carries no
+// message ref, so ChannelID and TS stay empty.
+func TestParseActivityFeed_SavedReminder(t *testing.T) {
+	body := []byte(`{"ok":true,"items":[{"feed_ts":"1791803337.000000","is_archived":false,"is_unread":true,"item":{"saved_reminder_payload":{"date_due":1791803337,"item_id":"Sa0C8D6B3E77","item_id_2":"0000000000.000000","item_id_3":"","item_type":"reminder"},"type":"saved_reminder"},"key":"saved_reminder.12285215116245.1.0","version":"a4a9800d"}]}`)
+
+	res, err := parseActivityFeed(body)
+	if err != nil {
+		t.Fatalf("parseActivityFeed: %v", err)
+	}
+	if len(res.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(res.Items))
+	}
+	want := core.ActivityItem{
+		Key:      "saved_reminder.12285215116245.1.0",
+		Type:     "saved_reminder",
+		Subtype:  "reminder",
+		IsUnread: true,
+		FeedTS:   "1791803337.000000",
+	}
+	if got := res.Items[0]; got != want {
+		t.Fatalf("reminder item =\n  %+v\nwant\n  %+v", got, want)
+	}
+}
+
+func TestSetActivityRead_PostsEntries(t *testing.T) {
+	for _, read := range []bool{true, false} {
+		var gotPath, gotEntries string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			_ = r.ParseForm()
+			gotEntries = r.PostForm.Get("entries")
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}))
+		c := NewClient("xoxc-test", "d-cookie")
+		pointClientAtTestServer(t, c, srv)
+
+		err := c.SetActivityRead(context.Background(), "saved_reminder", "saved_reminder.1.1.0", "1791803337.000000", read)
+		srv.Close()
+		if err != nil {
+			t.Fatalf("read=%v: SetActivityRead: %v", read, err)
+		}
+		wantPath := "/api/activity.markUnread"
+		if read {
+			wantPath = "/api/activity.markRead"
+		}
+		if gotPath != wantPath {
+			t.Errorf("read=%v: path = %q, want %q", read, gotPath, wantPath)
+		}
+		wantEntries := `[{"type":"saved_reminder","key":"saved_reminder.1.1.0","feed_ts":"1791803337.000000"}]`
+		if gotEntries != wantEntries {
+			t.Errorf("read=%v: entries = %s, want %s", read, gotEntries, wantEntries)
+		}
+	}
+}
+
+func TestSetActivityRead_NotOKIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":false,"error":"invalid_arguments"}`))
+	}))
+	defer srv.Close()
+	c := NewClient("xoxc-test", "d-cookie")
+	pointClientAtTestServer(t, c, srv)
+
+	err := c.SetActivityRead(context.Background(), "at_user", "k", "1.1", true)
+	if err == nil || !strings.Contains(err.Error(), "invalid_arguments") {
+		t.Fatalf("err = %v, want one carrying Slack's invalid_arguments", err)
 	}
 }

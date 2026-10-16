@@ -34,11 +34,7 @@ func handlePresenceCustomSnoozeMode(a *App, msg tea.KeyMsg) tea.Cmd {
 		if err != nil || mins <= 0 {
 			return toastWithClear(a, "Invalid snooze duration", 2*time.Second)
 		}
-		st := a.presence.Apply(a.activeTeamID, presencemenu.ActionSnooze, mins)
-		a.statusbar.SetStatus(st.Presence, st.DNDEnabled, st.DNDEndTS)
-		if a.presenceSvc != nil {
-			a.presenceSvc.SetStatus(presencemenu.ActionSnooze, mins)
-		}
+		a.applyPresenceAction(presencemenu.ActionSnooze, mins)
 		return nil
 	case tea.KeyBackspace:
 		a.presence.BackspaceSnooze()

@@ -198,7 +198,19 @@ func (p *Preview) renderImage(proto Protocol, target image.Point) Render {
 	if p.memoValid && p.memoFID == p.fid && p.memoProto == proto && p.memoTgt == target {
 		return p.memo
 	}
-	r := RenderImage(proto, p.img, target)
+	var r Render
+	if proto == ProtoKitty && p.fid != "" {
+		// Bind the kitty source to the file, not to RenderImage's
+		// one-off key: that key is the image's bounds and target, so
+		// same-size siblings shared one kitty image and cycling kept
+		// showing the first (#199). PV- keeps the full-size preview
+		// apart from the inline thumbnail's F-<fileID> source.
+		key := "PV-" + p.fid
+		kittyRendererInstance.SetSource(key, p.img)
+		r = kittyRendererInstance.RenderKey(key, target)
+	} else {
+		r = RenderImage(proto, p.img, target)
+	}
 	p.memo, p.memoValid = r, true
 	p.memoFID, p.memoProto, p.memoTgt = p.fid, proto, target
 	return r

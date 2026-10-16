@@ -1,0 +1,56 @@
+{
+ "method": "blocks.actions",
+ "form": [
+  [
+   "token",
+   "xoxc-REDACTED"
+  ],
+  [
+   "service_id",
+   "B0EXAMPLE01"
+  ],
+  [
+   "app_id",
+   "A0F827J2C"
+  ],
+  [
+   "service_team_id",
+   "T0EXAMPLE01"
+  ],
+  [
+   "actions",
+   "[{\"action_id\":\"post\",\"block_id\":\"giphy:ephemeral_preview\",\"text\":{\"type\":\"plain_text\",\"text\":\"Send\",\"emoji\":true},\"value\":\"{\\\"command\\\":\\\"\\\\/giphy\\\",\\\"text\\\":\\\"monkey\\\",\\\"giphy_id\\\":\\\"H5C8CevNMbpBqNqFjl\\\",\\\"giphy_url\\\":\\\"https:\\\\/\\\\/giphy.com\\\\/gifs\\\\/moodman-monkey-side-eye-sideeye-H5C8CevNMbpBqNqFjl\\\",\\\"image_url\\\":\\\"https:\\\\/\\\\/media3.giphy.com\\\\/media\\\\/H5C8CevNMbpBqNqFjl\\\\/giphy.gif?cid=REDACTED&ep=v1_gifs_translate&rid=giphy.gif&ct=g\\\",\\\"attribution\\\":null,\\\"giphy_session_id\\\":\\\"00000000-0000-0000-0000-000000000000\\\",\\\"rating\\\":\\\"r\\\",\\\"type\\\":\\\"gif\\\",\\\"image\\\":{\\\"send\\\":{\\\"width\\\":\\\"220\\\",\\\"height\\\":\\\"293\\\",\\\"size\\\":\\\"34369\\\"}},\\\"thread_ts\\\":1791758997192499}\",\"style\":\"primary\",\"type\":\"button\"}]"
+  ],
+  [
+   "container",
+   "{\"type\":\"message_attachment\",\"message_ts\":\"1791802160.000400\",\"attachment_id\":1,\"channel_id\":\"C0EXAMPLE02\",\"is_ephemeral\":true}"
+  ],
+  [
+   "client_token",
+   "web-1791802164978"
+  ],
+  [
+   "state",
+   "{\"values\":{}}"
+  ],
+  [
+   "_x_reason",
+   "dispatch_action_to_developer"
+  ],
+  [
+   "_x_mode",
+   "online"
+  ],
+  [
+   "_x_sonic",
+   "true"
+  ],
+  [
+   "_x_app_name",
+   "client"
+  ]
+ ],
+ "response": {
+  "ok": true
+ }
+}

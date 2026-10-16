@@ -1,0 +1,49 @@
+{
+ "method": "chat.command",
+ "form": [
+  [
+   "token",
+   "xoxc-REDACTED"
+  ],
+  [
+   "command",
+   "/notarealcommand"
+  ],
+  [
+   "disp",
+   "/notarealcommand"
+  ],
+  [
+   "channel",
+   "C0EXAMPLE02"
+  ],
+  [
+   "client_token",
+   "web-1791801929286"
+  ],
+  [
+   "thread_ts",
+   "1791758997.192499"
+  ],
+  [
+   "_x_reason",
+   "executeCommand"
+  ],
+  [
+   "_x_mode",
+   "online"
+  ],
+  [
+   "_x_sonic",
+   "true"
+  ],
+  [
+   "_x_app_name",
+   "client"
+  ]
+ ],
+ "response": {
+  "ok": false,
+  "error": "unknown_command"
+ }
+}

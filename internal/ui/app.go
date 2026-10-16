@@ -31,6 +31,7 @@ import (
 	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/imgrender"
 	"github.com/gammons/slk/internal/ui/linkpicker"
+	"github.com/gammons/slk/internal/ui/marks"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/gammons/slk/internal/ui/newmessagepicker"
@@ -182,6 +183,25 @@ type App struct {
 	// disarms (see SetMode).
 	pendingTop bool
 
+	// pendingMark is true between an m press and its mark letter; the
+	// next key names the mark to set (handleMarkChord, set_mark.go).
+	// Mirrors pendingWinCmd: any non-letter — Esc included — cancels
+	// silently, matching vim.
+	pendingMark bool
+
+	// pendingJumpMark is true between a ' (or `) press and its mark
+	// letter; the next key names the mark to jump to (handleJumpChord,
+	// jump_mark.go). Mirrors pendingMark, including the SetMode disarm.
+	pendingJumpMark bool
+
+	// backJump is the vim-style '' back-jump slot: the single most
+	// recently departed location, written immediately before a mark
+	// jump navigates (and before the back-jump itself, so repeating it
+	// toggles between two locations). nil = nothing recorded yet. NOT
+	// per-workspace — cleared on workspace switch, because it only
+	// ever holds the latest departure.
+	backJump *Location
+
 	// layout owns the per-frame layout geometry (horizontal bands for
 	// mouse hit-testing + per-pane content heights for pageSize). See
 	// internal/ui/panellayout.go.
@@ -251,6 +271,11 @@ type App struct {
 	// for the Activity view. Defaulted to a no-op adapter in NewApp so
 	// call sites can dispatch without nil-checks.
 	activity core.ActivityService
+
+	// activityReads holds the Activity items with a read-state request
+	// to Slack under way, keyed by activityReadKey. Update goroutine
+	// only.
+	activityReads map[string]*activityRead
 
 	threadsDirtyDebounce time.Duration
 
@@ -348,6 +373,13 @@ type App struct {
 	// backfill block another channel's, and a fetch completing for
 	// a no-longer-viewed channel must still clear its own flag).
 	fetchingOlder map[string]bool
+
+	// channelFetchInFlight names the channel whose MessagesLoadedMsg
+	// is still expected after a channel switch fired a fetch (cache
+	// tiers 2 and 3). An in-place jump into that channel must not
+	// complete authoritatively against the cached buffer: the load
+	// replaces it and would reset the selection to the newest message.
+	channelFetchInFlight string
 
 	// Cached user-id -> display-name map (mirror of what SetUserNames
 	// last received). Used by openSelectedThreadCmd to populate the
@@ -452,22 +484,30 @@ type App struct {
 	// so call sites can dispatch without nil-checks.
 	reactions     core.ReactionService
 	interactions  core.InteractionService
+	commandSvc    core.CommandService
 	currentUserID string
 
 	// editing tracks in-progress message edit state. See
 	// internal/ui/edit.go.
 	editing *editController
 
-	// newMessageInFlightID is the monotonic counter for in-flight
-	// OpenConversation requests dispatched from the new-message
-	// picker. 0 means no submit is in flight. The reducer drops late
-	// results whose RequestID doesn't match.
+	// newMessageInFlightID is the ID of the in-flight OpenConversation
+	// request (new-message picker or /msg); 0 means none. The reducer
+	// drops late results whose RequestID doesn't match. IDs come from
+	// newMessageSeq, which never resets, so a late result of an old
+	// request can never match a newer one.
 	newMessageInFlightID uint64
+	newMessageSeq        uint64
 	// newMessageCancelled is set to true when the user Escs the
 	// modal while a submit is in flight. A subsequent
 	// NewMessageOpenedMsg with the matching RequestID is dropped
 	// rather than switching channels behind the user's back.
 	newMessageCancelled bool
+	// newMessagePrefill is what /msg asked of the in-flight open: the
+	// text to offer as the opened conversation's draft and where /msg
+	// was typed; zero for the new-message picker. Consumed by
+	// NewMessageOpenedMsg, given back and cleared by NewMessageFailedMsg.
+	newMessagePrefill msgPrefill
 
 	// Workspace switching
 	workspaceSvc   core.WorkspaceService
@@ -489,8 +529,24 @@ type App struct {
 	// pendingLinkNav tracks an in-flight permalink navigation: the
 	// channel was (or is being) opened and the message-select /
 	// thread-open completes when that channel's messages land. See
-	// reducer_links.go.
+	// reducer_links.go. Every in-app jump (permalinks, marks, history
+	// walks) records its target here via applyLocation.
 	pendingLinkNav *pendingLinkNav
+
+	// marks owns the vim-style mark storage: an in-memory per-workspace
+	// tier for lowercase marks plus the SQLite `marks` table, merged
+	// behind one set of accessors (see internal/ui/marks.go).
+	marks *marksStore
+
+	// marksOverlay is the marks list widget (internal/ui/marks/): one
+	// row per mark, rendered from the stored preview snapshot, opened
+	// by the ' chord and the :marks command.
+	marksOverlay marks.Model
+
+	// showJumpOverlay is the [marks] show_jump_overlay option: whether
+	// beginning a jump (' ) shows the marks list. Defaults to on; the
+	// option does not affect the :marks command, which always shows it.
+	showJumpOverlay bool
 
 	// search is the active in-channel search (nil = none).
 	// searchInput is the prompt buffer while in ModeSearch.
@@ -839,6 +895,7 @@ func NewApp() *App {
 		layout:                newPanelLayout(),
 		reactions:             noopReactionService,
 		interactions:          noopInteractionService,
+		commandSvc:            noopCommandService,
 		threads:               noopThreadService,
 		activity:              noopActivityService,
 		messageSvc:            noopMessageService,
@@ -849,6 +906,9 @@ func NewApp() *App {
 		desktop:               noopDesktopService,
 		editor:                noopEditorService,
 		navHistory:            newNavHistoryStore(),
+		marks:                 newMarksStore(),
+		marksOverlay:          marks.New(),
+		showJumpOverlay:       true,
 		clipboardWrite:        defaultClipboardWriter,
 		userProfile:           userprofile.New(),
 		profileSvc:            noopProfileService,
@@ -992,6 +1052,7 @@ func (a *App) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reduceFocus,
 		reduceSend,
 		reduceActionPrompt,
+		reduceSlashCommand,
 		reduceChannels,
 		reduceLinks,
 		reduceFiles,
@@ -1130,17 +1191,35 @@ func (a *App) navigateForward() tea.Cmd {
 	return a.walkNavCmd(+1)
 }
 
-// walkNavCmd is the shared wrapper that turns navHistoryStore.Walk's
-// pure result into the ChannelSelectedMsg{FromHistory: true} tea.Cmd
-// the App emits. step must be -1 or +1.
+// walkNavCmd is the shared wrapper for a history walk. A walk is also
+// a departure, so the position being left is folded into the current
+// entry first (UpdateCurrent) — this cannot wait for the
+// ChannelSelectedMsg arm, because Walk moves the cursor to the
+// destination before the message is reduced, and UpdateCurrent's
+// channel guard would then no-op against the destination entry. The
+// walked Location then goes through the shared applyLocation applier
+// with FromHistory: true, so the walk does not grow the stack. step
+// must be -1 or +1.
 func (a *App) walkNavCmd(step int) tea.Cmd {
-	id, name, ctype, ok := a.navHistory.Walk(a.activeTeamID, step, a.channels.Lookup)
+	if a.compose.Uploading() || a.threadCompose.Uploading() {
+		// Refused before Walk moves the cursor, so a refused walk
+		// does not skip an entry.
+		return toastWithClear(a, "Upload in progress", 2*time.Second)
+	}
+	a.navHistory.UpdateCurrent(a.activeTeamID, a.currentPosition())
+
+	loc, ok := a.navHistory.Walk(a.activeTeamID, step, a.channels.Lookup)
 	if !ok {
 		return nil
 	}
-	return func() tea.Msg {
-		return ChannelSelectedMsg{ID: id, Name: name, Type: ctype, FromHistory: true}
+	cmd, ok := a.applyLocation(loc, true)
+	if !ok {
+		// The channel resolved during Walk but no longer does here (a
+		// workspace refresh raced the walk): nothing further to do;
+		// Walk already removed the entry.
+		return nil
 	}
+	return cmd
 }
 
 // handleNormalMode moved to mode_normal.go (Phase 5k).
@@ -1893,10 +1972,8 @@ func (a *App) handleEnter() tea.Cmd {
 		if !ok {
 			return nil
 		}
-		channelID, ts, threadTS := it.ChannelID, it.TS, it.ThreadTS
-		return func() tea.Msg {
-			return ActivitySelectedMsg{ChannelID: channelID, TS: ts, ThreadTS: threadTS}
-		}
+		team := a.activeTeamID
+		return func() tea.Msg { return ActivitySelectedMsg{TeamID: team, Item: it} }
 	}
 
 	if a.focusedPanel == PanelMessages && a.view == ViewThreads {
@@ -2040,6 +2117,20 @@ func (a *App) SetMode(mode Mode) {
 		a.pendingTop = false
 		a.statusbar.SetHelpHint(a.defaultHelpHint())
 	}
+	// Same for a pending `m` chord, and for the same reason: ctrl+c is
+	// intercepted in handleKey before mode dispatch, so it never reaches
+	// handleMarkChord to be cancelled there. Left armed, the next letter
+	// key in normal mode would be swallowed as a mark name instead of
+	// doing its own job.
+	if a.pendingMark {
+		a.pendingMark = false
+		a.statusbar.SetHelpHint(a.defaultHelpHint())
+	}
+	// Same for a pending `'` chord (handleJumpChord).
+	if a.pendingJumpMark {
+		a.pendingJumpMark = false
+		a.statusbar.SetHelpHint(a.defaultHelpHint())
+	}
 	if mode == ModeInsert {
 		a.clearSelections()
 	}
@@ -2052,6 +2143,12 @@ func (a *App) SetMode(mode Mode) {
 	if a.mode == ModeCommand && mode != ModeCommand {
 		a.cmdline = ""
 		a.statusbar.SetCommandLine("")
+	}
+	// Same for the marks list: a global intercept (ctrl+c) leaves
+	// ModeMarks without going through handleMarksMode, and the list
+	// would stay drawn over the screen, and over the quit prompt.
+	if a.mode == ModeMarks && mode != ModeMarks {
+		a.marksOverlay.Close()
 	}
 	a.mode = mode
 	a.statusbar.SetMode(mode)
@@ -3134,6 +3231,16 @@ func (a *App) SetInteractionService(s core.InteractionService) {
 	a.interactions = s
 }
 
+// SetCommandService wires the service slash commands run through. A nil s
+// restores the no-op, whose runs fail with errors.ErrUnsupported and so
+// surface as a toast.
+func (a *App) SetCommandService(s core.CommandService) {
+	if s == nil {
+		s = noopCommandService
+	}
+	a.commandSvc = s
+}
+
 // SetProfileService wires the App's ProfileService collaborator, used
 // by the K-opened user-profile dialog. A nil s restores the no-op
 // default, so a caller can pass through cmd/slk's wiring unconditionally.
@@ -3282,15 +3389,16 @@ func (a *App) SetSidebarStaleThreshold(d time.Duration) {
 }
 
 // renderTypingLine returns the styled typing indicator for the current
-// channel, or an empty string if no one is typing. Stays on App because
-// it pulls in messagepane name resolution and styles. State and
-// formatting live in internal/ui/typing.go.
+// channel (people typing, apps working), or an empty string if there is
+// neither. Stays on App because it pulls in messagepane name resolution
+// and styles. State and formatting live in internal/ui/typing.go.
 func (a *App) renderTypingLine() string {
 	if !a.typing.Enabled() {
 		return ""
 	}
 	userIDs := a.typing.UsersExcluding(a.activeChannelID, a.currentUserID)
-	if len(userIDs) == 0 {
+	botIDs := a.typing.WorkingBots(a.activeChannelID)
+	if len(userIDs) == 0 && len(botIDs) == 0 {
 		return ""
 	}
 	// Resolve user IDs to display names
@@ -3302,7 +3410,11 @@ func (a *App) renderTypingLine() string {
 		}
 		names = append(names, name)
 	}
-	return styles.TypingIndicator.Render(typingIndicatorText(names))
+	botNames := make([]string, 0, len(botIDs))
+	for _, id := range botIDs {
+		botNames = append(botNames, a.userNameFor(id))
+	}
+	return styles.TypingIndicator.Render(typingRowText(names, botNames))
 }
 
 func (a *App) View() tea.View {

@@ -1,0 +1,56 @@
+{
+ "method": "blocks.actions",
+ "form": [
+  [
+   "token",
+   "xoxc-REDACTED"
+  ],
+  [
+   "service_id",
+   "B0EXAMPLE01"
+  ],
+  [
+   "app_id",
+   "A0F827J2C"
+  ],
+  [
+   "service_team_id",
+   "T0EXAMPLE01"
+  ],
+  [
+   "actions",
+   "[{\"action_id\":\"shuffle\",\"block_id\":\"giphy:ephemeral_preview\",\"text\":{\"type\":\"plain_text\",\"text\":\"Shuffle\",\"emoji\":true},\"value\":\"{\\\"command\\\":\\\"\\\\/giphy\\\",\\\"text\\\":\\\"monkey\\\",\\\"giphy_id\\\":\\\"Rfwlp9c5bA7R3s7Y5D\\\",\\\"giphy_url\\\":\\\"https:\\\\/\\\\/giphy.com\\\\/gifs\\\\/dance-ai-monkey-Rfwlp9c5bA7R3s7Y5D\\\",\\\"image_url\\\":\\\"https:\\\\/\\\\/media1.giphy.com\\\\/media\\\\/Rfwlp9c5bA7R3s7Y5D\\\\/giphy-downsized.gif?cid=REDACTED&ep=v1_gifs_translate&rid=giphy-downsized.gif&ct=g\\\",\\\"attribution\\\":{\\\"name\\\":\\\"Max\\\",\\\"url\\\":\\\"https:\\\\/\\\\/giphy.com\\\\/channel\\\\/immax045\\\\/\\\",\\\"is_clip\\\":false},\\\"giphy_session_id\\\":\\\"00000000-0000-0000-0000-000000000000\\\",\\\"rating\\\":\\\"r\\\",\\\"type\\\":\\\"gif\\\",\\\"image\\\":{\\\"send\\\":{\\\"width\\\":\\\"174\\\",\\\"height\\\":\\\"216\\\",\\\"size\\\":\\\"473203\\\"}},\\\"thread_ts\\\":1791758997192499}\",\"type\":\"button\"}]"
+  ],
+  [
+   "container",
+   "{\"type\":\"message_attachment\",\"message_ts\":\"1791802160.000400\",\"attachment_id\":1,\"channel_id\":\"C0EXAMPLE02\",\"is_ephemeral\":true}"
+  ],
+  [
+   "client_token",
+   "web-1791802163381"
+  ],
+  [
+   "state",
+   "{\"values\":{}}"
+  ],
+  [
+   "_x_reason",
+   "dispatch_action_to_developer"
+  ],
+  [
+   "_x_mode",
+   "online"
+  ],
+  [
+   "_x_sonic",
+   "true"
+  ],
+  [
+   "_x_app_name",
+   "client"
+  ]
+ ],
+ "response": {
+  "ok": true
+ }
+}

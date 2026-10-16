@@ -56,6 +56,21 @@ type InteractionService interface {
 		attachmentID int, callbackID, serviceID string, action blocks.LegacyAction, ephemeral bool) error
 }
 
+// CommandService runs Slack slash commands. Run is blocking (callers run
+// it from a tea.Cmd). What a command produces arrives over the WebSocket,
+// so only the error comes back: *CommandError when Slack refuses the
+// command, any other error for a transport failure.
+//
+// Build one with NewCommandService.
+type CommandService interface {
+	// Run executes command ("/giphy", with its slash, lowercased) with
+	// args in channelID of workspace teamID — the one the command was
+	// typed in, which the user may have switched away from since — in
+	// threadTS's thread when threadTS is set.
+	// args is wire-form text (<@U…>, <#C…|name>); "" for none.
+	Run(teamID string, channelID ids.ChannelID, threadTS ids.ThreadTS, command, args string) error
+}
+
 // ThreadService is the App's interface to Slack's thread surfaces:
 // fetching replies, marking threads read, posting replies, and loading
 // the involved-threads list for the user's threads view. Includes
@@ -120,8 +135,8 @@ type ThreadService interface {
 // view — @mentions, thread replies, reactions to your messages, and
 // DMs. Implementations are wired by cmd/slk/main.go.
 //
-// Marking items read is out of scope: opening an item marks the
-// underlying conversation read via existing paths.
+// SetRead changes one item's read state in the feed itself; opening an
+// item also marks its conversation read through the existing paths.
 type ActivityService interface {
 	// Fetch loads the first page of the Activity feed for teamID.
 	// limit is the max items; unreadOnly requests the server-side
@@ -133,6 +148,11 @@ type ActivityService interface {
 	// wanted message timestamps. Returns a Msg (typically
 	// ActivityBodiesLoadedMsg), or nil when there's nothing to fetch.
 	Hydrate(teamID ids.TeamID, refs map[string][]string) Msg
+
+	// SetRead marks item read (read=true) or unread in teamID's
+	// Activity feed. Returns a Msg (typically ActivityReadSetMsg,
+	// carrying any error so the caller can undo an optimistic change).
+	SetRead(teamID ids.TeamID, item ActivityItem, read bool) Msg
 }
 
 // MessageService is the App's interface to Slack's per-message

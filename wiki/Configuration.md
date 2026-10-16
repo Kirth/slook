@@ -22,7 +22,7 @@ colored_usernames = false # color each user's name by ID hash (Slack-style)
 [animations]
 enabled = true
 smooth_scrolling = true
-typing_indicators = true
+typing_indicators = true  # also apps' "working" status (e.g. "Atlas is working...")
 
 [notifications]
 enabled = true
@@ -67,6 +67,22 @@ editor = "nvim"   # Ctrl+E editor, used when $VISUAL and $EDITOR are unset
 message_retention_days = 30
 max_db_size_mb = 500
 max_image_cache_mb = 200
+
+[marks]
+# Vim-style marks. Lowercase marks (ma..mz) are session-only and
+# uppercase marks (mA..mZ) survive a restart, matching vim's
+# buffer-local / global split.
+
+# Make lowercase marks persist too. Turning this back off is not
+# destructive: previously saved lowercase marks stop loading, and
+# reappear if you turn it on again.
+persist_all = false
+
+# Pressing ' opens the marks overlay so you can see what is set
+# without memorising letters. Set false for plain vim behaviour: '
+# waits silently for a letter. This never affects `:marks`, which
+# always shows the overlay.
+show_jump_overlay = true
 
 # Glob-based channel sections — only consulted when use_slack_sections
 # is false (globally or per-workspace), or when Slack's section API is
@@ -234,6 +250,38 @@ slightly lighter) shade than `background` for the same effect.
 
 Switch themes live with `Ctrl+y`, or cycle through them with `Alt+y` /
 `Alt+Shift+y`.
+
+## Marks
+
+`m` followed by a letter records the selected message; `'` followed by
+that letter jumps back to it. A mark records the channel, the message,
+and — when you are reading inside a thread — the thread and the reply,
+so `'a` can put you back on one message in a 200-reply thread.
+
+Case decides lifetime, as in vim:
+
+| | |
+|---|---|
+| `ma` … `mz` | session marks, gone when slk exits |
+| `mA` … `mZ` | persistent, stored in the local SQLite cache |
+
+`persist_all = true` makes lowercase marks persist as well. Turning it
+off later does not delete them — they stop loading, and come back if you
+turn it on again.
+
+`''` is the back-jump: it returns you to wherever you were before the
+last jump, whether or not the jump changed channel. Pressing it again
+returns you to the mark, so `''` toggles between two places.
+
+Marks belong to the workspace they were set in. The same letter in two
+workspaces is two independent marks, and jumping to a mark from another
+workspace is refused rather than switching workspaces.
+
+A mark whose message has since been deleted still opens its channel and
+tells you the message was not found (a deleted thread reply opens its
+thread with nothing selected); the mark is kept either way. Marks
+are only removed when you remove them, with `:delmarks` or `Backspace`
+in the `:marks` overlay.
 
 ## Data paths (XDG)
 

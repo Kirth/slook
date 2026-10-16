@@ -192,3 +192,68 @@ func TestMouseClick_OnImageDispatchesOpenPreview(t *testing.T) {
 		t.Errorf("AttIdx = %d, want 0", op.AttIdx)
 	}
 }
+
+// TestMouseClick_OnThreadImageDispatchesOpenPreview is issue #198:
+// clicking an image in the thread pane must open the preview, as it
+// does in the channel pane (and as `v` already did in the thread).
+func TestMouseClick_OnThreadImageDispatchesOpenPreview(t *testing.T) {
+	channelID, _, fileID, img := imageBearingMessage(t)
+	parent := messages.MessageItem{TS: "1700000000.000001", UserID: "U2", UserName: "bob", Text: "thread", Timestamp: "10:00 AM"}
+	reply := img
+	reply.TS = "1700000000.000200"
+
+	cache, err := imgpkg.NewCache(t.TempDir(), 10)
+	if err != nil {
+		t.Fatalf("NewCache: %v", err)
+	}
+	if _, err := cache.Put(fileID+"-720", "png", makeTestPNGBytes(720, 720)); err != nil {
+		t.Fatalf("cache.Put: %v", err)
+	}
+	fetcher := imgpkg.NewFetcher(cache, nil)
+
+	app := NewApp()
+	app.width = 200
+	app.height = 60
+	app.activeChannelID = channelID
+	app.messagepane.SetMessages([]messages.MessageItem{parent})
+	app.threadVisible = true
+	app.focusedPanel = PanelThread
+	app.threadPanel.SetThread(parent, []messages.MessageItem{reply}, channelID, parent.TS)
+	app.threadPanel.SetImageContext(imgrender.ImageContext{
+		Protocol:   imgpkg.ProtoHalfBlock,
+		Fetcher:    fetcher,
+		CellPixels: stdimage.Pt(8, 16),
+		MaxRows:    20,
+	})
+	_ = app.View()
+	_ = app.View()
+
+	// Find a cell the thread pane reports as the reply's image, in
+	// its content coordinates, then click it on screen.
+	row, col, found := -1, -1, false
+	for r := 0; r < app.height && !found; r++ {
+		for c := 0; c < app.width; c++ {
+			if ts, _, ok := app.threadPanel.HitTestImage(r, c); ok && ts == reply.TS {
+				row, col, found = r, c, true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatal("thread pane recorded no image hit for the reply after View()")
+	}
+	x := app.layout.msgEnd + 1 + col
+	y := 1 + app.threadPanel.ChromeHeight() + row
+
+	_, cmd := app.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd from click on thread image")
+	}
+	op, ok := cmd().(messages.OpenImagePreviewMsg)
+	if !ok {
+		t.Fatalf("got %T, want messages.OpenImagePreviewMsg", cmd())
+	}
+	if op.Channel != channelID || op.TS != reply.TS || op.AttIdx != 0 {
+		t.Errorf("OpenImagePreviewMsg = %+v, want {Channel:%q TS:%q AttIdx:0}", op, channelID, reply.TS)
+	}
+}

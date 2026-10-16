@@ -1,6 +1,9 @@
 package messages
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestFlattenMrkdwn(t *testing.T) {
 	resolveUser := func(id string) (string, bool) {
@@ -34,7 +37,7 @@ func TestFlattenMrkdwn(t *testing.T) {
 		{"channel broadcast", "<!channel> deploy", "@channel deploy"},
 		{"everyone", "<!everyone> deploy", "@everyone deploy"},
 		{"special with label", "<!here|@here> deploy", "@here deploy"},
-		{"date token uses fallback", "due <!date^1700000000^{date}|Nov 14>", "due Nov 14"},
+		{"date token formats local date", "due <!date^1700000000^{date_num}|Nov 14>", "due " + time.Unix(1700000000, 0).Format("2006-01-02")},
 		{"usergroup mention with label", "ping <!subteam^S0AB12CD3|@eng> please", "ping @eng please"},
 		{"usergroup label without @ gets one", "ping <!subteam^S0AB12CD3|eng>", "ping @eng"},
 		{"usergroup mention unlabeled falls back", "ping <!subteam^S0AB12CD3>", "ping @group"},

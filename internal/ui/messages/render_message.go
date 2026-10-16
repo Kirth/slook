@@ -38,7 +38,8 @@ type RenderOptions struct {
 	ReplyAffordance bool   // "[N replies ->]" under a parent (channel pane)
 	EditedMark      bool   // "(edited)" after the timestamp (channel pane)
 	BroadcastLabel  bool   // "↳ replied to a thread" label (channel pane)
-	ImageHits       bool   // record image hit rects and sixel rows (channel pane)
+	ImageHits       bool   // record image hit rects (both panes)
+	SixelRows       bool   // record sixel rows (channel pane)
 	stats           *entryPerfStats
 }
 
@@ -168,7 +169,12 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 			rendered = HighlightSearchTerms(rendered, rc.SearchTerms, hlStart, hlEnd)
 		}
 	}
-	text := styles.MessageText.Render(WordWrap(rendered, contentWidth))
+	bodyStyle := styles.MessageText
+	if msg.Subtype == "me_message" {
+		// A /me line, italic as in Slack's own clients.
+		bodyStyle = bodyStyle.Italic(true)
+	}
+	text := bodyStyle.Render(WordWrap(rendered, contentWidth))
 	if stats != nil {
 		stats.bodyTotal += time.Since(bodyT0)
 	}
@@ -400,7 +406,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		}
 		bkLines = append(bkLines, res.Lines...)
 		out.BlockFlushes = append(out.BlockFlushes, res.Flushes...)
-		if opt.ImageHits {
+		if opt.SixelRows {
 			rowOffset := preAttachmentRows + startInBk
 			for k, v := range res.SixelRows {
 				allSixel[rowOffset+k] = sixelEntry{bytes: v.Bytes, fallback: v.Fallback, height: v.Height, width: v.Width}
@@ -448,7 +454,7 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 		}
 		bkLines = append(bkLines, res.Lines...)
 		out.BlockFlushes = append(out.BlockFlushes, res.Flushes...)
-		if opt.ImageHits {
+		if opt.SixelRows {
 			rowOffset := preAttachmentRows + startInBk
 			for k, v := range res.SixelRows {
 				allSixel[rowOffset+k] = sixelEntry{bytes: v.Bytes, fallback: v.Fallback, height: v.Height, width: v.Width}
@@ -518,10 +524,12 @@ func RenderMessage(msg MessageItem, width int, rc *RenderContext, opt RenderOpti
 			}, rc.ImageChannel, msg.TS, contentWidth, rowCursor, attIdx, contentColBase)
 			attachLineSlices = append(attachLineSlices, res.Lines)
 			out.AttachmentFlushes = append(out.AttachmentFlushes, res.Flushes...)
-			if opt.ImageHits {
+			if opt.SixelRows {
 				for k, v := range convertSixelMap(res.SixelRows) {
 					allSixel[k] = v
 				}
+			}
+			if opt.ImageHits {
 				// Only record hits for actual image-block renders (the
 				// fallback-to-link path returns a zero Hit, which we
 				// skip — clicking a single-line "[Image] <url>" doesn't

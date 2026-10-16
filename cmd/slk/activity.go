@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -60,5 +61,28 @@ func activityHydrateFunc(router *workspaceRouter) core.ActivityHydrateFunc {
 			return nil
 		}
 		return ui.ActivityBodiesLoadedMsg{TeamID: teamIDStr, Bodies: bodies}
+	}
+}
+
+// activitySetReadFunc builds the ActivityService.SetRead closure:
+// activity.markRead / activity.markUnread for one item. It always
+// returns an ActivityReadSetMsg, so the UI can undo its optimistic
+// change when the call fails.
+func activitySetReadFunc(router *workspaceRouter) core.ActivitySetReadFunc {
+	return func(teamID ids.TeamID, item core.ActivityItem, read bool) core.Msg {
+		teamIDStr := string(teamID)
+		msg := ui.ActivityReadSetMsg{TeamID: teamIDStr, Key: item.Key, Read: read}
+		wctx := router.ByID(teamIDStr)
+		if wctx == nil {
+			msg.Err = fmt.Errorf("workspace %s is not connected", teamIDStr)
+			return msg
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := wctx.Client.SetActivityRead(ctx, item.Type, item.Key, item.FeedTS, read); err != nil {
+			log.Printf("Warning: SetActivityRead(%s, %s, read=%v): %v", teamIDStr, item.Key, read, err)
+			msg.Err = err
+		}
+		return msg
 	}
 }

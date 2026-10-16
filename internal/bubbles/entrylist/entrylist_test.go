@@ -292,6 +292,29 @@ func TestHitsAreContentRelativeAndClipped(t *testing.T) {
 	}
 }
 
+// Static translates the window's hits like Layout, and replaces the last
+// frame's: a hit left over from an earlier frame would answer a click
+// on content that is no longer there.
+func TestStaticTranslatesHitsAndDropsTheLastFrames(t *testing.T) {
+	m := New()
+	m.SetHeight(5, 0)
+	old := msg("old", 3, 4, 0)
+	old.Hits = []Hit{{RowStart: 0, RowEnd: 4, ColStart: 0, ColEnd: 10, Kind: HitImage, Key: "F-OLD"}}
+	m.SetEntries([]Entry{old}, 20, false)
+	m.Layout(3, nil)
+
+	a := msg("a", -1, 4, 0)
+	a.Hits = []Hit{{RowStart: 2, RowEnd: 4, ColStart: 1, ColEnd: 4, Kind: HitImage, Key: "F-A", Aux: 1}}
+	m.SetEntries([]Entry{a}, 20, false)
+	m.Static()
+	if h, ok := m.HitTest(HitImage, 2, 2); !ok || h.Key != "F-A" || h.Aux != 1 || h.Ref != -1 {
+		t.Fatalf("hit = %+v, %v; want F-A attachment 1 on ref -1", h, ok)
+	}
+	if h, ok := m.HitTest(HitImage, 0, 6); ok {
+		t.Fatalf("the last frame's hit survived Static: %+v", h)
+	}
+}
+
 func TestSelectionTextAndPlainlessEntries(t *testing.T) {
 	m := New()
 	m.SetHeight(10, 0)

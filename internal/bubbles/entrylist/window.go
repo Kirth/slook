@@ -60,11 +60,13 @@ func (m *Model) Layout(cursor int, lines func(i int) []string) *Frame {
 }
 
 // Static slices the window at the current offset with no snapping, no
-// clamping beyond the eager clamp, no cursor and no hit translation. The
-// thread pane's zero-reply state uses it.
+// clamping beyond the eager clamp and no cursor. It translates the
+// window's hits like Layout, replacing the last frame's. The thread
+// pane's zero-reply state uses it.
 func (m *Model) Static() *Frame {
 	f := &Frame{Cursor: NoCursor, MoreBelow: m.yOffset+m.height < m.total}
-	f.Rows, f.Visible = m.slice(NoCursor, nil, false)
+	m.hits = m.hits[:0]
+	f.Rows, f.Visible = m.slice(NoCursor, nil, true)
 	return f
 }
 

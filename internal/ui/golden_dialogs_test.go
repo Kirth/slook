@@ -12,6 +12,7 @@ import (
 	"github.com/gammons/slk/internal/ui/channelpicker"
 	"github.com/gammons/slk/internal/ui/help"
 	"github.com/gammons/slk/internal/ui/linkpicker"
+	"github.com/gammons/slk/internal/ui/marks"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/newmessagepicker"
 	"github.com/gammons/slk/internal/ui/reactionsview"
@@ -69,6 +70,25 @@ func typeInCompose(a *App, s string) {
 	}
 }
 
+// scrollingMarkRows is 14 marks, more than the list window holds, one
+// with an excerpt too long for the box.
+func scrollingMarkRows() []marks.Row {
+	out := make([]marks.Row, 0, 14)
+	for i := range 14 {
+		r := marks.Row{
+			Letter:      string(rune('a' + i)),
+			ChannelName: fmt.Sprintf("channel-%02d", i+1),
+			AuthorName:  "alice",
+			Excerpt:     fmt.Sprintf("message %02d", i+1),
+		}
+		if i == 6 {
+			r.Excerpt = "an excerpt much too long for the marks box to hold on a single row"
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
 const longThemeName = "Theme with a name far too long to fit inside the switcher box"
 
 func scrollingFinderItems() []core.ChannelFinderItem {
@@ -109,6 +129,7 @@ func dialogGoldens() []dialogGolden {
 	wsShown := func(a *App) bool { return a.workspaceFinder.IsVisible() }
 	presShown := func(a *App) bool { return a.presenceMenu.IsVisible() }
 	finderShown := func(a *App) bool { return a.channelFinder.IsVisible() }
+	marksShown := func(a *App) bool { return a.marksOverlay.IsVisible() }
 	reactShown := func(a *App) bool { return a.reactionPicker.IsVisible() }
 	newMsgShown := func(a *App) bool { return a.newMessagePicker.IsVisible() }
 	helpShown := func(a *App) bool { return a.help.IsVisible() }
@@ -225,6 +246,34 @@ func dialogGoldens() []dialogGolden {
 				a.channelFinder.Open()
 				typeKeys(a.channelFinder.HandleKey, "zqz")
 				a.SetMode(ModeChannelFinder)
+			},
+		},
+		{
+			name: "dialog_marks_scroll", want: "Marks", shown: marksShown,
+			open: func(t *testing.T, a *App) {
+				a.marksOverlay.SetRows(scrollingMarkRows())
+				a.marksOverlay.Open()
+				repeat(11, func() { a.marksOverlay.HandleKey("down") })
+				a.SetMode(ModeMarks)
+			},
+		},
+		{
+			// Too short for ten rows: the window shrinks so the box and
+			// the selected row stay on screen.
+			name: "dialog_marks_short", w: 80, h: 12, want: "Marks", shown: marksShown,
+			open: func(t *testing.T, a *App) {
+				a.marksOverlay.SetRows(scrollingMarkRows())
+				a.marksOverlay.Open()
+				repeat(11, func() { a.marksOverlay.HandleKey("down") })
+				a.SetMode(ModeMarks)
+			},
+		},
+		{
+			name: "dialog_marks_empty", want: "No marks set", shown: marksShown,
+			open: func(t *testing.T, a *App) {
+				a.marksOverlay.SetRows(nil)
+				a.marksOverlay.Open()
+				a.SetMode(ModeMarks)
 			},
 		},
 		{
