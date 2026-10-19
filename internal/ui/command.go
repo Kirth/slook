@@ -58,20 +58,36 @@ func cmdActivity(a *App, _ commandArgs) tea.Cmd {
 	return func() tea.Msg { return ActivityViewActivatedMsg{} }
 }
 
-// cmdHuddle copies the huddle deep link for the active conversation —
-// https://app.slack.com/huddle/<TEAM>/<CHANNEL>, the same link Slack's
-// own "Copy huddle link" produces. The link is always copied: opening
-// it with no huddle active is what Slack's web client itself does
-// (it shows the conversation's huddle panel), so knowing whether a
-// huddle is live is not a precondition. A focused thread pane names
-// its own parent channel, which the Threads view can open without
-// moving a.activeChannelID, so the focused pane's channel wins and
-// the active channel is the fallback (sidebar focus). The H key calls
-// this same handler.
+// cmdHuddle copies the huddle deep link for the conversation on
+// screen — https://app.slack.com/huddle/<TEAM>/<CHANNEL>, the same
+// link Slack's own "Copy huddle link" produces. The link is always
+// copied: opening it with no huddle active is what Slack's web client
+// itself does (it shows the conversation's huddle panel), so knowing
+// whether a huddle is live is not a precondition.
+//
+// Which conversation "on screen" means, in priority order: a focused
+// thread pane names its own parent channel (the Threads view opens
+// threads without moving a.activeChannelID); in the Threads or
+// Activity view, the highlighted row's channel (there PanelMessages
+// focus is the list's convention, and the active channel is stale);
+// otherwise the active channel. An empty answer — no pane, no
+// highlighted row, no active channel — refuses. The H key calls this
+// same handler.
 func cmdHuddle(a *App, _ commandArgs) tea.Cmd {
-	channelID := a.activeChannelID
-	if _, paneChannel, ok := a.focusedContentPane(); ok && paneChannel != "" {
-		channelID = paneChannel
+	var channelID string
+	switch {
+	case a.focusedPanel == PanelThread:
+		channelID = a.threadPanel.ChannelID()
+	case a.view == ViewThreads:
+		if sum, ok := a.threadsView.SelectedSummary(); ok {
+			channelID = sum.ChannelID
+		}
+	case a.view == ViewActivity:
+		if it, ok := a.activityView.SelectedItem(); ok {
+			channelID = it.ChannelID
+		}
+	default:
+		channelID = a.activeChannelID
 	}
 	if channelID == "" {
 		return toastWithClear(a, "No conversation open", 2*time.Second)

@@ -192,3 +192,32 @@ func TestSetError_KeepsAProfileAlreadyShown(t *testing.T) {
 		t.Errorf("a failed first load should show the error:\n%s", ansi.Strip(out))
 	}
 }
+
+// The copy action is offered under the same conditions the view draws
+// the row's icon: a named channel and a live status that still says the
+// user is in a huddle. A cached profile whose huddle has ended must not
+// copy its dead link.
+func TestHuddleLinkOffered_FollowsTheLiveStatus(t *testing.T) {
+	m := loadedWithHuddle("C9")
+
+	m.ViewOverlay(80, 24, "", inHuddleLive())
+	if !m.HuddleLinkOffered() {
+		t.Error("HuddleLinkOffered = false in a huddle, want true")
+	}
+
+	m.ViewOverlay(80, 24, "", Live{Now: time.Now()})
+	if m.HuddleLinkOffered() {
+		t.Error("HuddleLinkOffered = true after the huddle ended, want false")
+	}
+	// HuddleURL itself stays pure: the link exists, the offer does not.
+	if m.HuddleURL() == "" {
+		t.Error("HuddleURL = empty after the huddle ended, want the built link")
+	}
+
+	// A profile with no channel is never offered, huddle or not.
+	without := loadedWithHuddle("")
+	without.ViewOverlay(80, 24, "", inHuddleLive())
+	if without.HuddleLinkOffered() {
+		t.Error("HuddleLinkOffered = true without a huddle channel, want false")
+	}
+}

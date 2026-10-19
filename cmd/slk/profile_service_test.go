@@ -92,7 +92,7 @@ func TestZoneAbbrev(t *testing.T) {
 	}
 }
 
-func TestProfileCache_HitWithinTTL(t *testing.T) {
+func TestProfileCache_CachedServesAFreshResult(t *testing.T) {
 	calls := 0
 	fetch := func(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
 		calls++
@@ -101,18 +101,18 @@ func TestProfileCache_HitWithinTTL(t *testing.T) {
 	now := time.Now()
 	c := newProfileCache(5*time.Minute, func() time.Time { return now }, fetch)
 
-	if _, err := c.Profile(context.Background(), "T1", "U1"); err != nil {
+	if _, err := c.Fresh(context.Background(), "T1", "U1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Profile(context.Background(), "T1", "U1"); err != nil {
-		t.Fatal(err)
+	if _, ok := c.Cached("T1", "U1"); !ok {
+		t.Fatal("Cached after Fresh = miss, want hit")
 	}
 	if calls != 1 {
-		t.Errorf("calls = %d, want 1", calls)
+		t.Errorf("calls = %d, want 1 (Cached must not fetch)", calls)
 	}
 }
 
-func TestProfileCache_ExpiresAfterTTL(t *testing.T) {
+func TestProfileCache_CachedExpiresAfterTTL(t *testing.T) {
 	calls := 0
 	fetch := func(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
 		calls++
@@ -121,15 +121,15 @@ func TestProfileCache_ExpiresAfterTTL(t *testing.T) {
 	now := time.Now()
 	c := newProfileCache(5*time.Minute, func() time.Time { return now }, fetch)
 
-	if _, err := c.Profile(context.Background(), "T1", "U1"); err != nil {
+	if _, err := c.Fresh(context.Background(), "T1", "U1"); err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(5*time.Minute + time.Second)
-	if _, err := c.Profile(context.Background(), "T1", "U1"); err != nil {
-		t.Fatal(err)
+	if _, ok := c.Cached("T1", "U1"); ok {
+		t.Error("Cached past the TTL = hit, want miss")
 	}
-	if calls != 2 {
-		t.Errorf("calls = %d, want 2", calls)
+	if calls != 1 {
+		t.Errorf("calls = %d, want 1 (Cached must not fetch)", calls)
 	}
 }
 
@@ -143,14 +143,17 @@ func TestProfileCache_ErrorsNotCached(t *testing.T) {
 	now := time.Now()
 	c := newProfileCache(5*time.Minute, func() time.Time { return now }, fetch)
 
-	if _, err := c.Profile(context.Background(), "T1", "U1"); !errors.Is(err, boom) {
+	if _, err := c.Fresh(context.Background(), "T1", "U1"); !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want boom", err)
 	}
-	if _, err := c.Profile(context.Background(), "T1", "U1"); !errors.Is(err, boom) {
+	if _, err := c.Fresh(context.Background(), "T1", "U1"); !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want boom", err)
 	}
 	if calls != 2 {
 		t.Errorf("calls = %d, want 2 (errors not cached)", calls)
+	}
+	if _, ok := c.Cached("T1", "U1"); ok {
+		t.Error("Cached after failed fetches = hit, want miss")
 	}
 }
 
@@ -163,14 +166,20 @@ func TestProfileCache_KeyedByTeam(t *testing.T) {
 	now := time.Now()
 	c := newProfileCache(5*time.Minute, func() time.Time { return now }, fetch)
 
-	if _, err := c.Profile(context.Background(), "T1", "U1"); err != nil {
+	if _, err := c.Fresh(context.Background(), "T1", "U1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Profile(context.Background(), "T2", "U1"); err != nil {
+	if _, err := c.Fresh(context.Background(), "T2", "U1"); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 {
 		t.Errorf("calls = %d, want 2 (keyed by team)", calls)
+	}
+	if _, ok := c.Cached("T1", "U1"); !ok {
+		t.Error("T1's entry missing")
+	}
+	if _, ok := c.Cached("T2", "U1"); !ok {
+		t.Error("T2's entry missing")
 	}
 }
 

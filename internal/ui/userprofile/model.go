@@ -122,6 +122,17 @@ func (m *Model) HuddleURL() string {
 	return slackurl.HuddleURL(m.seed.TeamID, m.profile.HuddleChannelID)
 }
 
+// HuddleLinkOffered reports whether a copy of the huddle link may be
+// offered right now: the same conditions the view uses to draw the
+// row's 📋 — the loaded profile names a huddle channel, and the live
+// status the last frame was drawn with still says the user is in a
+// huddle. A cached profile whose huddle has since ended must not copy
+// its dead link, which is why the live condition gates the action and
+// not just the icon.
+func (m *Model) HuddleLinkOffered() bool {
+	return m.HuddleURL() != "" && m.lastLive.Status.InHuddle(m.lastLive.Now)
+}
+
 // LastClickTarget names the point hot spot the last ClickAt hit
 // (clickEmail or clickHuddle), "" on a miss.
 func (m *Model) LastClickTarget() string { return m.lastClickTarget }

@@ -51,6 +51,7 @@
 | `S` | Normal (thread) | Save thread to markdown file (`~/.local/share/slk/exports/` or `$XDG_DATA_HOME/slk/exports/`) |
 | `y` | Normal (message) | Copy message text |
 | `Y` / `C` | Normal (message) | Copy message permalink |
+| `H` / `:huddle` | Normal | Copy the huddle link of the conversation on screen (channels, DMs, group DMs; the focused thread pane, or the highlighted Threads/Activity row, names the channel) |
 | `F` | Normal (message / thread) | Forward selected message using the channel finder; Enter sends, Esc cancels |
 | `O` / `v` | Normal (message) | Open full-screen image preview |
 | `Esc` / `q` | Preview | Close preview |
@@ -64,5 +65,9 @@
 | `q` | Normal | Quit (with confirmation) |
 | `Q` | Normal | Quit immediately |
 | `Ctrl+c` | Any | Quit (with confirmation) |
+| `K` | Normal (message) | Show the selected message author's profile |
+| `e` | Profile dialog | Copy the email shown in the dialog (or click its 📋) |
+| `c` | Profile dialog | Copy the person's huddle link while they are in a huddle Slack named a channel for (or click the 📋 on the "In a huddle" row) |
+| `K` / `Esc` / `q` | Profile dialog | Close |
 
 Custom keybinding overrides are on the roadmap — see [[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]].

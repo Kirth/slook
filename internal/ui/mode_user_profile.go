@@ -40,15 +40,16 @@ func copyProfileEmail(a *App) tea.Cmd {
 }
 
 // copyProfileHuddle writes the dialog's huddle deep link to the
-// clipboard and toasts the outcome. The dialog stays open. No URL
-// means the user is not in a huddle Slack named a channel for.
+// clipboard and toasts the outcome. The dialog stays open. Nothing is
+// offered when the profile did not name a huddle channel, or when the
+// live status says the huddle has ended — the same conditions that
+// hide the row's 📋, so a cached profile never copies a dead link.
 func copyProfileHuddle(a *App) tea.Cmd {
-	url := a.userProfile.HuddleURL()
-	if url == "" {
+	if !a.userProfile.HuddleLinkOffered() {
 		return toastWithClear(a, "No huddle link", 2*time.Second)
 	}
 	return tea.Batch(
-		a.clipboardWrite(url),
+		a.clipboardWrite(a.userProfile.HuddleURL()),
 		toastWithClear(a, "Copied huddle link", 2*time.Second),
 	)
 }

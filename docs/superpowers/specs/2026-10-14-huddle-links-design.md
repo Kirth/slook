@@ -38,10 +38,12 @@ opening the copied link happens in Slack's own clients.
   `ProfileService` (the K dialog's fetch is live, so no cache schema
   change is needed and the link never comes from a stale row).
 - **UI affordances:**
-  - `H` / `:huddle` copies the active conversation's link (`cmdHuddle`),
-    toast "Copied huddle link"; refuses with "No conversation open"
-    otherwise. Threads share their parent's huddle, so
-    `a.threadPanel.ChannelID()` is deliberately not consulted.
+  - `H` / `:huddle` copies the conversation on screen's link
+    (`cmdHuddle`), toast "Copied huddle link"; refuses with "No
+    conversation open" when there is none. The channel comes from the
+    focused thread pane when it has one (see the review follow-up below),
+    from the highlighted Threads/Activity row in those list views, and
+    from the active channel otherwise.
   - The K dialog's "🎧 In a huddle" row gains a 📋 (and `c`) when the
     loaded profile named the huddle's channel; a click on the icon does
     what `c` does (`userprofile.LastClickTarget` distinguishes it from
@@ -64,4 +66,15 @@ opening the copied link happens in Slack's own clients.
   `Profile` — wired to `profileCache.Fresh`, which always fetches and
   refreshes the cache — runs behind it on every open. A failed refresh
   behind a shown profile is ignored (`Model.SetError`), so a background
-  429 never replaces good data with the error line.
+  429 never replaces good data with the error line. The cache's original
+  read-through `profileCache.Profile` is gone: the wiring is
+  `Cached` + `Fresh` only.
+- **List views.** The Threads and Activity views also leave
+  `a.activeChannelID` pointing at the last-opened channel, so `H` there
+  copies the highlighted row's channel (`SelectedSummary` /
+  `SelectedItem`); no highlighted row refuses.
+- **The `c` offer follows the icon.** The row's 📋 appears only while
+  the live status says the person is in a huddle; the copy action
+  (`c` and the click) now checks the same conditions
+  (`Model.HuddleLinkOffered`), so a cached profile whose huddle has
+  ended cannot copy its dead link.

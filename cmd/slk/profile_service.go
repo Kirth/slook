@@ -119,31 +119,6 @@ func (c *profileCache) Fresh(ctx context.Context, teamID, userID string) (core.U
 	return profile, nil
 }
 
-// Profile returns userID's profile in workspace teamID, from cache if
-// fresh, otherwise from a live fetch. Successful fetches are cached
-// for ttl; errors are not cached.
-func (c *profileCache) Profile(ctx context.Context, teamID, userID string) (core.UserProfile, error) {
-	key := teamID + "/" + userID
-
-	c.mu.Lock()
-	entry, ok := c.entries[key]
-	c.mu.Unlock()
-	if ok && c.now().Sub(entry.fetchedAt) < c.ttl {
-		return entry.profile, nil
-	}
-
-	profile, err := c.fetch(ctx, teamID, userID)
-	if err != nil {
-		return core.UserProfile{}, err
-	}
-
-	c.mu.Lock()
-	c.entries[key] = profileCacheEntry{profile: profile, fetchedAt: c.now()}
-	c.mu.Unlock()
-
-	return profile, nil
-}
-
 // newProfileFetch builds the per-workspace profile fetch function used
 // by ProfileService, from a lookup that resolves a workspace's
 // users.info function by team ID. Separated from the live
