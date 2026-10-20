@@ -53,13 +53,14 @@ func StripSkinTone(name string) string {
 	return name
 }
 
-// shortcodePattern matches one :emoji_shortcode: token in arbitrary
-// text, with Slack's "::skin-tone-N" suffix when it has one. Names are
-// alphanumerics, underscores, hyphens and plus signs. Colons are only
-// allowed as part of that suffix: anything looser lets a match run on
-// into the next shortcode in ":+1::skin-tone-5::tada:", and stripping
-// the tone would then drop the 🎉.
-var shortcodePattern = regexp.MustCompile(`:[A-Za-z0-9_+-]+(?:::skin-tone-\d)?:`)
+// skinTonedShortcode matches one :emoji_shortcode: that carries a skin
+// tone, in Slack's "::skin-tone-N" form or kyokomi's "_toneN", and
+// captures the base name. Plain shortcodes don't match, so a run of
+// colon-delimited prose such as the ":30:" in "12:30:+1::skin-tone-5:"
+// can't consume the opening colon of the emoji after it; and the only
+// colons a match takes are the suffix's, so it can't run on into the
+// next shortcode in ":+1::skin-tone-5::tada:".
+var skinTonedShortcode = regexp.MustCompile(`:([A-Za-z0-9_+-]+)(?:::skin-tone-\d|_tone[1-5]):`)
 
 // StripSkinToneFromText scans body text for emoji shortcodes and removes
 // the skin-tone modifier portion of any it finds. The bare shortcode is
@@ -77,14 +78,5 @@ var shortcodePattern = regexp.MustCompile(`:[A-Za-z0-9_+-]+(?:::skin-tone-\d)?:`
 // the alignment issues caused by skin-tone modifier codepoints rendering
 // inconsistently across terminals.
 func StripSkinToneFromText(text string) string {
-	return shortcodePattern.ReplaceAllStringFunc(text, func(match string) string {
-		// match includes the surrounding colons; strip them, run through
-		// StripSkinTone, then re-add.
-		inner := match[1 : len(match)-1]
-		stripped := StripSkinTone(inner)
-		if stripped == inner {
-			return match
-		}
-		return ":" + stripped + ":"
-	})
+	return skinTonedShortcode.ReplaceAllString(text, ":$1:")
 }

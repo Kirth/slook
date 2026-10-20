@@ -118,6 +118,11 @@ func TestStripSkinToneFromText(t *testing.T) {
 			in:   ":thumbsup_tone3::tada:",
 			want: ":thumbsup::tada:",
 		},
+		{
+			name: "clock time right before a toned emoji",
+			in:   "Meet at 12:30:+1::skin-tone-5:",
+			want: "Meet at 12:30:+1:",
+		},
 
 		// Plain text — no change.
 		{
