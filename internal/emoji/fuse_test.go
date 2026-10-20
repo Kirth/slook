@@ -119,6 +119,11 @@ func TestStripSkinToneFromText(t *testing.T) {
 			want: ":thumbsup::tada:",
 		},
 		{
+			name: "two-person emoji with two tones",
+			in:   ":handshake::skin-tone-2-5::tada:",
+			want: ":handshake::tada:",
+		},
+		{
 			name: "clock time right before a toned emoji",
 			in:   "Meet at 12:30:+1::skin-tone-5:",
 			want: "Meet at 12:30:+1:",
