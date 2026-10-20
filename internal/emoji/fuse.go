@@ -53,10 +53,13 @@ func StripSkinTone(name string) string {
 	return name
 }
 
-// shortcodePattern matches a :emoji_shortcode: token in arbitrary text.
-// Shortcodes are alphanumerics, underscores, hyphens, plus signs, and
-// colons (the inner colon supports the Slack "+1::skin-tone-N" form).
-var shortcodePattern = regexp.MustCompile(`:[A-Za-z0-9_+:-]+:`)
+// shortcodePattern matches one :emoji_shortcode: token in arbitrary
+// text, with Slack's "::skin-tone-N" suffix when it has one. Names are
+// alphanumerics, underscores, hyphens and plus signs. Colons are only
+// allowed as part of that suffix: anything looser lets a match run on
+// into the next shortcode in ":+1::skin-tone-5::tada:", and stripping
+// the tone would then drop the 🎉.
+var shortcodePattern = regexp.MustCompile(`:[A-Za-z0-9_+-]+(?:::skin-tone-\d)?:`)
 
 // StripSkinToneFromText scans body text for emoji shortcodes and removes
 // the skin-tone modifier portion of any it finds. The bare shortcode is
