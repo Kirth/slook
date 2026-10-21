@@ -643,6 +643,20 @@ func TestCommonMark_EmojiInCodeBlockPreserved(t *testing.T) {
 	}
 }
 
+// TestEmojiAfterSkinTonedEmojiKept: in glyph mode, an emoji directly
+// after a skin-toned one (the shape RichTextToMrkdwn emits for 👍🏾🎉)
+// renders instead of being cut off with the skin tone, on screen and
+// in the Markdown export.
+func TestEmojiAfterSkinTonedEmojiKept(t *testing.T) {
+	const in = ":+1::skin-tone-5::tada:"
+	if got := ansi.Strip(RenderSlackMarkdown(in, nil, nil)); !strings.Contains(got, "👍") || !strings.Contains(got, "🎉") {
+		t.Errorf("RenderSlackMarkdown(%q) = %q, want 👍 and 🎉", in, got)
+	}
+	if got, want := SlackMrkdwnToCommonMark(in, nil, nil), "👍🎉"; got != want {
+		t.Errorf("SlackMrkdwnToCommonMark(%q) = %q, want %q", in, got, want)
+	}
+}
+
 func TestCommonMark_EmojiNoTrailingSpace(t *testing.T) {
 	got := SlackMrkdwnToCommonMark(":smile:end", nil, nil)
 	want := "😄end"
