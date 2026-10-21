@@ -48,7 +48,7 @@ These aren't `:` commands, but slk does them:
 | `:join`, `:goto`, `:chan` | `Ctrl+t` or `Ctrl+p` opens the channel finder; `/open #channel` in a composer joins and opens a channel by name |
 | `:i` | `i` starts writing a message (Insert mode) |
 | `:w` | `Enter` in Insert mode sends the message |
-| `:q` to quit | `q` quits after asking, `Q` quits at once, `Ctrl+c` asks too |
+| `:q` to quit | `Q` or `Ctrl+c` quits after asking (`q` closes the thread pane) |
 
 ## Slash commands
 
@@ -76,7 +76,7 @@ slk does the same:
 | `/status away`, `/status active` | Set your presence. Other `/status` forms (a custom status, bare `/status`) aren't supported yet; use `Ctrl+s` for status |
 | `/open #channel` | Open a channel, joining it first if you aren't in it. Takes a name with or without `#`; says "No channel named #…" when nothing matches |
 | `/join #channel` | Same as `/open` |
-| `/msg @someone [message]` | Open your DM with that person and put the message in its composer, ready to edit and send. slk doesn't send it for you |
+| `/msg @someone [message]` | Open your DM with that person and put the message in its composer, ready to edit and send. slk doesn't send it for you, and if the DM already has a draft slk keeps that draft and leaves the message out |
 | `/dm @someone [message]` | Same as `/msg` |
 | `/leave`, `/close`, `/part` | Not supported yet; slk says so |
 
@@ -93,7 +93,7 @@ can see.
   "… opened a dialog slk can't show yet". Finish it in Slack.
 - When a command fails, slk says why in the status bar (an unknown command is
   "/name is not a valid command") and puts what you typed back in the
-  composer.
+  composer, unless you've started typing something else there by then.
 
 slk doesn't have a picker listing the workspace's commands yet, so you need
 to know the command's name.
