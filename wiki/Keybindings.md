@@ -10,6 +10,7 @@
 | `Enter` | Normal (message) | Open thread |
 | `i` | Normal | Enter insert mode |
 | `Esc` | Insert / Command | Return to normal mode |
+| `:` | Normal | Command prompt (`:ws`, `:marks`, `:sp`, … — see [[Commands]]) |
 | `Enter` | Insert | Send message |
 | `Shift+Enter` | Insert | Newline |
 | `Ctrl+V` | Insert | Smart paste — image / file path / text (use `Ctrl+V`, not the terminal's `Ctrl+Shift+V`) |
@@ -62,12 +63,14 @@
 | `Ctrl+y` | Any | Switch theme |
 | `Alt+y` / `Alt+Shift+y` | Normal | Next / previous theme (wraps; saved per workspace) |
 | `Ctrl+s` | Any | Set status (Active / Away / DND snooze) |
-| `q` | Normal | Quit (with confirmation) |
-| `Q` | Normal | Quit immediately |
+| `q` | Normal | Close the thread pane (does nothing when none is open) |
+| `Q` | Normal | Quit (with confirmation) |
 | `Ctrl+c` | Any | Quit (with confirmation) |
 | `K` | Normal (message) | Show the selected message author's profile |
 | `e` | Profile dialog | Copy the email shown in the dialog (or click its 📋) |
 | `c` | Profile dialog | Copy the person's huddle link while they are in a huddle Slack named a channel for (or click the 📋 on the "In a huddle" row) |
 | `K` / `Esc` / `q` | Profile dialog | Close |
+
+For `:` commands and slash commands, see [[Commands]].
 
 Custom keybinding overrides are on the roadmap — see [[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]].
