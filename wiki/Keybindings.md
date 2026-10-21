@@ -10,6 +10,7 @@
 | `Enter` | Normal (message) | Open thread |
 | `i` | Normal | Enter insert mode |
 | `Esc` | Insert / Command | Return to normal mode |
+| `:` | Normal | Command prompt (`:ws`, `:marks`, `:sp`, … — see [[Commands]]) |
 | `Enter` | Insert | Send message |
 | `Shift+Enter` | Insert | Newline |
 | `Ctrl+V` | Insert | Smart paste — image / file path / text (use `Ctrl+V`, not the terminal's `Ctrl+Shift+V`) |
@@ -69,5 +70,7 @@
 | `e` | Profile dialog | Copy the email shown in the dialog (or click its 📋) |
 | `c` | Profile dialog | Copy the person's huddle link while they are in a huddle Slack named a channel for (or click the 📋 on the "In a huddle" row) |
 | `K` / `Esc` / `q` | Profile dialog | Close |
+
+For `:` commands and slash commands, see [[Commands]].
 
 Custom keybinding overrides are on the roadmap — see [[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]].
