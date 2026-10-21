@@ -141,21 +141,36 @@ func TestComposeSkinTonedCodepoints(t *testing.T) {
 		want []rune
 		ok   bool
 	}{
-		// Slack reaction-API form.
-		{"slack thumbsup tone 3", "thumbsup::skin-tone-3", []rune{0x1F44D, 0x1F3FD}, true},
-		{"slack +1 tone 2", "+1::skin-tone-2", []rune{0x1F44D, 0x1F3FC}, true},
-		// kyokomi form.
+		// Slack reaction-API form. Slack numbers tones 2-6 (1 is the
+		// default yellow), so skin-tone-2 is the lightest modifier,
+		// U+1F3FB; a rich_text emoji element with "skin_tone": 2
+		// carries "unicode": "1f44d-1f3fb".
+		{"slack +1 tone 2", "+1::skin-tone-2", []rune{0x1F44D, 0x1F3FB}, true},
+		{"slack thumbsup tone 3", "thumbsup::skin-tone-3", []rune{0x1F44D, 0x1F3FC}, true},
+		{"slack tone 6", "thumbsup::skin-tone-6", []rune{0x1F44D, 0x1F3FF}, true},
+		// kyokomi form numbers them 1-5.
 		{"kyokomi wave tone 5", "wave_tone5", []rune{0x1F44B, 0x1F3FF}, true},
 		// ZWJ sequence: the modifier belongs after the base codepoint,
 		// before the ZWJ tail. Appending it instead builds a filename
 		// Slack's CDN 404s. Every other case here has a single-codepoint
 		// base, where the two orderings are indistinguishable.
 		{"zwj person_running_facing_right tone 2", "person_running_facing_right::skin-tone-2",
-			[]rune{0x1F3C3, 0x1F3FC, 0x200D, 0x27A1, 0xFE0F}, true},
+			[]rune{0x1F3C3, 0x1F3FB, 0x200D, 0x27A1, 0xFE0F}, true},
+		// A VS16 right after the base is replaced by the modifier, not
+		// kept after it: ✌️ is 270C FE0F, ✌🏼 is 270C 1F3FC.
+		{"vs16 base", "v::skin-tone-3", []rune{0x270C, 0x1F3FC}, true},
+		{"vs16 base in zwj", "woman-lifting-weights::skin-tone-2",
+			[]rune{0x1F3CB, 0x1F3FB, 0x200D, 0x2640, 0xFE0F}, true},
 		// No tone suffix.
 		{"no suffix", "thumbsup", nil, false},
 		// Tone out of range.
-		{"slack tone 6", "thumbsup::skin-tone-6", nil, false},
+		{"slack tone 1", "thumbsup::skin-tone-1", nil, false},
+		{"slack tone 7", "thumbsup::skin-tone-7", nil, false},
+		// Base that takes no skin tone: there is no toned image.
+		{"untoneable base", "tada::skin-tone-2", nil, false},
+		// Takes a tone per person and has no single-tone image, so
+		// one modifier can't name an asset.
+		{"two-tone-only base", "people_holding_hands::skin-tone-2", nil, false},
 		// Unknown base.
 		{"unknown base", "definitely_not_an_emoji_xyz_tone3", nil, false},
 	}
@@ -181,12 +196,13 @@ func TestURLForShortcode_SkinTonedFallback(t *testing.T) {
 		// Direct kyokomi hit — uses CodepointsForShortcode first.
 		{"thumbsup_tone3 (kyokomi)", "thumbsup_tone3", CDNBaseURL + "1f44d-1f3fd.png"},
 		// Slack-form fallback via ComposeSkinTonedCodepoints.
-		{"thumbsup slack form", "thumbsup::skin-tone-2", CDNBaseURL + "1f44d-1f3fc.png"},
-		{"+1 slack form (alias)", "+1::skin-tone-3", CDNBaseURL + "1f44d-1f3fd.png"},
+		{"thumbsup slack form", "thumbsup::skin-tone-2", CDNBaseURL + "1f44d-1f3fb.png"},
+		{"+1 slack form (alias)", "+1::skin-tone-3", CDNBaseURL + "1f44d-1f3fc.png"},
 		{"+1_tone3 (kyokomi miss)", "+1_tone3", CDNBaseURL + "1f44d-1f3fd.png"},
 		// The ordering above, end to end as a CDN filename.
 		{"zwj slack form", "person_running_facing_right::skin-tone-2",
-			CDNBaseURL + "1f3c3-1f3fc-200d-27a1-fe0f.png"},
+			CDNBaseURL + "1f3c3-1f3fb-200d-27a1-fe0f.png"},
+		{"vs16 slack form", "v::skin-tone-3", CDNBaseURL + "270c-1f3fc.png"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

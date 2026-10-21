@@ -31,8 +31,8 @@ func CanonicalSlackName(name string, customs map[string]string) string {
 	if _, ok := customs[name]; ok {
 		return name
 	}
-	if base, tone, ok := splitSkinToneSuffix(name); ok {
-		return fmt.Sprintf("%s::skin-tone-%d", CanonicalSlackName(base, customs), tone)
+	if base, modifier, ok := splitSkinToneSuffix(name); ok {
+		return fmt.Sprintf("%s::skin-tone-%d", CanonicalSlackName(base, customs), modifier-lightestSkinTone+2)
 	}
 	if canonical, ok := slackNameToCanonical[name]; ok {
 		return canonical
