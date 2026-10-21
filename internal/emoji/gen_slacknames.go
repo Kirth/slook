@@ -42,6 +42,9 @@ type entry struct {
 	ShortName  string   `json:"short_name"`
 	ShortNames []string `json:"short_names"`
 	SortOrder  int      `json:"sort_order"`
+	// Keyed by the modifier codepoints ("1F3FB", or "1F3FB-1F3FC" for
+	// a two-person emoji); only presence matters here.
+	SkinVariations map[string]json.RawMessage `json:"skin_variations"`
 }
 
 // unifiedToGlyph converts an iamcal "unified" codepoint string (uppercase
@@ -86,12 +89,16 @@ func main() {
 
 	nameToCanonical := map[string]string{} // alias -> canonical short_name
 	codeMap := map[string]string{}         // ":name:" -> glyph (all aliases)
+	toneBases := map[string]string{}       // glyph -> canonical short_name
 
 	for _, e := range entries {
 		if e.ShortName == "" {
 			continue
 		}
 		glyph := unifiedToGlyph(e.Unified)
+		if len(e.SkinVariations) > 0 && glyph != "" {
+			toneBases[glyph] = e.ShortName
+		}
 		for _, n := range e.ShortNames {
 			if _, ok := nameToCanonical[n]; !ok {
 				nameToCanonical[n] = e.ShortName
@@ -114,6 +121,10 @@ func main() {
 	fmt.Fprintf(&buf, "// to its rendered Unicode glyph, derived from iamcal codepoints. This is\n")
 	fmt.Fprintf(&buf, "// slk's standard-emoji source, replacing kyokomi/emoji's CodeMap.\n")
 	writeMap(&buf, "slackCodeMap", codeMap)
+	fmt.Fprintf(&buf, "\n// slackSkinToneBases maps the glyph of every emoji that takes a skin\n")
+	fmt.Fprintf(&buf, "// tone to its canonical short_name. An emoji not listed has no toned\n")
+	fmt.Fprintf(&buf, "// image on Slack's CDN.\n")
+	writeMap(&buf, "slackSkinToneBases", toneBases)
 
 	src, err := format.Source(buf.Bytes())
 	if err != nil {
@@ -123,7 +134,7 @@ func main() {
 		log.Fatalf("writing slacknames_gen.go: %v", err)
 	}
 
-	log.Printf("wrote slacknames_gen.go: %d names, %d shortcodes", len(nameToCanonical), len(codeMap))
+	log.Printf("wrote slacknames_gen.go: %d names, %d shortcodes, %d skin-tone bases", len(nameToCanonical), len(codeMap), len(toneBases))
 }
 
 func writeMap(buf *bytes.Buffer, name string, m map[string]string) {
