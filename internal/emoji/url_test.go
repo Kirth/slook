@@ -168,6 +168,9 @@ func TestComposeSkinTonedCodepoints(t *testing.T) {
 		{"slack tone 7", "thumbsup::skin-tone-7", nil, false},
 		// Base that takes no skin tone: there is no toned image.
 		{"untoneable base", "tada::skin-tone-2", nil, false},
+		// Takes a tone per person and has no single-tone image, so
+		// one modifier can't name an asset.
+		{"two-tone-only base", "people_holding_hands::skin-tone-2", nil, false},
 		// Unknown base.
 		{"unknown base", "definitely_not_an_emoji_xyz_tone3", nil, false},
 	}

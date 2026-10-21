@@ -96,7 +96,7 @@ func main() {
 			continue
 		}
 		glyph := unifiedToGlyph(e.Unified)
-		if len(e.SkinVariations) > 0 && glyph != "" {
+		if hasSingleTone(e.SkinVariations) && glyph != "" {
 			toneBases[glyph] = e.ShortName
 		}
 		for _, n := range e.ShortNames {
@@ -121,9 +121,9 @@ func main() {
 	fmt.Fprintf(&buf, "// to its rendered Unicode glyph, derived from iamcal codepoints. This is\n")
 	fmt.Fprintf(&buf, "// slk's standard-emoji source, replacing kyokomi/emoji's CodeMap.\n")
 	writeMap(&buf, "slackCodeMap", codeMap)
-	fmt.Fprintf(&buf, "\n// slackSkinToneBases maps the glyph of every emoji that takes a skin\n")
-	fmt.Fprintf(&buf, "// tone to its canonical short_name. An emoji not listed has no toned\n")
-	fmt.Fprintf(&buf, "// image on Slack's CDN.\n")
+	fmt.Fprintf(&buf, "\n// slackSkinToneBases maps the glyph of every emoji with a single-tone\n")
+	fmt.Fprintf(&buf, "// image to its canonical short_name. For an emoji not listed, one\n")
+	fmt.Fprintf(&buf, "// skin tone modifier names no image on Slack's CDN.\n")
 	writeMap(&buf, "slackSkinToneBases", toneBases)
 
 	src, err := format.Source(buf.Bytes())
@@ -135,6 +135,19 @@ func main() {
 	}
 
 	log.Printf("wrote slacknames_gen.go: %d names, %d shortcodes, %d skin-tone bases", len(nameToCanonical), len(codeMap), len(toneBases))
+}
+
+// hasSingleTone reports whether an emoji has an image for one skin tone
+// modifier. A few two-person emoji (people_holding_hands, the couple
+// and kiss pairs) list only a tone per person, "1F3FB-1F3FC", so a
+// single modifier names no image.
+func hasSingleTone(variations map[string]json.RawMessage) bool {
+	for k := range variations {
+		if !strings.Contains(k, "-") {
+			return true
+		}
+	}
+	return false
 }
 
 func writeMap(buf *bytes.Buffer, name string, m map[string]string) {
