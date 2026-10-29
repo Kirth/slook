@@ -23,14 +23,23 @@ import (
 	"github.com/gammons/slk/internal/ui/messages"
 )
 
-// groupGap is how close together two messages by the same author must
-// be to share one author line.
-const groupGap = 5 * time.Minute
-
-// Message layout: the avatar column and the gap to the text.
+// Message layout: the avatar column and the gap to the text, and the
+// list's rhythm.
 const (
 	avatarDp = unit.Dp(36)
 	gutterDp = unit.Dp(10)
+	// authorGap is the room between an author line and the body under it.
+	authorGap = unit.Dp(2)
+	// groupTop is the room above a group's first message (one with its
+	// author line); lineTop above a message continuing a group.
+	groupTop = unit.Dp(16)
+	lineTop  = unit.Dp(2)
+	// dateTop and dateBottom are the room around a date separator.
+	dateTop    = unit.Dp(16)
+	dateBottom = unit.Dp(8)
+	// gutterTimeTop lowers a grouped line's hover time in the gutter so
+	// its baseline meets the body's first line (caption beside body).
+	gutterTimeTop = unit.Dp(3)
 )
 
 // chatWindow is one conversation in a window of its own.
@@ -495,7 +504,7 @@ func (c *chatWindow) settleJump() {
 			c.list.ScrollTo(i + rowMessages)
 			c.jumpPx = true
 			c.jump.until = now.Add(jumpHighlight)
-			c.highlight.ts, c.highlight.until = c.jump.ts, c.jump.until
+			c.light(c.jump.ts, now, jumpHighlight)
 		case now.Before(c.jump.until):
 			c.list.Position.First = i + rowMessages
 		default:
@@ -649,7 +658,7 @@ func (c *chatWindow) historyEdge(gtx C) D {
 	return layout.Inset{Top: unit.Dp(12), Bottom: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
 		return layout.Center.Layout(gtx, func(gtx C) D {
-			lbl := material.Caption(c.th, text)
+			lbl := captionLabel(c.th, text)
 			lbl.Color = colMuted
 			return lbl.Layout(gtx)
 		})
@@ -708,12 +717,6 @@ func anchorOf(msgs []backend.Message, first, offset int) (string, int) {
 		return msgs[first].TS, offset
 	}
 	return "", 0
-}
-
-func sameDay(a, b time.Time) bool {
-	ay, am, ad := a.Date()
-	by, bm, bd := b.Date()
-	return ay == by && am == bm && ad == bd
 }
 
 func replyCount(n int) string {

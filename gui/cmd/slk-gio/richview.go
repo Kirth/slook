@@ -60,6 +60,7 @@ type msgWidgets struct {
 	// replies is the reply count (or a broadcast's caption), which opens
 	// the thread too.
 	rowHover gesture.Hover
+	hovered  bool             // the pointer is over the row (or its actions), as of this frame
 	more     widget.Clickable // the actions menu
 	react    widget.Clickable
 	reply    widget.Clickable
@@ -190,7 +191,7 @@ func (v *richView) busyNote(gtx C, a backend.Attachment) D {
 		return D{}
 	}
 	return layout.Inset{Top: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
-		lbl := material.Caption(v.th, "Downloading…")
+		lbl := captionLabel(v.th, "Downloading…")
 		lbl.Color = colMuted
 		return lbl.Layout(gtx)
 	})
@@ -202,7 +203,7 @@ func (v *richView) spanStyles(spans []rich.Span, size unit.Sp, col color.NRGBA) 
 	for _, s := range spans {
 		f := font.Font{Typeface: v.th.Face}
 		if s.Bold {
-			f.Weight = font.Bold
+			f.Weight = font.SemiBold
 		}
 		if s.Italic {
 			f.Style = font.Italic
@@ -221,6 +222,7 @@ func (v *richView) spanStyles(spans []rich.Span, size unit.Sp, col color.NRGBA) 
 			st.Inline = func(gtx C, _ D) { emojiPicture(gtx, img) }
 		case s.Code:
 			st.Font.Typeface = fontMono.Typeface
+			st.Font.Weight = font.Normal // code is never bold
 			st.Color = colCodeFg
 		case s.URL != "":
 			st.Color = colAccent
@@ -306,14 +308,17 @@ func (v *richView) block(gtx C, w *msgWidgets, b rich.Block) D {
 			return v.barred(gtx, colBorder, func(gtx C) D { return v.blocks(gtx, w, b.Blocks) })
 		})
 	case rich.CodeBlock:
+		// Code in the monospace face, on its tint inside a 1 dp rule.
 		return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx C) D {
-			return rounded(gtx, colCodeBg, unit.Dp(4), func(gtx C) D {
-				gtx.Constraints.Min.X = gtx.Constraints.Max.X
-				return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx C) D {
-					lbl := material.Body2(v.th, b.Text)
-					lbl.Font = fontMono
-					lbl.State = w.sel()
-					return lbl.Layout(gtx)
+			return widget.Border{Color: colBorder, CornerRadius: cardRadius, Width: unit.Dp(1)}.Layout(gtx, func(gtx C) D {
+				return rounded(gtx, colCodeBg, cardRadius, func(gtx C) D {
+					gtx.Constraints.Min.X = gtx.Constraints.Max.X
+					return layout.Inset{Top: unit.Dp(8), Bottom: unit.Dp(8), Left: unit.Dp(10), Right: unit.Dp(10)}.Layout(gtx, func(gtx C) D {
+						lbl := secondaryLabel(v.th, b.Text)
+						lbl.Font = fontMono
+						lbl.State = w.sel()
+						return lbl.Layout(gtx)
+					})
 				})
 			})
 		})
@@ -353,7 +358,7 @@ func (v *richView) block(gtx C, w *msgWidgets, b rich.Block) D {
 							return D{}
 						}
 						return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx C) D {
-							lbl := material.Caption(v.th, b.Footer)
+							lbl := captionLabel(v.th, b.Footer)
 							lbl.Color = colMuted
 							return lbl.Layout(gtx)
 						})
@@ -395,7 +400,7 @@ func (v *richView) list(gtx C, w *msgWidgets, l rich.List) D {
 				return layout.Flex{Alignment: layout.Baseline}.Layout(gtx,
 					layout.Rigid(func(gtx C) D {
 						gtx.Constraints.Min.X = gtx.Dp(unit.Dp(22))
-						lbl := material.Body1(v.th, marker)
+						lbl := bodyLabel(v.th, marker)
 						lbl.Color = colMuted
 						return lbl.Layout(gtx)
 					}),
@@ -455,7 +460,7 @@ func (v *richView) buttons(gtx C, labels []string) D {
 				border := widget.Border{Color: colBorder, CornerRadius: unit.Dp(4), Width: unit.Dp(1)}
 				return border.Layout(gtx, func(gtx C) D {
 					return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4), Left: unit.Dp(10), Right: unit.Dp(10)}.Layout(gtx,
-						material.Body2(v.th, label).Layout)
+						secondaryLabel(v.th, label).Layout)
 				})
 			})
 		}))
@@ -476,18 +481,18 @@ func (v *richView) file(gtx C, w *msgWidgets, f rich.File) D {
 func (v *richView) fileChip(gtx C, c *openClick, f rich.File) D {
 	return c.btn.Layout(gtx, func(gtx C) D {
 		pointer.CursorPointer.Add(gtx.Ops)
-		border := widget.Border{Color: colBorder, CornerRadius: unit.Dp(6), Width: unit.Dp(1)}
+		border := widget.Border{Color: colBorder, CornerRadius: cardRadius, Width: unit.Dp(1)}
 		return border.Layout(gtx, func(gtx C) D {
 			return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx C) D {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 					layout.Rigid(func(gtx C) D {
-						lbl := material.Body2(v.th, f.Name)
+						lbl := secondaryLabel(v.th, f.Name)
 						lbl.Color = colAccent
 						lbl.MaxLines = 1
 						return lbl.Layout(gtx)
 					}),
 					layout.Rigid(func(gtx C) D {
-						lbl := material.Caption(v.th, strings.TrimSpace(humanSize(f.Size)+"  "+f.Mime))
+						lbl := captionLabel(v.th, strings.TrimSpace(humanSize(f.Size)+"  "+f.Mime))
 						lbl.Color = colMuted
 						return lbl.Layout(gtx)
 					}),
@@ -524,14 +529,14 @@ func (v *richView) picture(gtx C, c *openClick, im rich.Image, max unit.Dp) D {
 		}
 		return c.btn.Layout(gtx, func(gtx C) D {
 			pointer.CursorPointer.Add(gtx.Ops)
-			defer clip.UniformRRect(image.Rectangle{Max: box}, gtx.Dp(unit.Dp(6))).Push(gtx.Ops).Pop()
+			defer clip.UniformRRect(image.Rectangle{Max: box}, gtx.Dp(cardRadius)).Push(gtx.Ops).Pop()
 			gtx.Constraints = layout.Exact(box)
 			return widget.Image{Src: op, Fit: widget.Contain, Position: layout.Center}.Layout(gtx)
 		})
 	case imgLoading:
 		return c.btn.Layout(gtx, func(gtx C) D {
 			pointer.CursorPointer.Add(gtx.Ops)
-			paint.FillShape(gtx.Ops, colHover, clip.UniformRRect(image.Rectangle{Max: box}, gtx.Dp(unit.Dp(6))).Op(gtx.Ops))
+			paint.FillShape(gtx.Ops, colHover, clip.UniformRRect(image.Rectangle{Max: box}, gtx.Dp(cardRadius)).Op(gtx.Ops))
 			return D{Size: box}
 		})
 	}
@@ -545,7 +550,7 @@ func (v *richView) picture(gtx C, c *openClick, im rich.Image, max unit.Dp) D {
 	}
 	return c.btn.Layout(gtx, func(gtx C) D {
 		pointer.CursorPointer.Add(gtx.Ops)
-		lbl := material.Caption(v.th, "🖼 "+name)
+		lbl := captionLabel(v.th, "🖼 "+name)
 		lbl.Color = colAccent
 		return lbl.Layout(gtx)
 	})
@@ -616,8 +621,8 @@ func (v *richView) avatar(gtx C, id, url, name string, size unit.Dp) D {
 	gtx.Constraints = layout.Exact(box)
 	return layout.Center.Layout(gtx, func(gtx C) D {
 		lbl := material.Label(v.th, unit.Sp(float32(size)*0.5), initial(name))
-		lbl.Color = rgb(0xffffff)
-		lbl.Font.Weight = font.Bold
+		lbl.Color = textOn(authorColor(name))
+		lbl.Font.Weight = font.SemiBold
 		return lbl.Layout(gtx)
 	})
 }
@@ -644,61 +649,58 @@ func (v *richView) profileCard(gtx C, name string, p *backend.Profile, err error
 			name = p.Name
 		}
 	}
-	return widget.Border{Color: colBorder, CornerRadius: unit.Dp(8), Width: unit.Dp(1)}.Layout(gtx, func(gtx C) D {
-		return rounded(gtx, colHover, unit.Dp(8), func(gtx C) D {
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			return layout.UniformInset(unit.Dp(12)).Layout(gtx, func(gtx C) D {
-				return layout.Flex{Alignment: layout.Start}.Layout(gtx,
-					layout.Rigid(func(gtx C) D {
-						return layout.Inset{Right: unit.Dp(12)}.Layout(gtx, func(gtx C) D {
-							return v.avatar(gtx, id, avatarURL, name, unit.Dp(56))
-						})
-					}),
-					layout.Flexed(1, func(gtx C) D {
-						var rows []layout.FlexChild
-						line := func(s string, size unit.Sp, col color.NRGBA, bold bool) {
-							if s == "" {
-								return
-							}
-							rows = append(rows, layout.Rigid(func(gtx C) D {
-								lbl := material.Label(v.th, size, s)
-								lbl.Color = col
-								if bold {
-									lbl.Font.Weight = font.Bold
-								}
-								return lbl.Layout(gtx)
-							}))
+	return overlayFrame(gtx, func(gtx C) D {
+		return layout.UniformInset(unit.Dp(12)).Layout(gtx, func(gtx C) D {
+			return layout.Flex{Alignment: layout.Start}.Layout(gtx,
+				layout.Rigid(func(gtx C) D {
+					return layout.Inset{Right: unit.Dp(12)}.Layout(gtx, func(gtx C) D {
+						return v.avatar(gtx, id, avatarURL, name, unit.Dp(56))
+					})
+				}),
+				layout.Flexed(1, func(gtx C) D {
+					var rows []layout.FlexChild
+					line := func(s string, size unit.Sp, col color.NRGBA, bold bool) {
+						if s == "" {
+							return
 						}
-						line(name, unit.Sp(16), colFg, true)
-						switch {
-						case err != nil:
-							line("Profile unavailable: "+err.Error(), captionSize, colError, false)
-						case p == nil:
-							line("Loading…", captionSize, colMuted, false)
-						default:
-							if p.RealName != "" && p.RealName != name {
-								line(p.RealName, textSize, colMuted, false)
+						rows = append(rows, layout.Rigid(func(gtx C) D {
+							lbl := material.Label(v.th, size, s)
+							lbl.Color = col
+							if bold {
+								lbl.Font.Weight = font.SemiBold
 							}
-							if p.Handle != "" {
-								line("@"+p.Handle, captionSize, colMuted, false)
-							}
-							line(p.Title, textSize, colFg, false)
-							if p.StatusText != "" || p.StatusEmoji != "" {
-								line(strings.TrimSpace(emoji.Sprint(p.StatusEmoji)+" "+p.StatusText), textSize, colFg, false)
-							}
-							if p.HasTZ {
-								local := time.Now().UTC().Add(time.Duration(p.TZOffset) * time.Second)
-								s := local.Format("15:04") + " local time"
-								if p.TZLabel != "" {
-									s += " (" + p.TZLabel + ")"
-								}
-								line(s, captionSize, colMuted, false)
-							}
+							return lbl.Layout(gtx)
+						}))
+					}
+					line(name, textSize, colFg, true)
+					switch {
+					case err != nil:
+						line("Profile unavailable: "+err.Error(), captionSize, colError, false)
+					case p == nil:
+						line("Loading…", captionSize, colMuted, false)
+					default:
+						if p.RealName != "" && p.RealName != name {
+							line(p.RealName, textSize, colMuted, false)
 						}
-						return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
-					}),
-				)
-			})
+						if p.Handle != "" {
+							line("@"+p.Handle, captionSize, colMuted, false)
+						}
+						line(p.Title, textSize, colFg, false)
+						if p.StatusText != "" || p.StatusEmoji != "" {
+							line(strings.TrimSpace(emoji.Sprint(p.StatusEmoji)+" "+p.StatusText), textSize, colFg, false)
+						}
+						if p.HasTZ {
+							local := time.Now().UTC().Add(time.Duration(p.TZOffset) * time.Second)
+							s := local.Format("15:04") + " local time"
+							if p.TZLabel != "" {
+								s += " (" + p.TZLabel + ")"
+							}
+							line(s, captionSize, colMuted, false)
+						}
+					}
+					return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
+				}),
+			)
 		})
 	})
 }

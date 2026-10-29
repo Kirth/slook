@@ -146,14 +146,26 @@ func scanTSColumn(rows *sql.Rows) ([]string, error) {
 	return out, rows.Err()
 }
 
+// SearchOrder is how SearchMessages sorts the messages that match.
+type SearchOrder int
+
+const (
+	// SearchRelevance is FTS5's bm25 rank (the terms' frequency in the
+	// message against their rarity in the cache, shorter messages
+	// ahead), newest first among equals.
+	SearchRelevance SearchOrder = iota
+	// SearchNewest is newest first.
+	SearchNewest
+)
+
 // SearchMessages returns the workspace's non-deleted messages whose
-// text matches the query, newest first and at most limit of them,
-// thread replies included. It is the workspace-wide twin of
+// text matches the query, in order and at most limit of them, thread
+// replies included. It is the workspace-wide twin of
 // SearchChannelMessages for a search window, which can open a reply's
 // thread, so nothing is filtered by row shape. Matching is as there:
-// word-prefix, case- and accent-insensitive, LIKE when FTS is
-// unavailable.
-func (db *DB) SearchMessages(workspaceID, query string, limit int) ([]Message, error) {
+// word-prefix, case- and accent-insensitive. When FTS is unavailable it
+// is a LIKE scan, which has no rank: newest first whatever order asks.
+func (db *DB) SearchMessages(workspaceID, query string, limit int, order SearchOrder) ([]Message, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -178,10 +190,14 @@ func (db *DB) SearchMessages(workspaceID, query string, limit int) ([]Message, e
 		return nil, nil
 	}
 	cols := strings.ReplaceAll(messageColumns, ", ", ", m.")
+	orderBy := "m.ts DESC"
+	if order == SearchRelevance {
+		orderBy = "bm25(messages_fts), m.ts DESC" // lower bm25 is better
+	}
 	return db.queryMessages(`
 		SELECT m.`+cols+`
 		FROM messages_fts f
 		JOIN messages m ON m.rowid = f.rowid
 		WHERE messages_fts MATCH ? AND m.workspace_id = ? AND m.is_deleted = 0
-		ORDER BY m.ts DESC LIMIT ?`, match, workspaceID, limit)
+		ORDER BY `+orderBy+` LIMIT ?`, match, workspaceID, limit)
 }

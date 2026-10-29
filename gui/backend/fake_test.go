@@ -143,7 +143,7 @@ func TestFakeSearchAndBackfillProgress(t *testing.T) {
 	go f.Run(ctx, func(ev Event) { got <- ev })
 	<-got // connected
 
-	hits, err := f.Search(ctx, "offsite", 10)
+	hits, err := f.Search(ctx, "offsite", 10, Newest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestFakeSearchAndBackfillProgress(t *testing.T) {
 			t.Fatal("hits are not newest first")
 		}
 	}
-	if hits, _ = f.Search(ctx, "", 10); hits != nil {
+	if hits, _ = f.Search(ctx, "", 10, Newest); hits != nil {
 		t.Fatal("blank query returned hits")
 	}
 
@@ -299,5 +299,22 @@ func TestFakeReactionsSeededAndToggled(t *testing.T) {
 		if m.TS == mine.TS && (m.Reactions[0].Count != 2 || m.Reactions[0].Mine) {
 			t.Fatalf("after removing: %+v", m.Reactions)
 		}
+	}
+}
+
+func TestFakeSearchOrders(t *testing.T) {
+	f := NewFake(time.Unix(1_700_000_000, 0))
+	ctx := context.Background()
+	f.mu.Lock()
+	dense := f.appendLocked("C2", "Ada Lovelace", "queue queue queue")
+	newer := f.appendLocked("C2", "Grace Hopper", "the queue is fine")
+	f.mu.Unlock()
+	best, _ := f.Search(ctx, "queue", 50, Relevance)
+	if len(best) == 0 || best[0].Message.TS != dense.TS {
+		t.Fatalf("relevance: first is %+v, want the message saying it three times", best[0].Message)
+	}
+	recent, _ := f.Search(ctx, "queue", 50, Newest)
+	if recent[0].Message.TS != newer.TS {
+		t.Fatalf("newest: first is %s, want %s", recent[0].Message.TS, newer.TS)
 	}
 }

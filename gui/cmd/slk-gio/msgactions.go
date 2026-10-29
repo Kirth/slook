@@ -265,27 +265,24 @@ func (v *msgView) menuLayout(gtx C) {
 	}
 }
 
-// popupFrame is the bordered, rounded panel a popup is drawn in.
+// popupFrame is the overlay panel a menu or dialog is drawn in.
 func popupFrame(gtx C, content layout.Widget) D {
-	return widget.Border{Color: colBorder, CornerRadius: unit.Dp(8), Width: unit.Dp(1)}.Layout(gtx, func(gtx C) D {
-		return rounded(gtx, colHeader, unit.Dp(8), func(gtx C) D {
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			return layout.UniformInset(unit.Dp(4)).Layout(gtx, content)
-		})
+	return overlayFrame(gtx, func(gtx C) D {
+		return layout.UniformInset(unit.Dp(4)).Layout(gtx, content)
 	})
 }
 
 func (v *msgView) menuRow(gtx C, cl *widget.Clickable, it menuItem) D {
 	return cl.Layout(gtx, func(gtx C) D {
 		pointer.CursorPointer.Add(gtx.Ops)
-		bg := colHeader
+		bg := colOverlay
 		if cl.Hovered() {
-			bg = colHover
+			bg = colControl
 		}
 		return rounded(gtx, bg, unit.Dp(5), func(gtx C) D {
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
 			return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(6), Left: unit.Dp(10), Right: unit.Dp(10)}.Layout(gtx, func(gtx C) D {
-				lbl := material.Body2(v.th, it.label)
+				lbl := secondaryLabel(v.th, it.label)
 				if it.danger {
 					lbl.Color = colError
 				}
@@ -312,7 +309,7 @@ func (v *msgView) confirmLayout(gtx C) {
 		return layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx C) D {
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 				layout.Rigid(func(gtx C) D {
-					lbl := material.Body1(v.th, "Delete this message? This can't be undone.")
+					lbl := bodyLabel(v.th, "Delete this message? This can't be undone.")
 					return lbl.Layout(gtx)
 				}),
 				layout.Rigid(func(gtx C) D {
@@ -320,7 +317,7 @@ func (v *msgView) confirmLayout(gtx C) {
 						return D{}
 					}
 					return layout.Inset{Top: unit.Dp(6)}.Layout(gtx, func(gtx C) D {
-						lbl := material.Body2(v.th, preview)
+						lbl := secondaryLabel(v.th, preview)
 						lbl.Color = colMuted
 						lbl.MaxLines = 3
 						return lbl.Layout(gtx)
@@ -354,7 +351,7 @@ func dialogButton(gtx C, th *material.Theme, cl *widget.Clickable, label string,
 		}
 		return rounded(gtx, bg, unit.Dp(6), func(gtx C) D {
 			return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(6), Left: unit.Dp(14), Right: unit.Dp(14)}.Layout(gtx, func(gtx C) D {
-				lbl := material.Body2(th, label)
+				lbl := secondaryLabel(th, label)
 				lbl.Color = fg
 				return lbl.Layout(gtx)
 			})

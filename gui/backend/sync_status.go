@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/export"
 	"github.com/gammons/slk/internal/msgsync"
 )
@@ -333,14 +334,18 @@ func (s *Slack) SyncStatus(context.Context) (SyncStatus, error) {
 }
 
 // Search finds cached messages matching query, newest first.
-func (s *Slack) Search(ctx context.Context, query string, limit int) ([]SearchHit, error) {
+func (s *Slack) Search(ctx context.Context, query string, limit int, order SearchOrder) ([]SearchHit, error) {
 	if s.db == nil {
 		return nil, errors.New("no cache to search")
 	}
 	if strings.TrimSpace(query) == "" {
 		return nil, nil
 	}
-	rows, err := s.db.SearchMessages(s.client.TeamID(), query, limit)
+	cacheOrder := cache.SearchRelevance
+	if order == Newest {
+		cacheOrder = cache.SearchNewest
+	}
+	rows, err := s.db.SearchMessages(s.client.TeamID(), query, limit, cacheOrder)
 	if err != nil {
 		return nil, err
 	}
@@ -349,8 +354,6 @@ func (s *Slack) Search(ctx context.Context, query string, limit int) ([]SearchHi
 	for _, m := range msgs {
 		hits = append(hits, SearchHit{Message: m})
 	}
-	// fromCache sorts oldest first for timelines; a search reads newest
-	// first.
-	slices.Reverse(hits)
+	// fromCache keeps the rows' order, which is the order asked for.
 	return hits, nil
 }

@@ -15,8 +15,10 @@ bin/slk-gio -backfill 1y    # also fill the message cache back a year, slowly (9
 
 The conversation list's header has a search button. It opens the search
 window: type to search every cached message (thread replies too) as you
-type; a result opens its conversation scrolled to that message, loading
-older pages until it is there. While the box is empty the window lists
+type. Results come best match first, with the matched words picked out
+in a snippet around them; "Newest" above the results sorts by date
+instead. A result opens its conversation scrolled to that message,
+loading older pages until it is there. While the box is empty the window lists
 each conversation's coverage (how many messages, since when or
 "complete", gaps, a dot when it follows the live socket), and the panel
 at the bottom shows the backfill's progress, lets you start it with a
@@ -25,6 +27,44 @@ what is being fetched right now. Each conversation shows how far toward
 the horizon its cache reaches (a bar and a percentage); the panel shows
 the same for the whole workspace, and while the backfill runs, how fast
 messages are coming in and roughly how long is left.
+
+Colours come from `[gui.theme]` in slk's `config.toml`. `preset` (or
+`name`) is one of the shipped palettes:
+
+- `hadal`, the default: the trench floor as an office. Blue-black, lit
+  only by content; hairlines; one teal accent.
+- `dark`, slk-gio's original look (also `slack-dark`).
+- `ink`: ink-blue with an amber accent.
+- `light`.
+
+Any slk TUI theme name also works ("nord", "gruvbox dark", …), mapped
+onto the GUI's colours. Single colours can be overridden by key, in
+the block itself or under `[gui.theme.colors]`. `-theme NAME` picks a
+palette for one run.
+
+```toml
+[gui.theme]
+preset = "hadal"
+accent = "#2fb7c9"        # optional overrides, "#rrggbb"
+```
+
+The colour keys are `background`, `surface` (header bars and panels),
+`overlay` (the switcher, hover card and menus), `text`, `text_muted`,
+`on_accent`, `accent`, `mention`, `broadcast`, `border`, `hover`,
+`control`, `control_hover`, `error`, `warning`, `success`, `badge`,
+`code_text`, `code_background`, `ephemeral` and `shadow`. `shadow`
+takes `#rrggbbaa`; its alpha is the shadow's strength.
+
+While no slk-gio window has the keyboard, mentions, direct messages
+and `on_keyword` matches raise a desktop notification. These follow
+`[notifications]` in `config.toml`, as the TUI does, and muted
+conversations stay silent. On Linux with a notification service,
+clicking a notification opens the conversation at the message (a
+thread reply opens its thread). Each conversation shows one
+notification, updated as messages arrive, which goes away once you read
+the conversation here or in Slack. With `notify_command` set, or
+without a service, the basic notification is shown, which cannot open
+anything.
 
 Every message has an actions menu: "⋯" among the actions shown while
 the pointer is over it, or a right-click anywhere on it. Copy text and

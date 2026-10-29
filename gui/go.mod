@@ -6,7 +6,9 @@ replace github.com/gammons/slk => ../
 
 require (
 	gioui.org v0.10.3
+	github.com/esiqveland/notify v0.13.3
 	github.com/gammons/slk v0.0.0-00010101000000-000000000000
+	github.com/godbus/dbus/v5 v5.2.2
 	github.com/slack-go/slack v0.32.0
 	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0
 	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476
@@ -27,8 +29,8 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/gen2brain/beeep v0.11.2 // indirect
 	github.com/go-text/typesetting v0.3.5 // indirect
-	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect

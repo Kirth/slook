@@ -42,6 +42,10 @@ func mustIcon(data []byte) *widget.Icon {
 	return ic
 }
 
+// badgeSize is the text of the count on an action's corner, sized to
+// its dot rather than by role.
+const badgeSize = unit.Sp(9)
+
 // Header bar geometry.
 const (
 	headerHeight = unit.Dp(52)
@@ -190,7 +194,7 @@ func (h *headerBar) titles(gtx C, th *material.Theme, spec headerSpec, fg, sub c
 			if spec.Status != "" {
 				title += "  " + spec.Status
 			}
-			lbl := material.Label(th, unit.Sp(15), title)
+			lbl := bodyLabel(th, title)
 			lbl.Font.Weight = font.SemiBold
 			lbl.Color = fg
 			lbl.MaxLines = 1
@@ -198,7 +202,7 @@ func (h *headerBar) titles(gtx C, th *material.Theme, spec headerSpec, fg, sub c
 		}),
 		layout.Rigid(func(gtx C) D {
 			if spec.Subtitle != "" {
-				lbl := material.Label(th, unit.Sp(12), spec.Subtitle)
+				lbl := secondaryLabel(th, spec.Subtitle)
 				lbl.Color = sub
 				lbl.MaxLines = 1
 				return lbl.Layout(gtx)
@@ -228,7 +232,7 @@ func chips(gtx C, th *material.Theme, cs []headerChip) D {
 				})
 			}),
 			layout.Rigid(func(gtx C) D {
-				lbl := material.Label(th, unit.Sp(12), c.text)
+				lbl := secondaryLabel(th, c.text)
 				lbl.Color = c.col
 				lbl.MaxLines = 1
 				return lbl.Layout(gtx)
@@ -286,9 +290,9 @@ func badge(gtx C, th *material.Theme, button image.Point, text string, col color
 		return
 	}
 	m := op.Record(gtx.Ops)
-	lbl := material.Label(th, unit.Sp(9), text)
-	lbl.Color = rgb(0xffffff)
-	lbl.Font.Weight = font.Bold
+	lbl := material.Label(th, badgeSize, text)
+	lbl.Color = colOnAccent
+	lbl.Font.Weight = font.SemiBold
 	gtx.Constraints.Min = image.Point{}
 	dims := lbl.Layout(gtx)
 	call := m.Stop()
@@ -375,14 +379,8 @@ func tile(gtx C, th *material.Theme, size unit.Dp, bg color.NRGBA, ic *widget.Ic
 			return ic.Layout(gtx, colFg)
 		}
 		lbl := material.Label(th, unit.Sp(float32(size)*0.5), letter)
-		lbl.Font.Weight = font.Bold
+		lbl.Font.Weight = font.SemiBold
 		lbl.Color = colFg
 		return lbl.Layout(gtx)
 	})
-}
-
-// tint is c at a low opacity over the header, for tiles.
-func tint(c color.NRGBA) color.NRGBA {
-	mix := func(a, b uint8) uint8 { return uint8((int(a)*35 + int(b)*65) / 100) }
-	return color.NRGBA{R: mix(c.R, colHeader.R), G: mix(c.G, colHeader.G), B: mix(c.B, colHeader.B), A: 0xff}
 }

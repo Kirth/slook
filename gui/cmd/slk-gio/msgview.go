@@ -12,12 +12,15 @@ import (
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
+	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/gammons/slk/gui/backend"
+	"github.com/gammons/slk/gui/chat"
+	"github.com/gammons/slk/gui/motion"
 	"github.com/gammons/slk/internal/ui/messages"
 )
 
@@ -45,8 +48,8 @@ type msgView struct {
 
 	// highlight is a message lit until a moment (a jump's target).
 	highlight struct {
-		ts    string
-		until time.Time
+		ts           string
+		start, until time.Time
 	}
 
 	// picker chooses a reaction for a message; menu is a message's
@@ -142,6 +145,42 @@ func (v *msgView) handleWidgets(gtx C, started func()) {
 	}
 }
 
+// gutterTime is the avatar column of a line continuing a group: empty,
+// or while the pointer is over the line, its time, right-aligned
+// against the text and on the baseline of its first line.
+func (v *msgView) gutterTime(gtx C, w *msgWidgets, m backend.Message) D {
+	size := gtx.Constraints.Min
+	if !w.hovered {
+		return D{Size: size}
+	}
+	gtx.Constraints.Max.X = size.X
+	return layout.Inset{Top: gutterTimeTop, Right: gutterDp}.Layout(gtx, func(gtx C) D {
+		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		return layout.E.Layout(gtx, func(gtx C) D {
+			lbl := captionLabel(v.th, m.Time.Format("15:04"))
+			lbl.Color = colMuted
+			lbl.MaxLines = 1
+			return lbl.Layout(gtx)
+		})
+	})
+}
+
+// ruledCaption is a caption centered between two thin rules that fill
+// the width: a date separator, the reply count under a thread's parent.
+func ruledCaption(gtx C, th *material.Theme, text string) D {
+	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+		layout.Flexed(1, divider),
+		layout.Rigid(func(gtx C) D {
+			return layout.Inset{Left: unit.Dp(10), Right: unit.Dp(10)}.Layout(gtx, func(gtx C) D {
+				lbl := captionLabel(th, text)
+				lbl.Color = colMuted
+				return lbl.Layout(gtx)
+			})
+		}),
+		layout.Flexed(1, divider),
+	)
+}
+
 // threadOf is the thread m starts or is in: its parent's ts.
 func threadOf(m backend.Message) string {
 	if m.ThreadTS != "" {
@@ -168,6 +207,9 @@ func (v *msgView) hoverRow(gtx C, w *msgWidgets, m backend.Message, row layout.W
 	}
 	v.rowMenu(gtx, w, m)
 	hovered := w.rowHover.Update(gtx.Source)
+	// The row reads it to show a grouped line's time in its gutter; the
+	// row's own actions count, so the time stays while they are used.
+	w.hovered = hovered || w.reply.Hovered() || w.react.Hovered() || w.more.Hovered()
 	rec := op.Record(gtx.Ops)
 	dims := row(gtx)
 	call := rec.Stop()
@@ -202,10 +244,10 @@ func actionChip(gtx C, th *material.Theme, cl *widget.Clickable, label string) D
 		if cl.Hovered() {
 			bg = colHover
 		}
-		return widget.Border{Color: colBorder, CornerRadius: unit.Dp(6), Width: unit.Dp(1)}.Layout(gtx, func(gtx C) D {
-			return rounded(gtx, bg, unit.Dp(6), func(gtx C) D {
+		return widget.Border{Color: colBorder, CornerRadius: cardRadius, Width: unit.Dp(1)}.Layout(gtx, func(gtx C) D {
+			return rounded(gtx, bg, cardRadius, func(gtx C) D {
 				return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2), Left: unit.Dp(8), Right: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
-					lbl := material.Caption(th, label)
+					lbl := captionLabel(th, label)
 					lbl.Color = colAccent
 					return lbl.Layout(gtx)
 				})
@@ -214,14 +256,14 @@ func actionChip(gtx C, th *material.Theme, cl *widget.Clickable, label string) D
 	})
 }
 
-// linkCaption is a caption that acts on a click, such as "3 replies".
+// linkCaption is a small link that acts on a click, such as "3 replies".
 func linkCaption(gtx C, th *material.Theme, cl *widget.Clickable, text string) D {
 	return cl.Layout(gtx, func(gtx C) D {
 		pointer.CursorPointer.Add(gtx.Ops)
-		lbl := material.Caption(th, text)
+		lbl := secondaryLabel(th, text)
 		lbl.Color = colAccent
 		if cl.Hovered() {
-			lbl.Font.Weight = font.Bold
+			lbl.Font.Weight = font.SemiBold
 		}
 		return lbl.Layout(gtx)
 	})
@@ -307,30 +349,42 @@ func (v *msgView) trackPointer(gtx C) clip.Stack {
 	return area
 }
 
-// lit draws w with a fading highlight behind it while ts is the
-// message being lit (a jump's target).
+// lit draws w with a highlight behind it while ts is the message being
+// lit (a jump's target): it comes up quickly, then fades.
 func (v *msgView) lit(gtx C, ts string, w layout.Widget) D {
-	if ts != v.highlight.ts || v.highlight.until.IsZero() || !gtx.Now.Before(v.highlight.until) {
+	h := v.highlight
+	if ts != h.ts || h.until.IsZero() || !gtx.Now.Before(h.until) {
 		return w(gtx)
 	}
-	left := v.highlight.until.Sub(gtx.Now)
-	alpha := uint8(min(255, int(float64(left)/float64(jumpHighlight)*220)+35))
+	// Painted behind the row, a little outside it, so the row keeps
+	// its place as the highlight comes and goes.
+	strength := motion.Pulse(h.start, gtx.Now, highlightIn, h.until.Sub(h.start))
+	gtx.Execute(op.InvalidateCmd{})
+	rec := op.Record(gtx.Ops)
+	dims := w(gtx)
+	call := rec.Stop()
 	col := colControlHover
-	col.A = alpha
-	gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(40 * time.Millisecond)})
-	return rounded(gtx, col, unit.Dp(6), func(gtx C) D {
-		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		return layout.UniformInset(unit.Dp(4)).Layout(gtx, w)
-	})
+	col.A = uint8(255 * strength)
+	pad := gtx.Dp(unit.Dp(4))
+	paint.FillShape(gtx.Ops, col, clip.UniformRRect(image.Rect(-pad, -pad, dims.Size.X+pad, dims.Size.Y+pad), gtx.Dp(cardRadius)).Op(gtx.Ops))
+	call.Add(gtx.Ops)
+	return dims
+}
+
+// highlightIn is how long a jump's highlight takes to come up.
+const highlightIn = 120 * time.Millisecond
+
+// light starts the highlight on the message at ts, for d.
+func (v *msgView) light(ts string, now time.Time, d time.Duration) {
+	v.highlight.ts, v.highlight.start, v.highlight.until = ts, now, now.Add(d)
 }
 
 // message draws one message: a date line when the day changes, then
 // the avatar beside the author line (unless it continues the previous
 // author's run), the body's blocks, and a reply count.
 func (v *msgView) message(gtx C, m backend.Message, prev *backend.Message) D {
-	newDay := prev == nil || !sameDay(prev.Time, m.Time)
-	showAuthor := newDay || prev.AuthorID != m.AuthorID || prev.Author != m.Author || m.Time.Sub(prev.Time) > groupGap ||
-		m.Ephemeral || prev.Ephemeral
+	newDay := chat.NewDay(prev, m)
+	showAuthor := chat.StartsGroup(prev, m)
 
 	w := v.widgets[m.TS]
 	if w == nil {
@@ -346,26 +400,21 @@ func (v *msgView) message(gtx C, m backend.Message, prev *backend.Message) D {
 	var rows []layout.FlexChild
 	if newDay {
 		rows = append(rows, layout.Rigid(func(gtx C) D {
-			return layout.Inset{Top: unit.Dp(12), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx C) D {
-				gtx.Constraints.Min.X = gtx.Constraints.Max.X
-				return layout.Center.Layout(gtx, func(gtx C) D {
-					lbl := material.Caption(v.th, messages.FormatDateSeparator(m.Time.Format("2006-01-02")))
-					lbl.Color = colMuted
-					return lbl.Layout(gtx)
-				})
+			return layout.Inset{Top: dateTop, Bottom: dateBottom}.Layout(gtx, func(gtx C) D {
+				return ruledCaption(gtx, v.th, messages.FormatDateSeparator(m.Time.Format("2006-01-02")))
 			})
 		}))
 	}
-	top := unit.Dp(2)
+	top := lineTop
 	if showAuthor {
-		top = unit.Dp(10)
+		top = groupTop
 	}
 	row := func(gtx C) D {
 		return layout.Flex{}.Layout(gtx,
 			layout.Rigid(func(gtx C) D {
 				gtx.Constraints.Min.X = gtx.Dp(avatarDp + gutterDp)
 				if !showAuthor {
-					return D{Size: gtx.Constraints.Min}
+					return v.gutterTime(gtx, w, m)
 				}
 				return layout.Inset{Right: gutterDp}.Layout(gtx, func(gtx C) D {
 					return w.avatarHover.Layout(gtx, func(gtx C) D {
@@ -382,14 +431,15 @@ func (v *msgView) message(gtx C, m backend.Message, prev *backend.Message) D {
 			if !m.Ephemeral {
 				return v.lit(gtx, m.TS, func(gtx C) D { return v.hoverRow(gtx, w, m, row) })
 			}
-			// Only the user sees this: a tinted box with a label.
-			return rounded(gtx, colEphemeral, unit.Dp(6), func(gtx C) D {
+			// Only the user sees this: a tinted box with a label and an
+			// accent rule on its left.
+			return accentCard(gtx, colEphemeral, func(gtx C) D {
 				gtx.Constraints.Min.X = gtx.Constraints.Max.X
 				return layout.UniformInset(unit.Dp(6)).Layout(gtx, func(gtx C) D {
 					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 						layout.Rigid(func(gtx C) D {
 							return layout.Inset{Left: avatarDp + gutterDp, Bottom: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
-								lbl := material.Caption(v.th, "Only visible to you")
+								lbl := captionLabel(v.th, "Only visible to you")
 								lbl.Color = colMuted
 								return lbl.Layout(gtx)
 							})
@@ -409,30 +459,35 @@ func (v *msgView) message(gtx C, m backend.Message, prev *backend.Message) D {
 func (v *msgView) body(gtx C, w *msgWidgets, m backend.Message, showAuthor bool) D {
 	var rows []layout.FlexChild
 	if showAuthor {
+		// The author line: the name in semibold and the time a caption
+		// beside it on the same baseline, with a little room before the
+		// body so the name does not sit on its first line.
 		rows = append(rows, layout.Rigid(func(gtx C) D {
-			return layout.Flex{Alignment: layout.Baseline}.Layout(gtx,
-				layout.Rigid(func(gtx C) D {
-					return w.nameHover.Layout(gtx, func(gtx C) D {
-						pointer.CursorPointer.Add(gtx.Ops)
-						lbl := material.Body1(v.th, m.Author)
-						lbl.Font.Weight = font.Bold
-						lbl.Color = authorColor(m.Author)
+			return layout.Inset{Bottom: authorGap}.Layout(gtx, func(gtx C) D {
+				return layout.Flex{Alignment: layout.Baseline}.Layout(gtx,
+					layout.Rigid(func(gtx C) D {
+						return w.nameHover.Layout(gtx, func(gtx C) D {
+							pointer.CursorPointer.Add(gtx.Ops)
+							lbl := bodyLabel(v.th, m.Author)
+							lbl.Font.Weight = font.SemiBold
+							lbl.Color = authorColor(m.Author)
+							return lbl.Layout(gtx)
+						})
+					}),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+					layout.Rigid(func(gtx C) D {
+						lbl := captionLabel(v.th, m.Time.Format("15:04"))
+						lbl.Color = colMuted
 						return lbl.Layout(gtx)
-					})
-				}),
-				layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-				layout.Rigid(func(gtx C) D {
-					lbl := material.Caption(v.th, m.Time.Format("15:04"))
-					lbl.Color = colMuted
-					return lbl.Layout(gtx)
-				}),
-			)
+					}),
+				)
+			})
 		}))
 	}
 	rows = append(rows, layout.Rigid(func(gtx C) D { return v.view.blocks(gtx, w, m.Body) }))
 	if m.Edited {
 		rows = append(rows, layout.Rigid(func(gtx C) D {
-			lbl := material.Caption(v.th, "(edited)")
+			lbl := secondaryLabel(v.th, "(edited)")
 			lbl.Color = colMuted
 			return lbl.Layout(gtx)
 		}))

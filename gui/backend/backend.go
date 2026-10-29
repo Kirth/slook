@@ -184,6 +184,17 @@ type SearchHit struct {
 	Message Message
 }
 
+// SearchOrder is how Search sorts its hits.
+type SearchOrder int
+
+const (
+	// Relevance is best match first (how often and how prominently the
+	// terms appear), newest first among equals.
+	Relevance SearchOrder = iota
+	// Newest is newest first.
+	Newest
+)
+
 // Coverage is how much of one conversation the cache holds.
 type Coverage struct {
 	ID   string
@@ -290,6 +301,9 @@ func (SyncChanged) isEvent()       {}
 type Backend interface {
 	// Workspace is the workspace's name, for window titles.
 	Workspace() string
+	// Self is the user's own ID: whose messages are their own, whom a
+	// mention names.
+	Self() string
 	// Conversations lists the conversations the user is in, sorted for
 	// display.
 	Conversations(ctx context.Context) ([]Conversation, error)
@@ -365,7 +379,7 @@ type Backend interface {
 	CustomEmoji(ctx context.Context) (map[string]string, error)
 	// Search finds cached messages matching query, newest first, at
 	// most limit of them; replies included.
-	Search(ctx context.Context, query string, limit int) ([]SearchHit, error)
+	Search(ctx context.Context, query string, limit int, order SearchOrder) ([]SearchHit, error)
 	// SyncStatus reports what the cache holds and what is being fetched.
 	SyncStatus(ctx context.Context) (SyncStatus, error)
 	// StartBackfill fills the cache back to horizon (0 for everything)

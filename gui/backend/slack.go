@@ -149,6 +149,7 @@ func ConnectSlack(ctx context.Context, tok slackclient.Token, db *cache.DB, cach
 }
 
 func (s *Slack) Workspace() string       { return s.team }
+func (s *Slack) Self() string            { return s.client.UserID() }
 func (s *Slack) Images() *imgpkg.Fetcher { return s.fetcher }
 
 // rememberUser records a user's name (display name, then real name,

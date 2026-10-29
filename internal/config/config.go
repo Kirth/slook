@@ -25,6 +25,53 @@ type Config struct {
 	Sections      map[string]SectionDef `toml:"sections"`
 	Theme         Theme                 `toml:"theme"`
 	Workspaces    map[string]Workspace  `toml:"workspaces"`
+	GUI           GUIConfig             `toml:"gui"`
+}
+
+// GUIConfig is [gui]: settings for the Gio frontend (slk-gio).
+type GUIConfig struct {
+	Theme GUITheme `toml:"theme"`
+}
+
+// GUITheme is [gui.theme], kept as written so both its forms read:
+//
+//	[gui.theme]
+//	preset = "hadal"        # or name = …
+//	accent = "#2fb7c9"      # a colour override, by palette key
+//
+//	[gui.theme.colors]      # the same overrides, in a table of their own
+//	accent = "#2fb7c9"
+//
+// The palette is "hadal" (the default), "dark", "ink", "light", or any
+// TUI theme name ("nord", "gruvbox dark", …). See gui/palette for the
+// colour keys. Settings reads it.
+type GUITheme map[string]any
+
+// Settings is the palette name (name, else preset) and the colour
+// overrides: top-level string keys, then [gui.theme.colors], which wins
+// where both set a colour.
+func (t GUITheme) Settings() (name string, colors map[string]string) {
+	colors = map[string]string{}
+	for k, v := range t {
+		s, ok := v.(string)
+		switch {
+		case k == "name" || k == "preset":
+		case ok:
+			colors[k] = s
+		}
+	}
+	if sub, ok := t["colors"].(map[string]any); ok {
+		for k, v := range sub {
+			if s, ok := v.(string); ok {
+				colors[k] = s
+			}
+		}
+	}
+	name, _ = t["name"].(string)
+	if name == "" {
+		name, _ = t["preset"].(string)
+	}
+	return name, colors
 }
 
 type Compose struct {

@@ -297,7 +297,7 @@ func (t *threadWindow) settleJump() {
 	}
 	t.list.ScrollTo(row)
 	t.jumpPx = true
-	t.highlight.ts, t.highlight.until = t.jump, time.Now().Add(jumpHighlight)
+	t.light(t.jump, time.Now(), jumpHighlight)
 	t.jump = ""
 }
 
@@ -401,7 +401,7 @@ func (t *threadWindow) messages(gtx C) D {
 		case rowParent:
 			if !hasParent {
 				return layout.Inset{Top: unit.Dp(12), Left: unit.Dp(14), Right: unit.Dp(14)}.Layout(gtx, func(gtx C) D {
-					lbl := material.Body2(t.th, "The message this thread started from was deleted.")
+					lbl := secondaryLabel(t.th, "The message this thread started from was deleted.")
 					lbl.Color = colMuted
 					return lbl.Layout(gtx)
 				})
@@ -439,16 +439,6 @@ func (t *threadWindow) divider(gtx C, replies []backend.Message) D {
 		label = replyCount(n)
 	}
 	return layout.Inset{Top: unit.Dp(10), Bottom: unit.Dp(2), Left: unit.Dp(14), Right: unit.Dp(14)}.Layout(gtx, func(gtx C) D {
-		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-			layout.Flexed(1, divider),
-			layout.Rigid(func(gtx C) D {
-				return layout.Inset{Left: unit.Dp(8), Right: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
-					lbl := material.Caption(t.th, label)
-					lbl.Color = colMuted
-					return lbl.Layout(gtx)
-				})
-			}),
-			layout.Flexed(1, divider),
-		)
+		return ruledCaption(gtx, t.th, label)
 	})
 }

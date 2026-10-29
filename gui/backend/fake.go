@@ -227,6 +227,7 @@ func (f *Fake) nextLocked(channelID, author, text string) Message {
 }
 
 func (f *Fake) Workspace() string { return "Demo" }
+func (f *Fake) Self() string      { return fakeSelf }
 
 // Images is a fetcher whose "downloads" are pictures made up on the
 // spot, so custom emoji and the fake's images show without a network.
@@ -680,7 +681,7 @@ func (f *Fake) Run(ctx context.Context, emit func(Event)) error {
 }
 
 // Search scans the fake's history for the query's words, newest first.
-func (f *Fake) Search(_ context.Context, query string, limit int) ([]SearchHit, error) {
+func (f *Fake) Search(_ context.Context, query string, limit int, order SearchOrder) ([]SearchHit, error) {
 	terms := strings.Fields(strings.ToLower(query))
 	if len(terms) == 0 {
 		return nil, nil
@@ -691,22 +692,33 @@ func (f *Fake) Search(_ context.Context, query string, limit int) ([]SearchHit, 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var hits []SearchHit
+	score := map[string]int{} // by ts: how often the terms appear, for Relevance
 	for _, id := range f.order {
 		for _, m := range f.logs[id] {
 			text := strings.ToLower(rich.PlainBlocks(m.Body))
-			ok := true
+			n := 0
 			for _, t := range terms {
-				if !strings.Contains(text, t) {
-					ok = false
+				c := strings.Count(text, t)
+				if c == 0 {
+					n = 0
 					break
 				}
+				n += c
 			}
-			if ok {
+			if n > 0 {
 				hits = append(hits, SearchHit{Message: cloneMessages([]Message{m})[0]})
+				score[m.ChannelID+m.TS] = n
 			}
 		}
 	}
-	slices.SortFunc(hits, func(a, b SearchHit) int { return b.Message.Time.Compare(a.Message.Time) })
+	slices.SortFunc(hits, func(a, b SearchHit) int {
+		if order == Relevance {
+			if d := score[b.Message.ChannelID+b.Message.TS] - score[a.Message.ChannelID+a.Message.TS]; d != 0 {
+				return d
+			}
+		}
+		return b.Message.Time.Compare(a.Message.Time)
+	})
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
@@ -727,6 +739,20 @@ func (f *Fake) SyncStatus(context.Context) (SyncStatus, error) {
 		if n := len(f.logs[id]); n > 0 {
 			cov.Oldest = f.logs[id][0].Time
 			cov.Spans = []TimeSpan{{Oldest: cov.Oldest, Latest: f.logs[id][n-1].Time}}
+		}
+		// Two idle conversations show the other states a real cache has:
+		// one only partly back toward the horizon, one with a gap.
+		now := time.Now()
+		day := 24 * time.Hour
+		switch id {
+		case "C12":
+			cov.Complete = false
+			cov.Oldest = now.Add(-30 * day)
+			cov.Spans = []TimeSpan{{Oldest: cov.Oldest, Latest: now}}
+		case "C16":
+			cov.Complete, cov.Holes = false, 1
+			cov.Oldest = now.Add(-120 * day)
+			cov.Spans = []TimeSpan{{Oldest: cov.Oldest, Latest: now.Add(-50 * day)}, {Oldest: now.Add(-20 * day), Latest: now}}
 		}
 		st.Messages += cov.Messages
 		st.Conversations = append(st.Conversations, cov)

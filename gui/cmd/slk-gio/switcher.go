@@ -4,6 +4,7 @@ import (
 	"image"
 	"slices"
 	"strconv"
+	"time"
 
 	"gioui.org/font"
 	"gioui.org/io/key"
@@ -34,11 +35,14 @@ type switcher struct {
 	sel     int
 	rows    [switcherRows + 1]widget.Clickable // the last is "All conversations"
 	results []backend.Conversation
+	// openedAt is when it last opened, for its entrance.
+	openedAt time.Time
 }
 
 func (s *switcher) toggle() {
 	s.open = !s.open
 	if s.open {
+		s.openedAt = time.Now()
 		s.ed.SingleLine, s.ed.Submit = true, true
 		s.ed.SetText("")
 		s.sel, s.focus = 0, true
@@ -157,29 +161,31 @@ func (s *switcher) layout(gtx C, th *material.Theme, view *richView) {
 	x := (gtx.Constraints.Max.X - width) / 2
 	defer op.Offset(image.Pt(x, gtx.Dp(headerHeight)+gtx.Dp(6))).Push(gtx.Ops).Pop()
 	gtx.Constraints = layout.Constraints{Min: image.Pt(width, 0), Max: image.Pt(width, gtx.Constraints.Max.Y)}
-	widget.Border{Color: colBorder, CornerRadius: unit.Dp(10), Width: unit.Dp(1)}.Layout(gtx, func(gtx C) D {
-		return rounded(gtx, colHeader, unit.Dp(10), func(gtx C) D {
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx C) D {
-				children := []layout.FlexChild{
-					layout.Rigid(framedEditor(th, &s.ed, "Jump to a conversation")),
-					layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
-				}
-				for i, c := range s.results {
-					children = append(children, layout.Rigid(func(gtx C) D {
-						return s.row(gtx, th, view, i, func(gtx C) D { return switcherConv(gtx, th, view, c) })
-					}))
-				}
-				n := len(s.results)
+	enter(gtx, s.openedAt, func(gtx C) D { return s.panel(gtx, th, view) })
+}
+
+// panel is the switcher's box: the filter and the conversations.
+func (s *switcher) panel(gtx C, th *material.Theme, view *richView) D {
+	return overlayFrame(gtx, func(gtx C) D {
+		return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx C) D {
+			children := []layout.FlexChild{
+				layout.Rigid(framedEditor(th, &s.ed, "Jump to a conversation")),
+				layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+			}
+			for i, c := range s.results {
 				children = append(children, layout.Rigid(func(gtx C) D {
-					return s.row(gtx, th, view, n, func(gtx C) D {
-						lbl := material.Body2(th, "All conversations…")
-						lbl.Color = colMuted
-						return layout.Inset{Left: unit.Dp(30)}.Layout(gtx, lbl.Layout)
-					})
+					return s.row(gtx, th, view, i, func(gtx C) D { return switcherConv(gtx, th, view, c) })
 				}))
-				return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
-			})
+			}
+			n := len(s.results)
+			children = append(children, layout.Rigid(func(gtx C) D {
+				return s.row(gtx, th, view, n, func(gtx C) D {
+					lbl := secondaryLabel(th, "All conversations…")
+					lbl.Color = colMuted
+					return layout.Inset{Left: unit.Dp(30)}.Layout(gtx, lbl.Layout)
+				})
+			}))
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
 		})
 	})
 }
@@ -189,7 +195,7 @@ func (s *switcher) row(gtx C, th *material.Theme, view *richView, i int, w layou
 	cl := &s.rows[i]
 	return cl.Layout(gtx, func(gtx C) D {
 		pointer.CursorPointer.Add(gtx.Ops)
-		bg := colHeader
+		bg := colOverlay
 		if i == s.sel || cl.Hovered() {
 			bg = colControl
 		}
@@ -209,30 +215,25 @@ func switcherConv(gtx C, th *material.Theme, view *richView, c backend.Conversat
 			if c.Kind == backend.KindDM {
 				return view.avatar(gtx, c.ID, c.AvatarURL, c.Name, unit.Dp(20))
 			}
-			g := material.Body1(th, messages.ChannelGlyph(string(c.Kind)))
+			g := bodyLabel(th, messages.ChannelGlyph(string(c.Kind)))
 			g.Color = colMuted
 			return g.Layout(gtx)
 		}),
 		layout.Flexed(1, func(gtx C) D {
-			lbl := material.Body1(th, c.Name)
+			lbl := bodyLabel(th, c.Name)
 			lbl.MaxLines = 1
-			if sidebar.NeedsReading(c) {
-				lbl.Font.Weight = font.Bold
-			}
-			if c.Muted {
-				lbl.Color = colMuted
-			}
+			lbl.Color = convNameColor(c)
 			return lbl.Layout(gtx)
 		}),
 		layout.Rigid(func(gtx C) D {
 			switch {
 			case c.Mentions > 0:
-				lbl := material.Caption(th, strconv.Itoa(c.Mentions))
+				lbl := captionLabel(th, strconv.Itoa(c.Mentions))
 				lbl.Color = colBadge
-				lbl.Font.Weight = font.Bold
+				lbl.Font.Weight = font.SemiBold
 				return lbl.Layout(gtx)
 			case sidebar.NeedsReading(c):
-				lbl := material.Caption(th, "●")
+				lbl := captionLabel(th, "●")
 				lbl.Color = colAccent
 				return lbl.Layout(gtx)
 			}

@@ -7,6 +7,8 @@
 //	slk-gio -fake      made-up conversations, no Slack account needed
 //	slk-gio -fake -fake-every 0
 //	                   the same, without someone posting every few seconds
+//	slk-gio -theme ink a palette for this run: dark, ink, light, or any slk theme
+//	                   the same, without someone posting every few seconds
 //	slk-gio -backfill 1y
 //	                   also fill the local message cache back a year, slowly
 package main
@@ -25,6 +27,8 @@ import (
 	"gioui.org/app"
 
 	"github.com/gammons/slk/gui/backend"
+	"github.com/gammons/slk/gui/notifications"
+	"github.com/gammons/slk/gui/palette"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/paths"
@@ -39,12 +43,30 @@ func main() {
 	fakeEvery := flag.Duration("fake-every", 4*time.Second, "with -fake, how often someone posts (0 for never)")
 	team := flag.String("team", "", "workspace to open, by team ID or name (default: the first one)")
 	backfill := flag.String("backfill", "", "fill the message cache back this far in the background (1y, 90d, 0 for everything); off when absent")
+	themeName := flag.String("theme", "", "palette: dark, ink, light, or any slk theme name (default: [gui.theme] in config.toml)")
 	flag.Parse()
 	horizon, doBackfill, err := parseBackfill(*backfill)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "slk-gio: -backfill:", err)
 		os.Exit(2)
 	}
+
+	// slk's config: the GUI's colours, and the conversations the
+	// backfill skips. Missing is fine (defaults); unreadable is reported
+	// and treated the same.
+	cfg, err := config.Load(filepath.Join(paths.Config(), "config.toml"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "slk-gio: config:", err)
+	}
+	name, colors := cfg.GUI.Theme.Settings()
+	if *themeName != "" {
+		name = *themeName
+	}
+	p, warns := palette.Resolve(name, colors)
+	for _, w := range warns {
+		fmt.Fprintln(os.Stderr, "slk-gio: theme:", w)
+	}
+	applyPalette(p) // before any theme or window is built
 
 	// Parse the fonts and build the first window's theme while signing
 	// in, so no window waits for them.
@@ -65,15 +87,13 @@ func main() {
 			}
 			os.Exit(0)
 		})
+		// Desktop notifications for mentions and DMs while no window
+		// has the keyboard; set before any window or event exists.
+		if cfg.Notifications.Enabled {
+			h.notes = notifications.New(cfg.Notifications, be.Self(), notifications.NewSink(cfg.Notifications, h.openNote))
+		}
 		if s, ok := be.(*backend.Slack); ok {
 			s.SetPaused(h.anyFocused)
-			// slk's config, for the conversations the backfill skips.
-			// Missing is fine (defaults); unreadable is reported and
-			// treated the same.
-			cfg, err := config.Load(filepath.Join(paths.Config(), "config.toml"))
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "slk-gio: config:", err)
-			}
 			s.SetBackfillIgnore(cfg.Cache.IgnoresBackfill)
 			if doBackfill {
 				s.EnableBackfill(horizon)

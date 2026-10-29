@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"gioui.org/app"
 
 	"github.com/gammons/slk/gui/backend"
+	"github.com/gammons/slk/gui/notifications"
 )
 
 // hub owns the set of open windows and routes backend events to them.
@@ -35,13 +37,18 @@ type hub struct {
 	// unread and mentions summarise the list: conversations needing
 	// reading, and how many of them mention the user.
 	unread, mentions int
-	list             *listWindow
-	search           *searchWindow          // the one search window, or nil
-	chats            map[string]*chatWindow // by channel ID
-	threads          map[threadKey]*threadWindow
-	openingThreads   map[threadKey]bool // thread windows being built
-	windows          int
-	connected        bool
+	// muted is the muted conversations, from the list and then the
+	// socket's mute changes; notes decides and shows notifications (nil
+	// when they are off).
+	muted          map[string]bool
+	notes          *notifications.Center
+	list           *listWindow
+	search         *searchWindow          // the one search window, or nil
+	chats          map[string]*chatWindow // by channel ID
+	threads        map[threadKey]*threadWindow
+	openingThreads map[threadKey]bool // thread windows being built
+	windows        int
+	connected      bool
 }
 
 func newHub(ctx context.Context, be backend.Backend, onLast func(error)) *hub {
@@ -92,6 +99,12 @@ func (h *hub) cachedConversations() []backend.Conversation {
 func (h *hub) setConversations(convs []backend.Conversation) {
 	h.mu.Lock()
 	h.convs = convs
+	h.muted = map[string]bool{}
+	for _, c := range convs {
+		if c.Muted {
+			h.muted[c.ID] = true
+		}
+	}
 	h.mu.Unlock()
 }
 
@@ -131,11 +144,18 @@ type (
 // window's channel ID or a thread window's focusKey.
 func (h *hub) setFocused(key string, on bool) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if on {
 		h.focused[key] = true
 	} else {
 		delete(h.focused, key)
+	}
+	notes := h.notes
+	h.mu.Unlock()
+	if on && notes != nil {
+		// Looking at a conversation (or one of its threads) reads it:
+		// its notification goes. A thread's key is "channel/ts".
+		channelID, _, _ := strings.Cut(key, "/")
+		go notes.Read(channelID)
 	}
 }
 
@@ -162,7 +182,25 @@ func (h *hub) dispatch(ev backend.Event) {
 			unread := !m.FromSelf && !m.Edited && !m.InThreadOnly && !h.focused[m.ChannelID]
 			h.list.box.post(activity{m.ChannelID, m.Time, unread})
 		}
-	case backend.ReadChanged, backend.SectionsChanged, backend.MutesChanged:
+		if h.notes != nil {
+			conv := h.conversationLocked(m.ChannelID)
+			conv.Muted = h.muted[m.ChannelID]
+			// Off the event goroutine: showing one talks to the desktop.
+			go h.notes.Message(m, conv, len(h.focused) > 0)
+		}
+	case backend.ReadChanged:
+		if h.list != nil {
+			to = append(to, &h.list.box)
+		}
+		if h.notes != nil && !ev.Unread {
+			go h.notes.Read(ev.ChannelID) // read here or elsewhere
+		}
+	case backend.MutesChanged:
+		h.muted = ev.Muted
+		if h.list != nil {
+			to = append(to, &h.list.box)
+		}
+	case backend.SectionsChanged:
 		if h.list != nil {
 			to = append(to, &h.list.box)
 		}
@@ -519,4 +557,35 @@ func (h *hub) adoptThread(st threadState) {
 	h.mu.Unlock()
 	go t.run()
 	go t.loadCustomEmoji()
+}
+
+// conversationLocked is the conversation by ID from the list, or for
+// one the list does not hold (not loaded yet), its ID with a kind
+// guessed from it. Callers hold mu.
+func (h *hub) conversationLocked(channelID string) backend.Conversation {
+	for _, c := range h.convs {
+		if c.ID == channelID {
+			return c
+		}
+	}
+	conv := backend.Conversation{ID: channelID, Name: channelID, Kind: backend.KindChannel}
+	if strings.HasPrefix(channelID, "D") {
+		conv.Kind = backend.KindDM
+	}
+	return conv
+}
+
+// openNote opens what a clicked notification is about: its
+// conversation at the message, and for a reply, its thread on top lit
+// on the reply. The windows open on the current workspace.
+func (h *hub) openNote(n notifications.Note) {
+	h.mu.Lock()
+	conv := h.conversationLocked(n.ChannelID)
+	h.mu.Unlock()
+	if n.ThreadTS != "" {
+		h.openChatAt(conv, n.ThreadTS)
+		h.openThread(conv, n.ThreadTS, n.TS)
+		return
+	}
+	h.openChatAt(conv, n.TS)
 }

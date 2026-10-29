@@ -21,6 +21,7 @@ import (
 	"gioui.org/widget/material"
 
 	"github.com/gammons/slk/gui/backend"
+	"github.com/gammons/slk/gui/chat"
 	"github.com/gammons/slk/gui/rich"
 	"github.com/gammons/slk/gui/sidebar"
 	"github.com/gammons/slk/internal/emoji"
@@ -453,9 +454,9 @@ func (l *listWindow) heading(gtx C, g *sidebar.Group) D {
 				})
 			}),
 			layout.Flexed(1, func(gtx C) D {
-				lbl := material.Caption(l.th, title)
+				lbl := captionLabel(l.th, title)
 				lbl.Color = colMuted
-				lbl.Font.Weight = font.Bold
+				lbl.Font.Weight = font.SemiBold
 				lbl.MaxLines = 1
 				return lbl.Layout(gtx)
 			}),
@@ -491,7 +492,7 @@ func (l *listWindow) fold(gtx C, g *sidebar.Group) D {
 		return hoverFill(gtx, btn.Hovered(), func(gtx C) D {
 			return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4), Left: unit.Dp(40), Right: unit.Dp(12)}.Layout(gtx, func(gtx C) D {
 				gtx.Constraints.Min.X = gtx.Constraints.Max.X
-				lbl := material.Caption(l.th, label)
+				lbl := captionLabel(l.th, label)
 				lbl.Color = colMuted
 				return lbl.Layout(gtx)
 			})
@@ -508,8 +509,8 @@ func (l *listWindow) row(gtx C, c backend.Conversation, quiet bool) D {
 		btn = new(widget.Clickable)
 		l.rows[c.ID] = btn
 	}
-	nameCol := colFg
-	if c.Muted || quiet {
+	nameCol := convNameColor(c)
+	if quiet && !c.Muted {
 		nameCol = colMuted
 	}
 	return btn.Layout(gtx, func(gtx C) D {
@@ -527,18 +528,14 @@ func (l *listWindow) row(gtx C, c backend.Conversation, quiet bool) D {
 								}, l.presence[c.PeerID], colBg)
 							})
 						}
-						g := material.Body1(l.th, messages.ChannelGlyph(string(c.Kind)))
+						g := bodyLabel(l.th, messages.ChannelGlyph(string(c.Kind)))
 						g.Color = colMuted
 						return g.Layout(gtx)
 					}),
 					layout.Flexed(1, func(gtx C) D {
-						name := material.Body1(l.th, c.Name)
+						name := bodyLabel(l.th, c.Name)
 						name.MaxLines = 1
 						name.Color = nameCol
-						if sidebar.NeedsReading(c) {
-							name.Font.Weight = font.Bold
-							name.Color = colFg
-						}
 						return name.Layout(gtx)
 					}),
 					layout.Rigid(func(gtx C) D { return l.rowEnd(gtx, c) }),
@@ -552,11 +549,11 @@ func (l *listWindow) row(gtx C, c backend.Conversation, quiet bool) D {
 func (l *listWindow) rowEnd(gtx C, c backend.Conversation) D {
 	if c.Mentions > 0 {
 		return layout.Inset{Left: unit.Dp(6)}.Layout(gtx, func(gtx C) D {
-			return rounded(gtx, colAccent, unit.Dp(8), func(gtx C) D {
+			return rounded(gtx, colBadge, unit.Dp(8), func(gtx C) D {
 				return layout.Inset{Left: unit.Dp(6), Right: unit.Dp(6), Top: unit.Dp(1), Bottom: unit.Dp(1)}.Layout(gtx, func(gtx C) D {
-					lbl := material.Caption(l.th, strconv.Itoa(c.Mentions))
-					lbl.Color = rgb(0xffffff)
-					lbl.Font.Weight = font.Bold
+					lbl := captionLabel(l.th, strconv.Itoa(c.Mentions))
+					lbl.Color = textOn(colBadge)
+					lbl.Font.Weight = font.SemiBold
 					return lbl.Layout(gtx)
 				})
 			})
@@ -566,7 +563,7 @@ func (l *listWindow) rowEnd(gtx C, c backend.Conversation) D {
 		return D{}
 	}
 	return layout.Inset{Left: unit.Dp(6)}.Layout(gtx, func(gtx C) D {
-		lbl := material.Caption(l.th, relTime(c.Latest, gtx.Now))
+		lbl := captionLabel(l.th, relTime(c.Latest, gtx.Now))
 		lbl.Color = colMuted
 		return lbl.Layout(gtx)
 	})
@@ -577,7 +574,7 @@ func (l *listWindow) rowEnd(gtx C, c backend.Conversation) D {
 func relTime(t, now time.Time) string {
 	t, now = t.Local(), now.Local()
 	switch {
-	case sameDay(t, now):
+	case chat.SameDay(t, now):
 		return t.Format("15:04")
 	case now.Sub(t) < 6*24*time.Hour:
 		return t.Format("Mon")
@@ -604,7 +601,7 @@ func hoverFill(gtx C, hovered bool, w layout.Widget) D {
 func notice(gtx C, th *material.Theme, s string, col color.NRGBA) D {
 	return layout.Center.Layout(gtx, func(gtx C) D {
 		return layout.UniformInset(unit.Dp(16)).Layout(gtx, func(gtx C) D {
-			lbl := material.Body1(th, s)
+			lbl := bodyLabel(th, s)
 			lbl.Color = col
 			return lbl.Layout(gtx)
 		})

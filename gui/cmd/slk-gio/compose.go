@@ -252,7 +252,7 @@ func (b *composeBox) layout(gtx C, hint, castLabel string) D {
 				return D{}
 			}
 			return layout.Inset{Left: unit.Dp(14), Right: unit.Dp(14), Top: unit.Dp(4)}.Layout(gtx, func(gtx C) D {
-				lbl := material.Caption(b.th, text)
+				lbl := secondaryLabel(b.th, text)
 				lbl.Color = col
 				return lbl.Layout(gtx)
 			})
@@ -265,7 +265,7 @@ func (b *composeBox) layout(gtx C, hint, castLabel string) D {
 			return layout.Inset{Left: unit.Dp(14), Right: unit.Dp(14), Top: unit.Dp(6)}.Layout(gtx, func(gtx C) D {
 				return layout.Flex{Alignment: layout.Baseline}.Layout(gtx,
 					layout.Rigid(func(gtx C) D {
-						lbl := material.Caption(b.th, "Editing message")
+						lbl := secondaryLabel(b.th, "Editing message")
 						lbl.Color = colAccent
 						return lbl.Layout(gtx)
 					}),
@@ -291,7 +291,7 @@ func (b *composeBox) layout(gtx C, hint, castLabel string) D {
 			return layout.Inset{Left: unit.Dp(12), Right: unit.Dp(12), Bottom: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
 				cb := material.CheckBox(b.th, &b.broadcast, castLabel)
 				cb.Color, cb.IconColor = colMuted, colAccent
-				cb.TextSize = b.th.TextSize * 0.85
+				cb.TextSize = secondarySize
 				return cb.Layout(gtx)
 			})
 		}),
@@ -469,13 +469,13 @@ func (b *composeBox) commandRow(gtx C, cmd backend.Command) D {
 		layout.Rigid(func(gtx C) D {
 			return layout.Flex{Alignment: layout.Baseline}.Layout(gtx,
 				layout.Rigid(func(gtx C) D {
-					lbl := material.Body1(b.th, cmd.Name)
+					lbl := bodyLabel(b.th, cmd.Name)
 					lbl.Font.Weight = 600
 					return lbl.Layout(gtx)
 				}),
 				layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 				layout.Flexed(1, func(gtx C) D {
-					lbl := material.Body2(b.th, cmd.Usage)
+					lbl := secondaryLabel(b.th, cmd.Usage)
 					lbl.Color = colMuted
 					lbl.MaxLines = 1
 					return lbl.Layout(gtx)
@@ -486,7 +486,7 @@ func (b *composeBox) commandRow(gtx C, cmd backend.Command) D {
 			if desc == "" {
 				return D{}
 			}
-			lbl := material.Caption(b.th, desc)
+			lbl := captionLabel(b.th, desc)
 			lbl.Color = colMuted
 			lbl.MaxLines = 1
 			return lbl.Layout(gtx)

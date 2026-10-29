@@ -19,7 +19,7 @@ func TestSearchMessages_WorkspaceWideWithReplies(t *testing.T) {
 	}
 	for _, fts := range []bool{true, false} {
 		db.ftsDisabled = !fts
-		got, err := db.SearchMessages("T1", "deploy", 10)
+		got, err := db.SearchMessages("T1", "deploy", 10, SearchNewest)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -34,12 +34,44 @@ func TestSearchMessages_WorkspaceWideWithReplies(t *testing.T) {
 		if got[1].ThreadTS != "1700000100.000000" || got[0].ChannelID != "C2" {
 			t.Fatalf("fts=%v: rows lack their columns: %+v", fts, got)
 		}
-		if got, _ = db.SearchMessages("T1", "deploy", 2); len(got) != 2 {
+		if got, _ = db.SearchMessages("T1", "deploy", 2, SearchNewest); len(got) != 2 {
 			t.Fatalf("fts=%v: limit ignored: %d rows", fts, len(got))
 		}
-		if got, _ = db.SearchMessages("T1", "   ", 2); len(got) != 0 {
+		if got, _ = db.SearchMessages("T1", "   ", 2, SearchNewest); len(got) != 0 {
 			t.Fatalf("fts=%v: blank query returned %d rows", fts, len(got))
 		}
+	}
+}
+
+func TestSearchMessagesRanksByRelevance(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+	dense := feedMsg("1700000100.000000", "deploy deploy")
+	sparse := feedMsg("1700000200.000000", "a long note about the week: lunch, the offsite, the plan, a deploy somewhere in it, and more")
+	if err := db.UpsertMessages([]Message{dense, sparse, feedMsg("1700000300.000000", "lunch")}); err != nil {
+		t.Fatal(err)
+	}
+	order := func(o SearchOrder) []string {
+		t.Helper()
+		got, err := db.SearchMessages("T1", "deploy", 10, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ts []string
+		for _, m := range got {
+			ts = append(ts, m.TS)
+		}
+		return ts
+	}
+	if got := order(SearchRelevance); len(got) != 2 || got[0] != dense.TS {
+		t.Fatalf("relevance: %v, want the dense, older message first", got)
+	}
+	if got := order(SearchNewest); len(got) != 2 || got[0] != sparse.TS {
+		t.Fatalf("newest: %v, want the newer message first", got)
+	}
+	db.ftsDisabled = true
+	if got := order(SearchRelevance); len(got) != 2 || got[0] != sparse.TS {
+		t.Fatalf("LIKE fallback: %v, want newest first (no rank)", got)
 	}
 }
 

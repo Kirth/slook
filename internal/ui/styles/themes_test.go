@@ -465,3 +465,13 @@ func TestBuiltinThemeCount(t *testing.T) {
 		t.Errorf("builtinThemes count = %d, want %d (update docs in README.md and wiki/Features.md if this changed intentionally)", got, want)
 	}
 }
+
+func TestThemeColorsByName(t *testing.T) {
+	c, ok := ThemeColorsByName("  Nord ")
+	if !ok || c.Background == "" || c.Background != builtinThemes["nord"].Colors.Background {
+		t.Fatalf("Nord: %+v, %v", c, ok)
+	}
+	if _, ok := ThemeColorsByName("no such theme"); ok {
+		t.Fatal("found a theme that does not exist")
+	}
+}

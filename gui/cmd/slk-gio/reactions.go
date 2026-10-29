@@ -59,7 +59,7 @@ func (v *msgView) reactions(gtx C, w *msgWidgets, m backend.Message) D {
 	}
 	items = append(items, func(gtx C) D {
 		return pillFrame(gtx, &w.addPill, false, func(gtx C) D {
-			lbl := material.Body2(v.th, "+")
+			lbl := secondaryLabel(v.th, "+")
 			lbl.Color = colMuted
 			return layout.Inset{Left: unit.Dp(4), Right: unit.Dp(4)}.Layout(gtx, lbl.Layout)
 		})
@@ -75,7 +75,7 @@ func (v *msgView) pill(gtx C, cl *widget.Clickable, r backend.Reaction) D {
 			layout.Rigid(func(gtx C) D { return v.emoji(gtx, r.Name, unit.Dp(16)) }),
 			layout.Rigid(layout.Spacer{Width: unit.Dp(4)}.Layout),
 			layout.Rigid(func(gtx C) D {
-				lbl := material.Caption(v.th, strconv.Itoa(r.Count))
+				lbl := captionLabel(v.th, strconv.Itoa(r.Count))
 				lbl.Color = colMuted
 				if r.Mine {
 					lbl.Color = colAccent
@@ -97,7 +97,7 @@ func (v *msgView) emoji(gtx C, name string, size unit.Dp) D {
 		gtx.Constraints = layout.Exact(image.Pt(gtx.Dp(size), gtx.Dp(size)))
 		return emojiPicture(gtx, img)
 	}
-	lbl := material.Caption(v.th, ":"+name+":")
+	lbl := captionLabel(v.th, ":"+name+":")
 	lbl.Color = colMuted
 	return lbl.Layout(gtx)
 }
@@ -284,16 +284,13 @@ func (v *msgView) pickerLayout(gtx C) {
 	defer op.Offset(image.Pt(x, gtx.Dp(headerHeight)+gtx.Dp(6))).Push(gtx.Ops).Pop()
 	gtx.Constraints = layout.Constraints{Min: image.Pt(width, 0), Max: image.Pt(width, gtx.Constraints.Max.Y)}
 	rec := op.Record(gtx.Ops)
-	dims := widget.Border{Color: colBorder, CornerRadius: unit.Dp(10), Width: unit.Dp(1)}.Layout(gtx, func(gtx C) D {
-		return rounded(gtx, colHeader, unit.Dp(10), func(gtx C) D {
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx C) D {
-				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-					layout.Rigid(framedEditor(v.th, &p.ed, "Add a reaction")),
-					layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
-					layout.Rigid(v.pickerGrid),
-				)
-			})
+	dims := overlayFrame(gtx, func(gtx C) D {
+		return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx C) D {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(framedEditor(v.th, &p.ed, "Add a reaction")),
+				layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+				layout.Rigid(v.pickerGrid),
+			)
 		})
 	})
 	call := rec.Stop()
@@ -309,7 +306,7 @@ func (v *msgView) pickerLayout(gtx C) {
 func (v *msgView) pickerGrid(gtx C) D {
 	p := &v.picker
 	if len(p.choices) == 0 {
-		lbl := material.Body2(v.th, "No emoji match")
+		lbl := secondaryLabel(v.th, "No emoji match")
 		lbl.Color = colMuted
 		return layout.UniformInset(unit.Dp(8)).Layout(gtx, lbl.Layout)
 	}
@@ -324,9 +321,9 @@ func (v *msgView) pickerGrid(gtx C) D {
 					gtx.Constraints = layout.Exact(image.Pt(cell, cell))
 					return p.cells[i].Layout(gtx, func(gtx C) D {
 						pointer.CursorPointer.Add(gtx.Ops)
-						bg := colHeader
+						bg := colOverlay
 						if i == p.sel || p.cells[i].Hovered() {
-							bg = colHover
+							bg = colControl
 						}
 						return rounded(gtx, bg, unit.Dp(6), func(gtx C) D {
 							return layout.Center.Layout(gtx, func(gtx C) D {
@@ -343,7 +340,7 @@ func (v *msgView) pickerGrid(gtx C) D {
 	name := ":" + p.choices[p.sel].Name + ":"
 	rows = append(rows, layout.Rigid(func(gtx C) D {
 		return layout.Inset{Top: unit.Dp(4), Left: unit.Dp(4)}.Layout(gtx, func(gtx C) D {
-			lbl := material.Caption(v.th, name)
+			lbl := captionLabel(v.th, name)
 			lbl.Color = colMuted
 			return lbl.Layout(gtx)
 		})

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"gioui.org/font/gofont"
 	"os"
 	"os/exec"
 	"strings"
@@ -38,6 +39,9 @@ var fontPatterns = []struct {
 }{
 	{fontRoleSans, "sans-serif"},
 	{fontRoleSans, "sans-serif:bold"},
+	// Author names are semibold; a family without the weight (DejaVu
+	// Sans) answers with its bold, already loaded.
+	{fontRoleSans, "sans-serif:semibold"},
 	{fontRoleSans, "sans-serif:italic"},
 	{fontRoleSans, "sans-serif:bold:italic"},
 	{fontRoleMono, "monospace"},
@@ -141,4 +145,32 @@ func faceList(faces []roleFace, fallback string, roles ...fontRole) font.Typefac
 	}
 	names = append(names, fallback)
 	return font.Typeface(strings.Join(names, ", "))
+}
+
+// goMono is the face code falls back to: Gio bundles it.
+const goMono = "Go Mono"
+
+// monoFaces is the typeface code is drawn in, and any faces to add to
+// the shaper for it: the fontconfig monospace faces when there are any
+// (then CJK, scripts and emoji for what they lack), else Go Mono, which
+// Gio bundles, so code is monospaced even where fontconfig offers no
+// monospace font. Go Mono's faces come back to be added to a collection
+// built from fontconfig; a theme with no fontconfig faces already has
+// them.
+func monoFaces(faces []roleFace) (font.Typeface, []font.FontFace) {
+	for _, f := range faces {
+		if f.role == fontRoleMono {
+			return faceList(faces, "monospace", fontRoleMono, fontRoleCJK, fontRoleScripts, fontRoleEmoji), nil
+		}
+	}
+	var extra []font.FontFace
+	if len(faces) > 0 {
+		for _, f := range gofont.Collection() {
+			if string(f.Font.Typeface) == goMono {
+				extra = append(extra, f)
+			}
+		}
+	}
+	fallback := faceList(faces, "monospace", fontRoleCJK, fontRoleScripts, fontRoleEmoji)
+	return font.Typeface(`"` + goMono + `", ` + string(fallback)), extra
 }

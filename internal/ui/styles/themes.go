@@ -510,6 +510,21 @@ func resolveTheme(name string) (string, ThemeColors) {
 	return t.Name, t.Colors
 }
 
+// ThemeColorsByName is a theme's colors by name (case-insensitive),
+// custom themes first, and whether there is one. Unlike resolveTheme it
+// does not fall back to dark: the Gio frontend maps a named theme onto
+// its own palette and reports an unknown name.
+func ThemeColorsByName(name string) (ThemeColors, bool) {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if t, ok := customThemes[key]; ok {
+		return t.Colors, true
+	}
+	if t, ok := builtinThemes[key]; ok {
+		return t.Colors, true
+	}
+	return ThemeColors{}, false
+}
+
 // customThemeFile is the TOML structure for a custom theme file.
 type customThemeFile struct {
 	Name   string      `toml:"name"`

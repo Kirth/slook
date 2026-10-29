@@ -1043,3 +1043,37 @@ backfill_ignore = ["leafcloud-alerts-production", "#leafcloud-alerts-staging", "
 		t.Error("the default ignores something")
 	}
 }
+
+func TestGUIThemeParses(t *testing.T) {
+	cfg := loadConfigString(t, `
+[gui.theme]
+name = "ink"
+
+[gui.theme.colors]
+accent = "#7aa2f7"
+shadow = "#00000040"
+`)
+	name, colors := cfg.GUI.Theme.Settings()
+	if name != "ink" || colors["accent"] != "#7aa2f7" || colors["shadow"] != "#00000040" || len(colors) != 2 {
+		t.Fatalf("name %q, colors %v", name, colors)
+	}
+}
+
+func TestGUIThemeBriefForm(t *testing.T) {
+	cfg := loadConfigString(t, `
+[gui.theme]
+preset = "hadal"
+accent = "#2fb7c9"
+background = "#0b1016"
+
+[gui.theme.colors]
+background = "#000000"
+`)
+	name, colors := cfg.GUI.Theme.Settings()
+	if name != "hadal" || colors["accent"] != "#2fb7c9" || colors["background"] != "#000000" || len(colors) != 2 {
+		t.Fatalf("name %q, colors %v (the colors table wins)", name, colors)
+	}
+	if name, colors := (GUITheme(nil)).Settings(); name != "" || len(colors) != 0 {
+		t.Fatalf("empty: %q %v", name, colors)
+	}
+}
