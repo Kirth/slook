@@ -229,11 +229,15 @@ func (c *Cache) fetch(userID, url string, target image.Point) (imgpkg.FetchResul
 	})
 }
 
-// fetchKey is the disk-cache key for one user's avatar at one URL. The
+// fetchKey is FetchKey; the short name predates the export.
+func fetchKey(userID, url string) string { return FetchKey(userID, url) }
+
+// FetchKey is the disk-cache key for one user's avatar at one URL. The
 // URL hash means a changed avatar (a new URL) is fetched fresh, and the
 // older `avatar-<userID>` entries, which held full-size originals, are
-// never read again; the image cache's LRU evicts them.
-func fetchKey(userID, url string) string {
+// never read again; the image cache's LRU evicts them. slk-gio uses the
+// same key, so the two frontends share cached avatars.
+func FetchKey(userID, url string) string {
 	sum := sha256.Sum256([]byte(url))
 	return "avatar-" + userID + "-" + hex.EncodeToString(sum[:])[:12]
 }

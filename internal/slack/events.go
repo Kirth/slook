@@ -216,6 +216,7 @@ type wsMessageEvent struct {
 	TS              string             `json:"ts"`
 	ThreadTS        string             `json:"thread_ts"`
 	DeletedTS       string             `json:"deleted_ts"`
+	EventTS         string             `json:"event_ts"`
 	Files           []slack.File       `json:"files"`
 	Blocks          slack.Blocks       `json:"blocks"`
 	Attachments     []slack.Attachment `json:"attachments"`
@@ -267,6 +268,25 @@ func legacyActionIDs(data []byte) [][]string {
 
 // dispatchEphemeral routes a message only the current user can see.
 // data is the raw frame, decoded again for the action ids.
+// dispatchMessageEvent delivers a non-ephemeral message frame whole to
+// a handler that implements MessageEventHandler. It reports whether it
+// did; false (the handler is a plain EventHandler, or the frame would
+// not decode whole) leaves the flattened delivery to the caller.
+func dispatchMessageEvent(data []byte, msg wsMessageEvent, handler EventHandler) bool {
+	mh, ok := handler.(MessageEventHandler)
+	if !ok {
+		return false
+	}
+	ev, ok := decodeMessageEvent(data, msg)
+	if !ok {
+		debuglog.WS("message: channel=%s ts=%s subtype=%q did not decode whole; flattened delivery",
+			msg.Channel, msg.TS, msg.SubType)
+		return false
+	}
+	mh.OnMessageEvent(ev)
+	return true
+}
+
 func dispatchEphemeral(data []byte, msg wsMessageEvent, handler EventHandler) {
 	debuglog.WS("ephemeral: channel=%s user=%s ts=%s subtype=%q thread_ts=%s attachments=%d",
 		msg.Channel, msg.User, msg.TS, msg.SubType, msg.ThreadTS, len(msg.Attachments))
@@ -550,6 +570,9 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			// in italics.
 			debuglog.WS("message: channel=%s user=%s ts=%s subtype=%q thread_ts=%s files=%d",
 				msg.Channel, msg.User, msg.TS, msg.SubType, msg.ThreadTS, len(msg.Files))
+			if dispatchMessageEvent(data, msg, handler) {
+				break
+			}
 			handler.OnMessage(msg.Channel, msg.User, msg.TS, msg.Text, msg.ThreadTS, msg.SubType, false, msg.Files, msg.Blocks, msg.Attachments, msg.BotID, msg.Username)
 		case "message_changed":
 			if msg.Message == nil {
@@ -565,9 +588,15 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			}
 			debuglog.WS("message_changed: channel=%s user=%s ts=%s thread_ts=%s edited=true",
 				msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.ThreadTS)
+			if dispatchMessageEvent(data, msg, handler) {
+				break
+			}
 			handler.OnMessage(msg.Channel, msg.Message.User, msg.Message.TS, msg.Message.Text, msg.Message.ThreadTS, "", true, msg.Message.Files, msg.Message.Blocks, msg.Message.Attachments, msg.Message.BotID, msg.Message.Username)
 		case "message_deleted":
 			debuglog.WS("message_deleted: channel=%s deleted_ts=%s", msg.Channel, msg.DeletedTS)
+			if dispatchMessageEvent(data, msg, handler) {
+				break
+			}
 			handler.OnMessageDeleted(msg.Channel, msg.DeletedTS)
 		}
 

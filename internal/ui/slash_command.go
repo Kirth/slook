@@ -6,51 +6,18 @@
 package ui
 
 import (
-	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/gammons/slk/internal/ids"
+	"github.com/gammons/slk/internal/slashcmd"
 	"github.com/gammons/slk/internal/ui/compose"
 )
 
-// parseSlashCommand splits composer text into a slash command's name and
-// arguments. ok is false for anything that is not a command, which then
-// sends as an ordinary message: text not starting with "/" (a leading
-// space is the escape hatch), "/" alone, or a first token with anything
-// but [A-Za-z0-9_-] after the slash ("/tmp/foo", "/giphy:"). Any Unicode
-// space separates the name from its arguments, as in strings.Fields, so a
-// pasted non-breaking space still runs the command. name is
-// lowercased; args keeps inner whitespace and newlines and is "" when
-// only whitespace follows the name.
-func parseSlashCommand(text string) (name, args string, ok bool) {
-	if !strings.HasPrefix(text, "/") {
-		return "", "", false
-	}
-	end := 1
-	for end < len(text) && isCommandNameByte(text[end]) {
-		end++
-	}
-	if end == 1 {
-		return "", "", false
-	}
-	if r, _ := utf8.DecodeRuneInString(text[end:]); end < len(text) && !unicode.IsSpace(r) {
-		return "", "", false
-	}
-	name = strings.ToLower(text[:end])
-	args = strings.TrimLeftFunc(text[end:], unicode.IsSpace)
-	if strings.TrimSpace(args) == "" {
-		args = ""
-	}
-	return name, args, true
-}
-
-func isCommandNameByte(b byte) bool {
-	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_' || b == '-'
-}
+// parseSlashCommand is slashcmd.Parse; the name stays for the callers
+// and tests in this package.
+func parseSlashCommand(text string) (name, args string, ok bool) { return slashcmd.Parse(text) }
 
 // slashCommands are the slash built-ins slk runs itself, because Slack's
 // web client handles them locally rather than through chat.command

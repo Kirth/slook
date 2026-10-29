@@ -3546,3 +3546,37 @@ func TestMarkChannel_NonJSONBody_ReturnsError(t *testing.T) {
 		t.Fatal("MarkChannel: want error for non-JSON 200 body, got nil")
 	}
 }
+
+// TestGetUnreadCounts_ParsesLatest pins the newest-message ts client.counts
+// sends for every conversation kind (captured in
+// testdata/phase2-api-contracts.json as "latest").
+func TestGetUnreadCounts_ParsesLatest(t *testing.T) {
+	const body = `{
+	  "ok": true,
+	  "channels": [{"id":"C1","has_unreads":false,"mention_count":0,"last_read":"1.0","latest":"1700000100.000200"}],
+	  "mpims": [{"id":"G1","has_unreads":false,"mention_count":0,"last_read":"2.0","latest":"1700000200.000300"}],
+	  "ims": [{"id":"D1","has_unreads":false,"mention_count":0,"last_read":"3.0"}],
+	  "threads": {"has_unreads":false,"unread_count":0,"mention_count":0}
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	c := newTestClient(srv)
+
+	unreads, _, err := c.GetUnreadCountsContext(context.Background())
+	if err != nil {
+		t.Fatalf("GetUnreadCountsContext: %v", err)
+	}
+	got := map[string]string{}
+	for _, u := range unreads {
+		got[u.ChannelID] = u.Latest
+	}
+	want := map[string]string{"C1": "1700000100.000200", "G1": "1700000200.000300", "D1": ""}
+	for id, w := range want {
+		if got[id] != w {
+			t.Errorf("%s Latest = %q, want %q", id, got[id], w)
+		}
+	}
+}

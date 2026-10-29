@@ -1,0 +1,451 @@
+{
+ "method": "client.appCommands",
+ "form": [
+  [
+   "token",
+   "xoxc-REDACTED"
+  ],
+  [
+   "_x_reason",
+   "dispatch-client-extras"
+  ],
+  [
+   "_x_mode",
+   "online"
+  ],
+  [
+   "_x_sonic",
+   "true"
+  ],
+  [
+   "_x_app_name",
+   "client"
+  ]
+ ],
+ "response": {
+  "ok": true,
+  "commands": [
+   {
+    "canonical_name": "/shrug",
+    "desc": "Appends ¯\\_(ツ)_/¯ to your message",
+    "usage": "your text",
+    "name_normalized": "/shrug",
+    "name": "/shrug",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/me",
+    "usage": "your message",
+    "desc": "Displays action text",
+    "name_normalized": "/me",
+    "name": "/me",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/topic",
+    "usage": "new topic",
+    "desc": "Set the channel topic",
+    "name_normalized": "/topic",
+    "name": "/topic",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/away",
+    "usage": "",
+    "desc": "Toggle your \"away\" status",
+    "name_normalized": "/away",
+    "name": "/away",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/msg",
+    "usage": "@user [your message]",
+    "desc": "Send a DM message to another user",
+    "name_normalized": "/msg",
+    "name": "/msg",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/open",
+    "usage": "[channel]",
+    "desc": "Open a channel",
+    "name_normalized": "/open",
+    "name": "/open",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/leave",
+    "usage": "",
+    "desc": "Leave a channel",
+    "name_normalized": "/leave",
+    "name": "/leave",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/who",
+    "usage": "",
+    "desc": "List users in the current channel",
+    "name_normalized": "/who",
+    "name": "/who",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/archive",
+    "usage": "",
+    "desc": "Archive the current channel",
+    "name_normalized": "/archive",
+    "name": "/archive",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/feedback",
+    "usage": "your feedback",
+    "desc": "Send feedback to the Slack team",
+    "name_normalized": "/feedback",
+    "name": "/feedback",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/invite",
+    "usage": "@user [channel]",
+    "desc": "Invite another member to a channel",
+    "name_normalized": "/invite",
+    "name": "/invite",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/mute",
+    "usage": "[channel]",
+    "desc": "Mutes [channel] or the current channel. Unfollows the current thread",
+    "name_normalized": "/mute",
+    "name": "/mute",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/remind",
+    "usage": "[#channel] [what] [when]",
+    "desc": "Set a reminder",
+    "name_normalized": "/remind",
+    "name": "/remind",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/feed",
+    "usage": "help [or subscribe, list, remove…]",
+    "desc": "Manage RSS subscriptions",
+    "name_normalized": "/feed",
+    "name": "/feed",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/status",
+    "usage": "[clear] or [:your_new_status_emoji:] [your new status message]",
+    "desc": "Set or clear your custom status",
+    "name_normalized": "/status",
+    "name": "/status",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "alias_of": "/msg",
+    "canonical_name": "/dm",
+    "usage": "@user [your message]",
+    "name_normalized": "/dm",
+    "alias_of_normalized": "/msg",
+    "name": "/dm",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "alias_of": "/open",
+    "canonical_name": "/join",
+    "name_normalized": "/join",
+    "alias_of_normalized": "/open",
+    "name": "/join",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "alias_of": "/leave",
+    "canonical_name": "/close",
+    "name_normalized": "/close",
+    "alias_of_normalized": "/leave",
+    "name": "/close",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "alias_of": "/leave",
+    "canonical_name": "/part",
+    "name_normalized": "/part",
+    "alias_of_normalized": "/leave",
+    "name": "/part",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/remove",
+    "usage": "(or kick) @user",
+    "desc": "Remove a person from the current channel",
+    "name_normalized": "/remove",
+    "name": "/remove",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "alias_of": "/remove",
+    "canonical_name": "/kick",
+    "name_normalized": "/kick",
+    "alias_of_normalized": "/remove",
+    "name": "/kick",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/dnd",
+    "usage": "[some description of time]",
+    "desc": "Starts or ends a Do Not Disturb session",
+    "name_normalized": "/dnd",
+    "name": "/dnd",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/apps",
+    "usage": "[search term]",
+    "desc": "Search for Slack Apps in the App Directory",
+    "name_normalized": "/apps",
+    "name": "/apps",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "canonical_name": "/active",
+    "usage": "",
+    "desc": "Mark yourself as active",
+    "name_normalized": "/active",
+    "name": "/active",
+    "type": "core",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "usage": "",
+    "desc": "Send a message to Coach",
+    "name": "/coach",
+    "type": "app",
+    "app": "A0EXAMPLE01",
+    "app_name": "Coach",
+    "icons": {
+     "image_32": "https://avatars.slack-edge.com/2026-06-29/11455956898871_eb19671dcc5f17e0aa1d_32.png",
+     "image_48": "https://avatars.slack-edge.com/2026-06-29/11455956898871_eb19671dcc5f17e0aa1d_48.png",
+     "image_64": "https://avatars.slack-edge.com/2026-06-29/11455956898871_eb19671dcc5f17e0aa1d_64.png",
+     "image_72": "https://avatars.slack-edge.com/2026-06-29/11455956898871_eb19671dcc5f17e0aa1d_72.png"
+    },
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "usage": "issue title (optional) ",
+    "desc": "Create new issue on Linear",
+    "name": "/linear",
+    "type": "app",
+    "app": "AEMQ3Q4F4",
+    "app_name": "Linear",
+    "icons": {
+     "image_32": "https://avatars.slack-edge.com/2024-04-02/6911035809185_034fc1c29382232dd925_32.png",
+     "image_48": "https://avatars.slack-edge.com/2024-04-02/6911035809185_034fc1c29382232dd925_48.png",
+     "image_64": "https://avatars.slack-edge.com/2024-04-02/6911035809185_034fc1c29382232dd925_64.png",
+     "image_72": "https://avatars.slack-edge.com/2024-04-02/6911035809185_034fc1c29382232dd925_72.png"
+    },
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "usage": "",
+    "desc": "Send a message to Brand",
+    "name": "/brand",
+    "type": "app",
+    "app": "A0EXAMPLE02",
+    "app_name": "Brand",
+    "icons": {
+     "image_32": "https://avatars.slack-edge.com/2026-04-22/10999444688144_d1985336591b4d239e31_32.png",
+     "image_48": "https://avatars.slack-edge.com/2026-04-22/10999444688144_d1985336591b4d239e31_48.png",
+     "image_64": "https://avatars.slack-edge.com/2026-04-22/10999444688144_d1985336591b4d239e31_64.png",
+     "image_72": "https://avatars.slack-edge.com/2026-04-22/10999444688144_d1985336591b4d239e31_72.png"
+    },
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "usage": "",
+    "desc": "Send a message to OpenClaw",
+    "name": "/openclaw",
+    "type": "app",
+    "app": "A0EXAMPLE03",
+    "app_name": "Nex",
+    "icons": {
+     "image_32": "https://avatars.slack-edge.com/2026-02-01/10417776819474_e08552164b1a36e8f5bf_32.png",
+     "image_48": "https://avatars.slack-edge.com/2026-02-01/10417776819474_e08552164b1a36e8f5bf_48.png",
+     "image_64": "https://avatars.slack-edge.com/2026-02-01/10417776819474_e08552164b1a36e8f5bf_64.png",
+     "image_72": "https://avatars.slack-edge.com/2026-02-01/10417776819474_e08552164b1a36e8f5bf_72.png"
+    },
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "usage": "",
+    "desc": "Send a message to Stonk",
+    "name": "/stonk",
+    "type": "app",
+    "app": "A0EXAMPLE04",
+    "app_name": "Stonk",
+    "icons": {
+     "image_32": "https://avatars.slack-edge.com/2026-04-08/10862490329283_c8cdc71f263922b1524a_32.png",
+     "image_48": "https://avatars.slack-edge.com/2026-04-08/10862490329283_c8cdc71f263922b1524a_48.png",
+     "image_64": "https://avatars.slack-edge.com/2026-04-08/10862490329283_c8cdc71f263922b1524a_64.png",
+     "image_72": "https://avatars.slack-edge.com/2026-04-08/10862490329283_c8cdc71f263922b1524a_72.png"
+    },
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "usage": "",
+    "desc": "Send a message to Dottie",
+    "name": "/dottie",
+    "type": "app",
+    "app": "A0EXAMPLE05",
+    "app_name": "Dottie",
+    "icons": {
+     "image_32": "https://avatars.slack-edge.com/2026-02-04/10425565013079_4bfabdb61580c0bdc230_32.jpg",
+     "image_48": "https://avatars.slack-edge.com/2026-02-04/10425565013079_4bfabdb61580c0bdc230_48.jpg",
+     "image_64": "https://avatars.slack-edge.com/2026-02-04/10425565013079_4bfabdb61580c0bdc230_64.jpg",
+     "image_72": "https://avatars.slack-edge.com/2026-02-04/10425565013079_4bfabdb61580c0bdc230_72.jpg"
+    },
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "usage": "What happened in the incident so far?",
+    "desc": "Ask anything about the Incident, use free text",
+    "name": "/nr",
+    "type": "app",
+    "app": "AP92KQJS3",
+    "app_name": "New Relic",
+    "icons": {
+     "image_32": "https://avatars.slack-edge.com/2022-06-02/3611814361970_f6a28959c2e7258660ea_32.png",
+     "image_48": "https://avatars.slack-edge.com/2022-06-02/3611814361970_f6a28959c2e7258660ea_48.png",
+     "image_64": "https://avatars.slack-edge.com/2022-06-02/3611814361970_f6a28959c2e7258660ea_64.png",
+     "image_72": "https://avatars.slack-edge.com/2022-06-02/3611814361970_f6a28959c2e7258660ea_72.png"
+    },
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   },
+   {
+    "desc": "Post a random gif to channel",
+    "usage": "[text]",
+    "name": "/giphy",
+    "type": "service",
+    "service_name": "Giphy",
+    "is_workspace_agnostic": true,
+    "teams": [
+     "T0EXAMPLE01"
+    ]
+   }
+  ],
+  "cache_ts": "1786000104.056000",
+  "app_actions": "<omitted: global shortcuts, out of scope>"
+ }
+}

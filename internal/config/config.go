@@ -150,6 +150,31 @@ type CacheConfig struct {
 	MaxDBSizeMB          int `toml:"max_db_size_mb"`
 	// MaxImageCacheMB caps the on-disk/in-memory image cache size in MB.
 	MaxImageCacheMB int64 `toml:"max_image_cache_mb"`
+	// BackfillIgnore names conversations the search backfill skips:
+	// alert channels and the like, whose history is not worth
+	// indexing. Names without "#", globs as in [sections.*]
+	// ("leafcloud-alerts-*"). Messages that arrive live are still
+	// cached, and opening the conversation still fetches its page.
+	BackfillIgnore []string `toml:"backfill_ignore"`
+}
+
+// IgnoresBackfill reports whether the backfill skips the conversation
+// called name. A leading "#" on either side is ignored; a pattern that
+// is not a valid glob matches literally.
+func (c CacheConfig) IgnoresBackfill(name string) bool {
+	name = strings.TrimPrefix(name, "#")
+	for _, p := range c.BackfillIgnore {
+		p = strings.TrimPrefix(strings.TrimSpace(p), "#")
+		if p == "" {
+			continue
+		}
+		if ok, err := filepath.Match(p, name); err == nil && ok {
+			return true
+		} else if err != nil && p == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Sidebar holds preferences governing what appears in the channel

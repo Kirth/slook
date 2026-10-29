@@ -1020,3 +1020,26 @@ team_id = "T04T4TH8W"
 		t.Errorf("VersionTS = %q; want empty when unset", got)
 	}
 }
+
+func TestCacheBackfillIgnore(t *testing.T) {
+	cfg := loadConfigString(t, `
+[cache]
+backfill_ignore = ["leafcloud-alerts-production", "#leafcloud-alerts-staging", "noise-*", "bad[glob"]
+`)
+	for name, want := range map[string]bool{
+		"leafcloud-alerts-production":  true,
+		"#leafcloud-alerts-production": true,
+		"leafcloud-alerts-staging":     true,
+		"noise-2026":                   true,
+		"bad[glob":                     true,
+		"general":                      false,
+		"leafcloud-alerts":             false,
+	} {
+		if got := cfg.Cache.IgnoresBackfill(name); got != want {
+			t.Errorf("IgnoresBackfill(%q) = %v, want %v", name, got, want)
+		}
+	}
+	if Default().Cache.IgnoresBackfill("anything") {
+		t.Error("the default ignores something")
+	}
+}

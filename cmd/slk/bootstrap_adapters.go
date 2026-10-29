@@ -26,6 +26,7 @@ import (
 	"github.com/gammons/slk/internal/bootstrap"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/debuglog"
+	"github.com/gammons/slk/internal/msgsync"
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/boot"
 	"github.com/gammons/slk/internal/slack/edge"
@@ -231,7 +232,7 @@ type storeAdapter struct{ *cache.DB }
 // client sending {} on 11 of 14 requests and a single entry on the
 // other 3, so 28 is already an over-estimate of observed behaviour —
 // it is the ceiling the protocol justifies, not a target.
-const messageVersionWindow = 28
+const messageVersionWindow = msgsync.VersionWindow
 
 // MessageVersions narrows cache.DB.MessageVersions' three-argument form
 // to bootstrap.Store's one-argument form by supplying the window.
@@ -243,47 +244,15 @@ func (a storeAdapter) MessageVersions(channelID string) (map[string]string, erro
 }
 
 // messageWindowSource is the slice of *cache.DB boundedMessageVersions
-// uses. It exists so the bound can be tested: with *cache.DB inlined
-// there is no way to observe which oldestTS/latestTS were passed, and
-// "the adapter does not send an unbounded window" is exactly the
-// property that must not regress.
-type messageWindowSource interface {
-	GetMessages(channelID string, limit int, beforeTS string) ([]cache.Message, error)
-	MessageVersions(channelID, oldestTS, latestTS string) (map[string]string, error)
-}
+// uses; it is msgsync.VersionStore, which is where the logic lives now
+// (both frontends vouch for cached scrollback the same way).
+type messageWindowSource = msgsync.VersionStore
 
 // boundedMessageVersions returns {ts: version} for at most
-// messageVersionWindow of the channel's newest cached messages.
-//
-// The window is derived from the rows themselves rather than from a
-// timestamp arithmetic guess: GetMessages already returns the newest N
-// (ascending), so its first and last ts ARE the bounds, exactly, with
-// no assumption about how densely a channel is posted in. A quiet
-// channel and a firehose both get 28 entries rather than "everything in
-// the last hour" being 1 in one and 4000 in the other.
-//
-// Note the window is a ts RANGE, so a thread reply inside it that
-// GetMessages itself filters out of the main feed is still included.
-// That is left alone deliberately: the entry is within the window slk
-// genuinely holds, the request sets ignore_replies=true so the server
-// simply says nothing about it, and excluding it would mean a second
-// query for no observable difference.
+// messageVersionWindow of the channel's newest cached messages. See
+// msgsync.Versions.
 func boundedMessageVersions(src messageWindowSource, channelID string) (map[string]string, error) {
-	recent, err := src.GetMessages(channelID, messageVersionWindow, "")
-	if err != nil {
-		return nil, fmt.Errorf("reading recent messages for %s: %w", channelID, err)
-	}
-	if len(recent) == 0 {
-		// No request-shaping decision to make, and nothing to vouch
-		// for. nil becomes "{}" on the wire, which is what the
-		// official client sends on 11 of its 14 captured requests.
-		return nil, nil
-	}
-	// GetMessages returns the newest `limit` rows ordered ascending, so
-	// the first is the oldest of the window and the last is the newest.
-	// Reading these two off the wrong ends inverts the range and
-	// returns nothing at all.
-	return src.MessageVersions(channelID, recent[0].TS, recent[len(recent)-1].TS)
+	return msgsync.Versions(src, channelID)
 }
 
 // bootMutedChannels adapts a bootstrap.Result to

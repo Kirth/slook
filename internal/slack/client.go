@@ -198,6 +198,11 @@ func newCookieHTTPClient(dCookie string, env *slackhttp.Envelope) *http.Client {
 			Counter: slackhttp.DefaultCounter,
 		},
 		Jar: newCookieJar(dCookie),
+		// No Slack API call should take a minute. Without a bound a
+		// request that hangs (a half-dead connection after a network
+		// change) hangs its caller forever: a window stuck on
+		// "Loading…", or an event loop resolving a name.
+		Timeout: 60 * time.Second,
 	}
 }
 
@@ -586,7 +591,7 @@ func (c *Client) GetChannels(ctx context.Context) ([]slack.Channel, error) {
 
 // GetConversationInfo fetches one conversation (conversations.info).
 func (c *Client) GetConversationInfo(ctx context.Context, channelID string) (*slack.Channel, error) {
-	ch, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: channelID})
+	ch, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: channelID, IncludeNumMembers: true})
 	if err != nil {
 		return nil, fmt.Errorf("getting conversation %s: %w", channelID, err)
 	}
@@ -1084,6 +1089,10 @@ type UnreadInfo struct {
 	MentionCount int
 	HasUnread    bool
 	LastRead     string // Slack message timestamp
+	// Latest is the ts of the conversation's newest message, from the
+	// same response: when it last had activity, without fetching
+	// history. Empty when Slack leaves it out.
+	Latest string
 }
 
 // ThreadsAggregate captures Slack's server-side notion of whether the
@@ -1107,9 +1116,14 @@ type ThreadsAggregate struct {
 // Slack tells us whether per-thread unreads exist without us having to
 // hit subscriptions.thread.* directly.
 func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
+	return c.GetUnreadCountsContext(context.Background())
+}
+
+// GetUnreadCountsContext is GetUnreadCounts bounded by ctx.
+func (c *Client) GetUnreadCountsContext(ctx context.Context) ([]UnreadInfo, ThreadsAggregate, error) {
 	reqURL := c.apiBaseURL + "client.counts"
 	form := url.Values{"token": {c.token}}
-	req, err := http.NewRequest("POST", reqURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, ThreadsAggregate{}, fmt.Errorf("creating request: %w", err)
 	}
@@ -1134,18 +1148,21 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 			MentionCount       int    `json:"mention_count"`
 			UnreadCountDisplay int    `json:"unread_count_display,omitempty"`
 			LastRead           string `json:"last_read"`
+			Latest             string `json:"latest"`
 		} `json:"channels"`
 		Mpims []struct {
 			ID           string `json:"id"`
 			HasUnreads   bool   `json:"has_unreads"`
 			MentionCount int    `json:"mention_count"`
 			LastRead     string `json:"last_read"`
+			Latest       string `json:"latest"`
 		} `json:"mpims"`
 		Ims []struct {
 			ID           string `json:"id"`
 			HasUnreads   bool   `json:"has_unreads"`
 			MentionCount int    `json:"mention_count"`
 			LastRead     string `json:"last_read"`
+			Latest       string `json:"latest"`
 		} `json:"ims"`
 		// Threads is the workspace-wide thread-subscription rollup.
 		// Slack returns this top-level when the user has subscribed
@@ -1179,6 +1196,7 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 			MentionCount: ch.MentionCount,
 			HasUnread:    ch.HasUnreads,
 			LastRead:     ch.LastRead,
+			Latest:       ch.Latest,
 		})
 	}
 	for _, ch := range result.Mpims {
@@ -1187,6 +1205,7 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 			MentionCount: ch.MentionCount,
 			HasUnread:    ch.HasUnreads,
 			LastRead:     ch.LastRead,
+			Latest:       ch.Latest,
 		})
 	}
 	for _, ch := range result.Ims {
@@ -1195,6 +1214,7 @@ func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
 			MentionCount: ch.MentionCount,
 			HasUnread:    ch.HasUnreads,
 			LastRead:     ch.LastRead,
+			Latest:       ch.Latest,
 		})
 	}
 
@@ -2308,6 +2328,13 @@ func (c *Client) HistoryWithVersions(ctx context.Context, channelID string, opts
 
 	raw, err := c.postForm(ctx, historyMethod, form)
 	if err != nil {
+		// As GetUserProfileContext: a 429 surfaces as the public
+		// *slack.RateLimitedError so WaitOutRateLimit can sleep it out
+		// and the caller can retry the same page.
+		var rl *rateLimitError
+		if errors.As(err, &rl) {
+			return HistoryResult{}, &slack.RateLimitedError{RetryAfter: rl.retryAfter}
+		}
 		return HistoryResult{}, fmt.Errorf("%s: %w", historyMethod, err)
 	}
 

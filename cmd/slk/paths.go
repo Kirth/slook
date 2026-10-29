@@ -1,30 +1,9 @@
 package main
 
-import (
-	"os"
-	"path/filepath"
-)
+import "github.com/gammons/slk/internal/paths"
 
-func xdgConfig() string {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, "slk")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "slk")
-}
-
-func xdgData() string {
-	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
-		return filepath.Join(dir, "slk")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "slk")
-}
-
-func xdgCache() string {
-	if dir := os.Getenv("XDG_CACHE_HOME"); dir != "" {
-		return filepath.Join(dir, "slk")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".cache", "slk")
-}
+// The XDG directories live in internal/paths so other binaries share
+// them; these names stay for the many callers in this package.
+func xdgConfig() string { return paths.Config() }
+func xdgData() string   { return paths.Data() }
+func xdgCache() string  { return paths.Cache() }

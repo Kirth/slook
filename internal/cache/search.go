@@ -145,3 +145,43 @@ func scanTSColumn(rows *sql.Rows) ([]string, error) {
 	}
 	return out, rows.Err()
 }
+
+// SearchMessages returns the workspace's non-deleted messages whose
+// text matches the query, newest first and at most limit of them,
+// thread replies included. It is the workspace-wide twin of
+// SearchChannelMessages for a search window, which can open a reply's
+// thread, so nothing is filtered by row shape. Matching is as there:
+// word-prefix, case- and accent-insensitive, LIKE when FTS is
+// unavailable.
+func (db *DB) SearchMessages(workspaceID, query string, limit int) ([]Message, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if db.ftsDisabled {
+		terms := strings.Fields(query)
+		if len(terms) == 0 {
+			return nil, nil
+		}
+		q := `SELECT ` + messageColumns + ` FROM messages WHERE workspace_id = ? AND is_deleted = 0`
+		args := []any{workspaceID}
+		for _, term := range terms {
+			q += ` AND text LIKE ? ESCAPE '\'`
+			escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(term)
+			args = append(args, "%"+escaped+"%")
+		}
+		q += ` ORDER BY ts DESC LIMIT ?`
+		args = append(args, limit)
+		return db.queryMessages(q, args...)
+	}
+	match := buildFTSQuery(query)
+	if match == "" {
+		return nil, nil
+	}
+	cols := strings.ReplaceAll(messageColumns, ", ", ", m.")
+	return db.queryMessages(`
+		SELECT m.`+cols+`
+		FROM messages_fts f
+		JOIN messages m ON m.rowid = f.rowid
+		WHERE messages_fts MATCH ? AND m.workspace_id = ? AND m.is_deleted = 0
+		ORDER BY m.ts DESC LIMIT ?`, match, workspaceID, limit)
+}

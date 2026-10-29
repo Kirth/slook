@@ -124,3 +124,46 @@ func TestSanitizeName(t *testing.T) {
 		}
 	}
 }
+
+func TestFetchIsIdempotent(t *testing.T) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Write([]byte("PNGDATA"))
+	}))
+	defer srv.Close()
+	d := New(slackhttp.NewAuthResolver(nil), t.TempDir())
+	path := filepath.Join(t.TempDir(), "F1", "cat.png") // the directory does not exist yet
+	for range 2 {
+		if err := d.Fetch(context.Background(), srv.URL+"/cat.png", path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if hits != 1 {
+		t.Errorf("downloaded %d times, want once", hits)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil || string(body) != "PNGDATA" {
+		t.Fatalf("file = %q, %v", body, err)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(path))
+	if len(entries) != 1 {
+		t.Errorf("left %d files beside it, want only the file", len(entries))
+	}
+}
+
+func TestFetchLoginPageLeavesNoFile(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte("<html>sign in</html>"))
+	}))
+	defer srv.Close()
+	d := New(slackhttp.NewAuthResolver(nil), t.TempDir())
+	path := filepath.Join(t.TempDir(), "doc.pdf")
+	if err := d.Fetch(context.Background(), srv.URL+"/doc.pdf", path); err == nil {
+		t.Fatal("want an error for the login page")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("a file was left at %s", path)
+	}
+}

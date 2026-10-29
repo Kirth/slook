@@ -140,6 +140,9 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Press a legacy attachment button (`chat.attachmentAction`, payload byte-identical to the web client's) | `(*slackclient.Client).AttachmentAction(ctx, AttachmentActionRequest)`, with `service_id` = the posting app's bot ID |
 | Press a legacy attachment button from the UI | `core.InteractionService.PressAttachmentAction` (App field `a.interactions`); wired in `cmd/slk` via `pressAttachmentAction` to the active workspace's `Client.AttachmentAction` |
 | Run a slash command (`chat.command`, request shape copied from the web client; arguments as rich text via `mrkdwn.Convert`) | `(*slackclient.Client).RunCommand(ctx, CommandRequest)`; a refusal (`unknown_command`, …) is `*slackclient.CommandRejectedError` |
+| Is composer text a slash command, its name/args, and could it still become one (for a completion popup)? Word a command's failure | `slashcmd.Parse(text)`, `slashcmd.IsNamePrefix(text)`, `slashcmd.FailureText(name, err)` (`internal/slashcmd`); the TUI's `parseSlashCommand` / `commandFailureText` wrap them |
+| Every conversation's read state and newest-message ts in one request (`client.counts`) | `(*slackclient.Client).GetUnreadCountsContext(ctx)` (or `GetUnreadCounts()`); `UnreadInfo.Latest` is the newest message's ts |
+| List the workspace's slash commands (name, usage, description, app, alias) for a picker | `(*slackclient.Client).AppCommands(ctx)` (`client.appCommands`, as the web client calls it) |
 | Run a slash command from the UI | `core.CommandService.Run` (App field `a.commandSvc`); wired in `cmd/slk` via `runCommand` to the `Client.RunCommand` of the workspace the command was typed in (`teamID`, looked up with `router.ByID`, not the active one). Slack's refusal arrives as `*core.CommandError{Code}` |
 | A web-client `client_token` (`web-<unix ms>`) for any request that sends one | `newClientToken()` (`internal/slack`); the only generator |
 | Emoji shortcode → glyph | `emoji.Sprint`, `emoji.CodeMap`, `emoji.StripSkinTone` |
@@ -147,6 +150,17 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Current DND state from a Slack API result | `slack.DNDStateFromStatus` |
 | Persist a full Web API profile's custom status and huddle (including clears) | `cmd/slk/applyProfileStatus(teamID, userID, profile, db, send)` after `UpsertUser`, before any resolved-user notice or row repair; `UpsertUser` alone deliberately preserves status on conflict |
 | Drop cached thread replies a complete `conversations.replies` response no longer contains (missed deletes, Slackbot ephemerals) | `(*cache.DB).PruneThreadReplies(channelID, threadTS, returnedTS, fetchStartUnix)`; soft-deletes, never touches the parent or rows cached after the fetch began |
+| Keep the message cache in step with Slack from any frontend: one history page (head, older, catch-up), a whole thread, a WebSocket frame, a reaction; the opt-in slow backfill | `internal/msgsync`: `Syncer{DB, Source, WorkspaceID}` with `Open`, `Older`, `CatchUp`, `Thread`, `ApplyEvent`, `ApplyReaction`, `Ingest`, `Backfill(ctx, Config)`; `Changed{Upserted, Deleted}` is what a view redraws. Fetches use `HistoryWithVersions` (official shape, 28/page). Nothing fetches unasked except `Backfill`, which is opt-in and explained on `Config` (sign-out history: `docs/superpowers/specs/2026-07-30-enterprise-grid-bootstrap-design.md`) |
+| Which ranges of a channel the cache holds completely (so a reader can tell "cached" from "some rows") | `message_spans`: `(*cache.DB).Spans`, `AddSpan` (merges overlapping), `ExtendLiveSpan`, `ClearLiveSpans`, `Covers` (`internal/cache/spans.go`); the bounds a page covers are `msgsync.Ingest`'s rule, documented there |
+| Write a history page's rows atomically, with `version` and `edited_at`; apply a `message_changed` without clobbering `subtype`/`reply_count`; count a live reply on its parent; soft-delete feed rows a page no longer returns | `(*cache.DB).UpsertMessages`, `ApplyEdit(channelID, ts, cache.Edit)`, `IncrementReplyCount`, `PruneChannelRange(channelID, oldest, latest, keep, insertedBefore)` (returns the pruned ts; `PruneThreadRepliesTS` is the thread twin); `GetMessagesBetween`, `OldestCachedTS` |
+| `{ts: version}` for the newest 28 cached messages, for `cached_latest_updates` | `msgsync.Versions(store, channelID)` (`cmd/slk/boundedMessageVersions` wraps it) |
+| Threads whose cached parent says more replies than the cache holds | `(*cache.DB).ThreadsNeedingReplies(workspaceID, sinceTS, limit)` |
+| Search every cached message of a workspace (replies included), newest first, bounded | `(*cache.DB).SearchMessages(workspaceID, query, limit)` (FTS5, LIKE fallback); the per-channel feed-only form is `SearchChannelMessages` |
+| What the cache holds, for a coverage view: every span of a workspace in one query; non-deleted rows per channel | `(*cache.DB).SpansForWorkspace(workspaceID)`, `(*cache.DB).MessageCounts(workspaceID)`; the GUI's `backend.SyncStatus` is built from them |
+| Follow a backfill run (phase, item in flight, counts, requests, paused, last error) | `msgsync.Config.OnProgress(msgsync.Progress)`; the GUI maps it onto `backend.BackfillStatus` (`gui/backend/sync_status.go`) and emits `backend.SyncChanged` |
+| A message body as plain text for a one-line preview (search result) | `rich.PlainBlocks(blocks)` (`gui/rich`) |
+| Should the search backfill skip a conversation? (`[cache] backfill_ignore`, names or globs) | `config.CacheConfig.IgnoresBackfill(name)`; the GUI hands it to `(*backend.Slack).SetBackfillIgnore` |
+| A WebSocket message frame whole (the decoded `slack.Message`, its raw JSON, and for `message_changed` the inner message with `reply_count`/`thread_ts`/`edited`) | implement `slackclient.MessageEventHandler` (`OnMessageEvent(MessageEvent)`) on your `EventHandler`; the dispatcher type-asserts it and then skips `OnMessage`/`OnMessageDeleted`. Ephemerals still go to `OnEphemeralMessage` |
 | Peer custom status, DND and huddle rendering | `ui/peerstatus` (`Status`, glyph/expiry/summary methods); `messages.AuthorStatusSuffix` for author headers |
 | Workspace app/bot classification, from any goroutine | `WorkspaceContext.IsBotUser` / `MarkBotUser`; private synchronized set, never directly read/write a plain bot-ID map |
 | Usergroup map helpers | `usergroups.Copy`, `usergroups.Equal`, `usergroups.Display` |
@@ -162,7 +176,22 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | A WebSocket message's author ID and its UI `MessageItem` (bot-ID fallback, display-name resolution, file/block/attachment conversion) | `(*rtmEventHandler).messageAuthor`, `(*rtmEventHandler).messageItemFromEvent` (`cmd/slk/rtm_handler.go`); shared by `OnMessage` and `OnEphemeralMessage` |
 | Legacy attachment action ids slack-go drops | `slackclient.EphemeralMessage.ActionIDs` (decoded from the raw frame), applied with `cmd/slk/applyActionIDs` |
 | Slack original-avatar URL → sized CDN URL (e.g. 72px) | `avatar.SizedURL(orig, px)`; returns non-Slack-original URLs unchanged |
+| Download a Slack file (or any URL) to a path of your choosing, once: no-op if it is already there, atomic rename, Slack auth per workspace | `(*filedl.Downloader).Fetch(ctx, url, path)`; `filedl.SafeName(title)` for the file name. `Download` is the TUI's save-to-folder with `-2` suffixes |
 | Copy text to the clipboard | `App.clipboardWrite` / `SetClipboardWriter`; `cmd/slk/newClipboardWriter` selects local macOS `pbcopy` or terminal OSC 52 |
+| slk's XDG directories (config, data with tokens and cache.db, cache with images) | `paths.Config()`, `paths.Data()`, `paths.Cache()` (`internal/paths`); `cmd/slk/paths.go`'s `xdg*` names wrap them |
+| Open a URL or file with the desktop's default handler | `launch.Open(target)` (`internal/launch`); `cmd/slk/launchOS` wraps it |
+| A `slack.File`'s thumbnails as `core.ThumbSpec`s, smallest first | `blockkit.FileThumbs(f)` (`internal/ui/messages/blockkit/files.go`); `cmd/slk/collectThumbs` wraps it |
+| Disk-cache key for one user's avatar at one URL (shared by both frontends) | `avatar.FetchKey(userID, url)` |
+| A message's display form for a non-terminal frontend (blocks of styled spans from rich_text, mrkdwn, Block Kit, attachments, files) | `gui/rich`: `Body`, `FromRichText`, `FromMrkdwn`, `FromBlocks`, `FromAttachments`, `FromFiles` |
+| A thread for the Gio frontend: read it (cache first, then one `conversations.replies` fetch arriving as a `HistoryUpdated` with `ThreadTS` set), reply (optionally broadcast), mark it read | `backend.Backend.Thread`, `SendReply`, `MarkThreadRead` (`gui/backend`); `RunCommand` takes a thread ts |
+| Reactions in the Gio frontend: apply an add/remove idempotently (the socket's echo of the user's own change is a no-op), list emoji for the picker (common set, prefix-ranked, one per glyph, customs included), toggle one | `chat.ApplyReaction`, `chat.MatchEmoji` (`gui/chat`); `backend.Backend.React`, event `backend.ReactionChanged`; pills and picker on `msgView` (`gui/cmd/slk-gio/reactions.go`) |
+| Every cached reaction on a page of messages, in first-added order, in one query | `(*cache.DB).ReactionsFor(channelID, ts)` |
+| Draw over a span of rich text in the Gio frontend (a custom emoji's picture over a placeholder) | `richtext.SpanStyle.Inline` (`gui/internal/richtext`); `(*richView).customEmoji(name)` resolves and loads a custom emoji's picture, `emojiPicture` draws it |
+| Edit, delete, link to a message from the Gio frontend; the text an edit starts from; the user's last message (for Up-to-edit) | `backend.Backend.Edit` (optimistic, built from the cached row so files survive), `Delete`, `Permalink`; `chat.EditableText`, `chat.LastOwn` (`gui/chat/actions.go`); the composer's edit mode is `composeBox.beginEdit` / `endEdit` (`gui/cmd/slk-gio/compose.go`), the menu and delete confirmation `msgMenu` / `confirmDelete` (`msgactions.go`) |
+| A popup over a Gio window that closes on a click outside or Escape and keeps clicks off what is under it | `popupScrim`, `popupPanel`, `popupFrame`, `dismissed` (`gui/cmd/slk-gio/msgactions.go`). A popup without its own editor must ask for `key.FocusFilter` every frame to keep the keyboard; `popupPanel` does |
+| When a Gio chat window asks for the page before what it shows (near the top, one in flight, stop at the start, back off after a failure); keep the view still while rows are prepended | `chat.Pager` (`gui/chat/pager.go`); `anchorOf` / `(*chatWindow).keepInPlace` (`gui/cmd/slk-gio/chatwin.go`). The list's row 0 is the history edge (`rowMessages`) |
+| One thread's messages in the Gio frontend (parent, replies, broadcasts, ephemerals; each reply counted once on the parent), and a channel's | `chat.Thread`, `chat.Timeline` (`gui/chat`); both keep a `sortedMsgs`. `Timeline.Refresh` applies a thread fetch without adding rows the window has not loaded |
+| Draw a list of messages in a Gio window (rows, hover card, previews, the lit jump target, thread affordances via `onThread`), and its composer (slash-command popup, send or reply, broadcast box) | `msgView` (`gui/cmd/slk-gio/msgview.go`) and `composeBox` (`compose.go`), embedded by `chatWindow` and `threadWindow`. Which thread windows an event reaches: `threadTargets` (`hub.go`) |
 
 ### UI chrome
 
@@ -290,7 +319,10 @@ them as templates:
   fields, each documented where it is declared. Do not add a pane-specific
   copy of either.
 - **`convertAndCacheHistory` / `fetchChannelMessages` / `fetchThreadReplies`** in
-  `cmd/slk/main.go` have ~85% duplicated bodies.
+  `cmd/slk/history.go` and `rtmEventHandler.OnMessage`'s cache writes are the
+  TUI's message writers; their shared replacement is `internal/msgsync`, which
+  the Gio frontend uses. Do not add a fourth writer: route new code through
+  `msgsync`, and move the TUI onto it when it is next touched.
 
 ## Conventions
 

@@ -1,0 +1,704 @@
+package main
+
+import (
+	"fmt"
+	"image"
+	"image/color"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"gioui.org/font"
+	"gioui.org/gesture"
+	"gioui.org/io/pointer"
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/op/clip"
+	"gioui.org/op/paint"
+	"gioui.org/unit"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
+
+	"github.com/gammons/slk/gui/backend"
+	"github.com/gammons/slk/gui/internal/richtext"
+	"github.com/gammons/slk/gui/rich"
+	"github.com/gammons/slk/internal/avatar"
+	"github.com/gammons/slk/internal/emoji"
+	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/launch"
+)
+
+// imageMaxDp bounds an inline picture; thumbnails and context icons
+// are smaller.
+const (
+	imageMaxDp = unit.Dp(360)
+	thumbDp    = unit.Dp(80)
+	iconDp     = unit.Dp(18)
+)
+
+// msgWidgets is the interaction state one message's blocks need across
+// frames: text spans that can be clicked, pictures and files that can be
+// clicked, code that can be selected. Each is keyed by the order it is
+// laid out in, which is stable while the message does not change.
+type msgWidgets struct {
+	texts               map[int]*richtext.InteractiveText
+	clicks              map[int]*openClick
+	sels                map[int]*widget.Selectable
+	nText, nClick, nSel int
+
+	// gallery is the message's images and files in order, for the
+	// previewer; nAtt counts them as they are drawn this frame.
+	gallery []backend.Attachment
+	nAtt    int
+
+	// avatarHover and nameHover notice the pointer over the author.
+	avatarHover, nameHover widget.Clickable
+
+	// rowHover notices the pointer over the whole message, to offer
+	// its actions: react (open the picker) and reply (open the thread);
+	// replies is the reply count (or a broadcast's caption), which opens
+	// the thread too.
+	rowHover gesture.Hover
+	more     widget.Clickable // the actions menu
+	react    widget.Clickable
+	reply    widget.Clickable
+	replies  widget.Clickable
+
+	// pills are the reaction pills, by position; addPill is the "+"
+	// after them. Pointers, so growing the slice keeps their state.
+	pills   []*widget.Clickable
+	addPill widget.Clickable
+}
+
+// openClick is a clickable that launches a URL, or previews one of the
+// message's attachments.
+type openClick struct {
+	btn     widget.Clickable
+	open    string
+	preview *previewReq
+}
+
+func newMsgWidgets() *msgWidgets {
+	return &msgWidgets{texts: map[int]*richtext.InteractiveText{}, clicks: map[int]*openClick{}, sels: map[int]*widget.Selectable{}}
+}
+
+// begin resets the per-frame counters.
+func (w *msgWidgets) begin() { w.nText, w.nClick, w.nSel, w.nAtt = 0, 0, 0, 0 }
+
+// attachment is a clickable for the next of the message's attachments
+// drawn: clicking previews it, with the others a step away.
+func (w *msgWidgets) attachment() (*openClick, backend.Attachment) {
+	c := w.click("")
+	i := w.nAtt
+	w.nAtt++
+	if i >= len(w.gallery) {
+		return c, backend.Attachment{}
+	}
+	c.preview = &previewReq{items: w.gallery, index: i}
+	return c, w.gallery[i]
+}
+
+func (w *msgWidgets) text() *richtext.InteractiveText {
+	st := w.texts[w.nText]
+	if st == nil {
+		st = new(richtext.InteractiveText)
+		w.texts[w.nText] = st
+	}
+	w.nText++
+	return st
+}
+
+func (w *msgWidgets) click(open string) *openClick {
+	c := w.clicks[w.nClick]
+	if c == nil {
+		c = new(openClick)
+		w.clicks[w.nClick] = c
+	}
+	c.open, c.preview = open, nil
+	w.nClick++
+	return c
+}
+
+func (w *msgWidgets) sel() *widget.Selectable {
+	s := w.sels[w.nSel]
+	if s == nil {
+		s = new(widget.Selectable)
+		w.sels[w.nSel] = s
+	}
+	w.nSel++
+	return s
+}
+
+// handle acts on events since the last frame: links open in the
+// browser on a click, attachments in the previewer; hover reports the
+// pointer entering or leaving a mention, with the user's ID.
+func (w *msgWidgets) handle(gtx C, hover func(userID string, on bool), preview func(previewReq)) {
+	for _, st := range w.texts {
+		for {
+			span, ev, ok := st.Update(gtx)
+			if !ok {
+				break
+			}
+			switch ev.Type {
+			case richtext.Click:
+				if url, _ := span.Get("url").(string); url != "" {
+					openURL(url)
+				}
+			case richtext.Hover, richtext.Unhover:
+				if id, _ := span.Get("user").(string); id != "" && hover != nil {
+					hover(id, ev.Type == richtext.Hover)
+				}
+			}
+		}
+	}
+	for _, c := range w.clicks {
+		if !c.btn.Clicked(gtx) {
+			continue
+		}
+		switch {
+		case c.preview != nil && preview != nil:
+			preview(*c.preview)
+		case c.open != "":
+			openURL(c.open)
+		}
+	}
+}
+
+func openURL(url string) {
+	if err := launch.Open(url); err != nil {
+		fmt.Fprintln(os.Stderr, "slk-gio: open", url+":", err)
+	}
+}
+
+// richView draws rich blocks for one window.
+type richView struct {
+	th     *material.Theme
+	images *imageStore
+	box    *inbox
+	// busy reports an attachment being downloaded for the previewer.
+	busy func(backend.Attachment) bool
+	// customs is the workspace's custom emoji (name to picture URL or
+	// "alias:<name>"); nil until loaded, and custom emoji show as
+	// ":name:" until then.
+	customs map[string]string
+}
+
+// busyNote is "Downloading…" under an attachment being fetched.
+func (v *richView) busyNote(gtx C, a backend.Attachment) D {
+	if v.busy == nil || !v.busy(a) {
+		return D{}
+	}
+	return layout.Inset{Top: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
+		lbl := material.Caption(v.th, "Downloading…")
+		lbl.Color = colMuted
+		return lbl.Layout(gtx)
+	})
+}
+
+// spanStyles turns spans into richtext styles at a given size and color.
+func (v *richView) spanStyles(spans []rich.Span, size unit.Sp, col color.NRGBA) []richtext.SpanStyle {
+	out := make([]richtext.SpanStyle, 0, len(spans))
+	for _, s := range spans {
+		f := font.Font{Typeface: v.th.Face}
+		if s.Bold {
+			f.Weight = font.Bold
+		}
+		if s.Italic {
+			f.Style = font.Italic
+		}
+		st := richtext.SpanStyle{Font: f, Size: size, Color: col, Content: s.Text}
+		switch {
+		case s.Kind == rich.SpanEmoji:
+			img, ok := v.customEmoji(s.Text)
+			if !ok {
+				st.Color = colMuted
+				break
+			}
+			// A placeholder about an emoji wide, drawn over with the
+			// picture.
+			st.Content, st.Color = "\u2003", color.NRGBA{}
+			st.Inline = func(gtx C, _ D) { emojiPicture(gtx, img) }
+		case s.Code:
+			st.Font.Typeface = fontMono.Typeface
+			st.Color = colCodeFg
+		case s.URL != "":
+			st.Color = colAccent
+			st.Interactive = true
+			st.Set("url", s.URL)
+		case s.Kind == rich.SpanMention:
+			st.Color = colMention
+			if s.ID != "" {
+				st.Interactive = true
+				st.Set("user", s.ID)
+			}
+		case s.Kind == rich.SpanChannel:
+			st.Color = colMention
+		case s.Kind == rich.SpanBroadcast:
+			st.Color = colBroadcast
+		case s.Kind == rich.SpanMuted, s.Strike:
+			st.Color = colMuted
+		}
+		out = append(out, st)
+	}
+	return out
+}
+
+// customEmoji is the picture of a workspace's custom emoji, by name
+// (":partyparrot:", "partyparrot" or with a skin tone), once it has
+// loaded; asking starts the download, and the window redraws when it
+// lands.
+func (v *richView) customEmoji(name string) (paint.ImageOp, bool) {
+	name = strings.Trim(name, ":")
+	if i := strings.Index(name, "::"); i >= 0 {
+		name = name[:i]
+	}
+	url, ok := emoji.BuildCustomEmojiURL(name, v.customs)
+	if !ok {
+		return paint.ImageOp{}, false
+	}
+	op, state := v.images.get(emoji.EmojiCacheKey(url), url, image.Point{}, v.box)
+	return op, state == imgReady
+}
+
+// emojiPicture draws an emoji's picture in the largest square that
+// fits the constraints, centered.
+func emojiPicture(gtx C, img paint.ImageOp) D {
+	size := gtx.Constraints.Max
+	side := min(size.X, size.Y)
+	defer op.Offset(image.Pt((size.X-side)/2, (size.Y-side)/2)).Push(gtx.Ops).Pop()
+	gtx.Constraints = layout.Exact(image.Pt(side, side))
+	widget.Image{Src: img, Fit: widget.Contain, Position: layout.Center}.Layout(gtx)
+	return D{Size: size}
+}
+
+func (v *richView) text(gtx C, w *msgWidgets, spans []rich.Span, size unit.Sp, col color.NRGBA) D {
+	if len(spans) == 0 {
+		return D{}
+	}
+	return richtext.Text(w.text(), v.th.Shaper, v.spanStyles(spans, size, col)...).Layout(gtx)
+}
+
+// blocks lays out blocks one under another.
+func (v *richView) blocks(gtx C, w *msgWidgets, bs []rich.Block) D {
+	children := make([]layout.FlexChild, 0, len(bs))
+	for _, b := range bs {
+		children = append(children, layout.Rigid(func(gtx C) D { return v.block(gtx, w, b) }))
+	}
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+}
+
+func (v *richView) block(gtx C, w *msgWidgets, b rich.Block) D {
+	switch b := b.(type) {
+	case rich.Paragraph:
+		return v.text(gtx, w, b.Spans, textSize, colFg)
+	case rich.Heading:
+		return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
+			spans := make([]rich.Span, len(b.Spans))
+			for i, s := range b.Spans {
+				s.Bold = true
+				spans[i] = s
+			}
+			return v.text(gtx, w, spans, headingSize, colFg)
+		})
+	case rich.Quote:
+		return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
+			return v.barred(gtx, colBorder, func(gtx C) D { return v.blocks(gtx, w, b.Blocks) })
+		})
+	case rich.CodeBlock:
+		return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx C) D {
+			return rounded(gtx, colCodeBg, unit.Dp(4), func(gtx C) D {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx C) D {
+					lbl := material.Body2(v.th, b.Text)
+					lbl.Font = fontMono
+					lbl.State = w.sel()
+					return lbl.Layout(gtx)
+				})
+			})
+		})
+	case rich.List:
+		return v.list(gtx, w, b)
+	case rich.Divider:
+		return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(6)}.Layout(gtx, divider)
+	case rich.Image:
+		max := imageMaxDp
+		if b.Small {
+			max = thumbDp
+		}
+		return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
+			return v.image(gtx, w, b, max)
+		})
+	case rich.File:
+		return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
+			return v.file(gtx, w, b)
+		})
+	case rich.Fields:
+		return v.fields(gtx, w, b)
+	case rich.Context:
+		return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
+			return v.context(gtx, w, b)
+		})
+	case rich.Buttons:
+		return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
+			return v.buttons(gtx, b.Labels)
+		})
+	case rich.Card:
+		return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx C) D {
+			return v.barred(gtx, cardColor(b.Color), func(gtx C) D {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(func(gtx C) D { return v.blocks(gtx, w, b.Blocks) }),
+					layout.Rigid(func(gtx C) D {
+						if b.Footer == "" {
+							return D{}
+						}
+						return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx C) D {
+							lbl := material.Caption(v.th, b.Footer)
+							lbl.Color = colMuted
+							return lbl.Layout(gtx)
+						})
+					}),
+				)
+			})
+		})
+	}
+	return D{}
+}
+
+// barred draws content with a vertical stripe on its left, as tall as
+// the content turns out to be.
+func (v *richView) barred(gtx C, col color.NRGBA, content layout.Widget) D {
+	barW := gtx.Dp(unit.Dp(4))
+	gap := gtx.Dp(unit.Dp(10))
+	inner := gtx
+	inner.Constraints.Max.X -= barW + gap
+	inner.Constraints.Min.X = 0
+	m := op.Record(gtx.Ops)
+	dims := content(inner)
+	call := m.Stop()
+	paint.FillShape(gtx.Ops, col, clip.UniformRRect(image.Rectangle{Max: image.Pt(barW, dims.Size.Y)}, gtx.Dp(unit.Dp(2))).Op(gtx.Ops))
+	defer op.Offset(image.Pt(barW+gap, 0)).Push(gtx.Ops).Pop()
+	call.Add(gtx.Ops)
+	dims.Size.X += barW + gap
+	return dims
+}
+
+func (v *richView) list(gtx C, w *msgWidgets, l rich.List) D {
+	children := make([]layout.FlexChild, 0, len(l.Items))
+	for i, item := range l.Items {
+		marker := "•"
+		if l.Ordered {
+			marker = strconv.Itoa(l.Start+i+1) + "."
+		}
+		children = append(children, layout.Rigid(func(gtx C) D {
+			return layout.Inset{Left: unit.Dp(16 * float32(l.Indent))}.Layout(gtx, func(gtx C) D {
+				return layout.Flex{Alignment: layout.Baseline}.Layout(gtx,
+					layout.Rigid(func(gtx C) D {
+						gtx.Constraints.Min.X = gtx.Dp(unit.Dp(22))
+						lbl := material.Body1(v.th, marker)
+						lbl.Color = colMuted
+						return lbl.Layout(gtx)
+					}),
+					layout.Flexed(1, func(gtx C) D { return v.text(gtx, w, item, textSize, colFg) }),
+				)
+			})
+		}))
+	}
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+}
+
+// fields lays out short fields two to a row and the rest full width.
+func (v *richView) fields(gtx C, w *msgWidgets, f rich.Fields) D {
+	var rows []layout.FlexChild
+	items := f.Items
+	for len(items) > 0 {
+		var row []rich.Field
+		if items[0].Short && len(items) > 1 && items[1].Short {
+			row, items = items[:2], items[2:]
+		} else {
+			row, items = items[:1], items[1:]
+		}
+		rows = append(rows, layout.Rigid(func(gtx C) D {
+			return layout.Inset{Top: unit.Dp(3)}.Layout(gtx, func(gtx C) D {
+				cells := make([]layout.FlexChild, 0, 2)
+				for _, cell := range row {
+					cells = append(cells, layout.Flexed(1, func(gtx C) D {
+						return layout.Inset{Right: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
+							return v.text(gtx, w, cell.Spans, textSize, colFg)
+						})
+					}))
+				}
+				return layout.Flex{}.Layout(gtx, cells...)
+			})
+		}))
+	}
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
+}
+
+func (v *richView) context(gtx C, w *msgWidgets, c rich.Context) D {
+	children := make([]layout.FlexChild, 0, len(c.Images)+1)
+	for _, im := range c.Images {
+		children = append(children, layout.Rigid(func(gtx C) D {
+			return layout.Inset{Right: unit.Dp(6)}.Layout(gtx, func(gtx C) D { return v.image(gtx, w, im, iconDp) })
+		}))
+	}
+	children = append(children, layout.Flexed(1, func(gtx C) D { return v.text(gtx, w, c.Items, captionSize, colMuted) }))
+	return layout.Flex{Alignment: layout.Middle}.Layout(gtx, children...)
+}
+
+// buttons draws action labels as outlined chips; they do nothing.
+func (v *richView) buttons(gtx C, labels []string) D {
+	children := make([]layout.FlexChild, 0, len(labels))
+	for _, label := range labels {
+		children = append(children, layout.Rigid(func(gtx C) D {
+			return layout.Inset{Right: unit.Dp(6)}.Layout(gtx, func(gtx C) D {
+				border := widget.Border{Color: colBorder, CornerRadius: unit.Dp(4), Width: unit.Dp(1)}
+				return border.Layout(gtx, func(gtx C) D {
+					return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4), Left: unit.Dp(10), Right: unit.Dp(10)}.Layout(gtx,
+						material.Body2(v.th, label).Layout)
+				})
+			})
+		}))
+	}
+	return layout.Flex{}.Layout(gtx, children...)
+}
+
+// file is a chip naming a non-image upload; clicking opens it in Slack.
+func (v *richView) file(gtx C, w *msgWidgets, f rich.File) D {
+	c, att := w.attachment()
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx C) D { return v.fileChip(gtx, c, f) }),
+		layout.Rigid(func(gtx C) D { return v.busyNote(gtx, att) }),
+	)
+}
+
+// fileChip is a file's name and size in a frame.
+func (v *richView) fileChip(gtx C, c *openClick, f rich.File) D {
+	return c.btn.Layout(gtx, func(gtx C) D {
+		pointer.CursorPointer.Add(gtx.Ops)
+		border := widget.Border{Color: colBorder, CornerRadius: unit.Dp(6), Width: unit.Dp(1)}
+		return border.Layout(gtx, func(gtx C) D {
+			return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx C) D {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					layout.Rigid(func(gtx C) D {
+						lbl := material.Body2(v.th, f.Name)
+						lbl.Color = colAccent
+						lbl.MaxLines = 1
+						return lbl.Layout(gtx)
+					}),
+					layout.Rigid(func(gtx C) D {
+						lbl := material.Caption(v.th, strings.TrimSpace(humanSize(f.Size)+"  "+f.Mime))
+						lbl.Color = colMuted
+						return lbl.Layout(gtx)
+					}),
+				)
+			})
+		})
+	})
+}
+
+// image draws a picture no larger than max on a side: a placeholder
+// of the right shape while it loads, the picture once it has, a note
+// if it failed. Clicking opens it.
+func (v *richView) image(gtx C, w *msgWidgets, im rich.Image, max unit.Dp) D {
+	c, att := w.attachment()
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx C) D { return v.picture(gtx, c, im, max) }),
+		layout.Rigid(func(gtx C) D { return v.busyNote(gtx, att) }),
+	)
+}
+
+// picture is the image itself, or its placeholder or name.
+func (v *richView) picture(gtx C, c *openClick, im rich.Image, max unit.Dp) D {
+	maxPx := gtx.Dp(max)
+	if maxPx > gtx.Constraints.Max.X {
+		maxPx = gtx.Constraints.Max.X
+	}
+	url, key := imageSource(im, image.Pt(maxPx, maxPx))
+	op, state := v.images.get(key, url, image.Point{}, v.box)
+	box := fitBox(im.W, im.H, maxPx)
+	switch state {
+	case imgReady:
+		if sz := op.Size(); sz.X > 0 && sz.Y > 0 {
+			box = fitBox(sz.X, sz.Y, maxPx)
+		}
+		return c.btn.Layout(gtx, func(gtx C) D {
+			pointer.CursorPointer.Add(gtx.Ops)
+			defer clip.UniformRRect(image.Rectangle{Max: box}, gtx.Dp(unit.Dp(6))).Push(gtx.Ops).Pop()
+			gtx.Constraints = layout.Exact(box)
+			return widget.Image{Src: op, Fit: widget.Contain, Position: layout.Center}.Layout(gtx)
+		})
+	case imgLoading:
+		return c.btn.Layout(gtx, func(gtx C) D {
+			pointer.CursorPointer.Add(gtx.Ops)
+			paint.FillShape(gtx.Ops, colHover, clip.UniformRRect(image.Rectangle{Max: box}, gtx.Dp(unit.Dp(6))).Op(gtx.Ops))
+			return D{Size: box}
+		})
+	}
+	// imgFailed or imgNone: name the picture and let a click open it.
+	name := im.Title
+	if name == "" {
+		name = im.Alt
+	}
+	if name == "" {
+		name = "image"
+	}
+	return c.btn.Layout(gtx, func(gtx C) D {
+		pointer.CursorPointer.Add(gtx.Ops)
+		lbl := material.Caption(v.th, "🖼 "+name)
+		lbl.Color = colAccent
+		return lbl.Layout(gtx)
+	})
+}
+
+// imageSource picks the URL to download for a picture shown at about
+// target pixels, and its cache key, which matches the TUI's so the two
+// share downloads: "<fileID>-<thumb suffix>" for uploads, "BK-<hash>"
+// for anything else.
+func imageSource(im rich.Image, target image.Point) (url, key string) {
+	if im.FileID != "" && len(im.Thumbs) > 0 {
+		thumbs := make([]imgpkg.ThumbSpec, len(im.Thumbs))
+		for i, t := range im.Thumbs {
+			thumbs[i] = imgpkg.ThumbSpec{URL: t.URL, W: t.W, H: t.H}
+		}
+		url, suffix := imgpkg.PickThumb(thumbs, target)
+		return url, im.FileID + "-" + suffix
+	}
+	if im.FileID != "" {
+		return im.URL, im.FileID + "-full"
+	}
+	return im.URL, urlKey(im.URL)
+}
+
+// fitBox scales w×h to fit in a max square, never enlarging; unknown
+// sizes get a wide placeholder.
+func fitBox(w, h, max int) image.Point {
+	if w <= 0 || h <= 0 {
+		return image.Pt(max*2/3, max*2/5)
+	}
+	if w <= max && h <= max {
+		return image.Pt(w, h)
+	}
+	if w >= h {
+		return image.Pt(max, h*max/w)
+	}
+	return image.Pt(w*max/h, max)
+}
+
+func humanSize(n int64) string {
+	switch {
+	case n <= 0:
+		return ""
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.0f KB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	}
+}
+
+// avatar draws a user's picture, or a colored disc with their initial
+// while it loads or when there is none.
+func (v *richView) avatar(gtx C, id, url, name string, size unit.Dp) D {
+	px := gtx.Dp(size)
+	box := image.Pt(px, px)
+	radius := gtx.Dp(unit.Dp(6))
+	if url != "" {
+		op, state := v.images.get(avatar.FetchKey(id, url), url, image.Point{}, v.box)
+		if state == imgReady {
+			defer clip.UniformRRect(image.Rectangle{Max: box}, radius).Push(gtx.Ops).Pop()
+			gtx.Constraints = layout.Exact(box)
+			return widget.Image{Src: op, Fit: widget.Cover, Position: layout.Center}.Layout(gtx)
+		}
+	}
+	paint.FillShape(gtx.Ops, authorColor(name), clip.UniformRRect(image.Rectangle{Max: box}, radius).Op(gtx.Ops))
+	gtx.Constraints = layout.Exact(box)
+	return layout.Center.Layout(gtx, func(gtx C) D {
+		lbl := material.Label(v.th, unit.Sp(float32(size)*0.5), initial(name))
+		lbl.Color = rgb(0xffffff)
+		lbl.Font.Weight = font.Bold
+		return lbl.Layout(gtx)
+	})
+}
+
+func initial(name string) string {
+	for _, r := range strings.TrimSpace(name) {
+		return strings.ToUpper(string(r))
+	}
+	return "?"
+}
+
+// cardWidthDp is the hover card's width.
+const cardWidthDp = unit.Dp(300)
+
+// profileCard draws what is known about a person: picture, names,
+// title, status and local time. While the profile loads only the name
+// the message carried is shown.
+func (v *richView) profileCard(gtx C, name string, p *backend.Profile, err error) D {
+	gtx.Constraints = layout.Constraints{Max: image.Pt(gtx.Dp(cardWidthDp), gtx.Constraints.Max.Y)}
+	id, avatarURL := "", ""
+	if p != nil {
+		id, avatarURL = p.ID, p.AvatarURL
+		if p.Name != "" {
+			name = p.Name
+		}
+	}
+	return widget.Border{Color: colBorder, CornerRadius: unit.Dp(8), Width: unit.Dp(1)}.Layout(gtx, func(gtx C) D {
+		return rounded(gtx, colHover, unit.Dp(8), func(gtx C) D {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+			return layout.UniformInset(unit.Dp(12)).Layout(gtx, func(gtx C) D {
+				return layout.Flex{Alignment: layout.Start}.Layout(gtx,
+					layout.Rigid(func(gtx C) D {
+						return layout.Inset{Right: unit.Dp(12)}.Layout(gtx, func(gtx C) D {
+							return v.avatar(gtx, id, avatarURL, name, unit.Dp(56))
+						})
+					}),
+					layout.Flexed(1, func(gtx C) D {
+						var rows []layout.FlexChild
+						line := func(s string, size unit.Sp, col color.NRGBA, bold bool) {
+							if s == "" {
+								return
+							}
+							rows = append(rows, layout.Rigid(func(gtx C) D {
+								lbl := material.Label(v.th, size, s)
+								lbl.Color = col
+								if bold {
+									lbl.Font.Weight = font.Bold
+								}
+								return lbl.Layout(gtx)
+							}))
+						}
+						line(name, unit.Sp(16), colFg, true)
+						switch {
+						case err != nil:
+							line("Profile unavailable: "+err.Error(), captionSize, colError, false)
+						case p == nil:
+							line("Loading…", captionSize, colMuted, false)
+						default:
+							if p.RealName != "" && p.RealName != name {
+								line(p.RealName, textSize, colMuted, false)
+							}
+							if p.Handle != "" {
+								line("@"+p.Handle, captionSize, colMuted, false)
+							}
+							line(p.Title, textSize, colFg, false)
+							if p.StatusText != "" || p.StatusEmoji != "" {
+								line(strings.TrimSpace(emoji.Sprint(p.StatusEmoji)+" "+p.StatusText), textSize, colFg, false)
+							}
+							if p.HasTZ {
+								local := time.Now().UTC().Add(time.Duration(p.TZOffset) * time.Second)
+								s := local.Format("15:04") + " local time"
+								if p.TZLabel != "" {
+									s += " (" + p.TZLabel + ")"
+								}
+								line(s, captionSize, colMuted, false)
+							}
+						}
+						return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
+					}),
+				)
+			})
+		})
+	})
+}

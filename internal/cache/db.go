@@ -208,6 +208,16 @@ func (db *DB) migrate() error {
 
 	CREATE INDEX IF NOT EXISTS idx_channel_members_channel
 		ON channel_members(workspace_id, channel_id);
+
+	CREATE TABLE IF NOT EXISTS message_spans (
+		channel_id    TEXT NOT NULL,
+		workspace_id  TEXT NOT NULL,
+		oldest_ts     TEXT NOT NULL,
+		latest_ts     TEXT NOT NULL,
+		reaches_start INTEGER NOT NULL DEFAULT 0,
+		is_live       INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (channel_id, oldest_ts)
+	);
 	`
 
 	if _, err := db.conn.Exec(schema); err != nil {
@@ -334,6 +344,12 @@ func (db *DB) migrate() error {
 	if err := db.addColumnIfMissing("users", "huddle_expiration",
 		"ALTER TABLE users ADD COLUMN huddle_expiration INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
+	}
+
+	// messages.version predates this index, so the index is created
+	// after the column exists.
+	if _, err := db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_messages_workspace_ts ON messages(workspace_id, ts)`); err != nil {
+		return fmt.Errorf("creating idx_messages_workspace_ts: %w", err)
 	}
 
 	// Full-text search index. FTS5 may be unavailable in unusual

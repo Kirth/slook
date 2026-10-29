@@ -43,6 +43,53 @@ func (d *Downloader) Download(ctx context.Context, rawURL, name string) (string,
 	if rawURL == "" {
 		return "", fmt.Errorf("no download URL for %q", name)
 	}
+	body, err := d.body(ctx, rawURL)
+	if err != nil {
+		return "", fmt.Errorf("download %q: %w", name, err)
+	}
+	return d.writeUnique(name, body)
+}
+
+// Fetch makes sure path holds rawURL's content. If path already exists
+// it does nothing, so the same file is downloaded once however often it
+// is asked for. Otherwise it downloads (with the same auth handling as
+// Download) into a temporary file beside path and renames it into
+// place: a half-written file is never seen, and concurrent fetches of
+// the same path are safe. Missing directories are created.
+func (d *Downloader) Fetch(ctx context.Context, rawURL, path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	if rawURL == "" {
+		return fmt.Errorf("no download URL for %q", filepath.Base(path))
+	}
+	body, err := d.body(ctx, rawURL)
+	if err != nil {
+		return fmt.Errorf("download %q: %w", filepath.Base(path), err)
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".part-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // a no-op once renamed
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// body downloads rawURL, trying each workspace's credentials that may
+// apply (a non-Slack URL gets one unauthenticated try), and remembers
+// which worked.
+func (d *Downloader) body(ctx context.Context, rawURL string) ([]byte, error) {
 	auths := d.resolver.AuthsForURL(rawURL)
 	if len(auths) == 0 {
 		// Non-Slack URL: one unauthenticated attempt.
@@ -67,14 +114,10 @@ func (d *Downloader) Download(ctx context.Context, rawURL, name string) (string,
 			lastErr = fmt.Errorf("HTTP 200 with text/html (auth failure)")
 			continue
 		}
-		path, err := d.writeUnique(name, body)
-		if err != nil {
-			return "", err
-		}
 		d.resolver.Learn(teamID, auth)
-		return path, nil
+		return body, nil
 	}
-	return "", fmt.Errorf("download %q: %w", name, lastErr)
+	return nil, lastErr
 }
 
 // get issues one HTTP GET with the given auth attached (if non-empty).
@@ -139,6 +182,10 @@ func (d *Downloader) writeUnique(name string, body []byte) (string, error) {
 		return path, nil
 	}
 }
+
+// SafeName is sanitizeName, for callers that choose their own path
+// (Fetch) but name the file after its Slack title.
+func SafeName(name string) string { return sanitizeName(name) }
 
 // sanitizeName makes a Slack file title safe for use as a local
 // filename: path separators and control characters become '_', leading

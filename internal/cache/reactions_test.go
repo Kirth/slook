@@ -115,3 +115,39 @@ func TestMultipleReactionsOnMessage(t *testing.T) {
 		t.Fatalf("expected 3 reactions, got %d", len(rows))
 	}
 }
+
+func TestReactionsForReadsAPageInFirstAddedOrder(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(db.UpsertReaction("1.0", "C1", "tada", []string{"U1"}, 1))
+	must(db.UpsertReaction("1.0", "C1", "+1", []string{"U1", "U2"}, 2))
+	must(db.UpsertReaction("2.0", "C1", "eyes", []string{"U3"}, 1))
+	must(db.UpsertReaction("1.0", "C2", "fire", []string{"U1"}, 1)) // another channel
+	must(db.UpsertReaction("3.0", "C1", "fire", []string{"U1"}, 1)) // not asked for
+	// An update keeps tada first.
+	must(db.UpsertReaction("1.0", "C1", "tada", []string{"U1", "U4"}, 2))
+
+	got, err := db.ReactionsFor("C1", []string{"1.0", "2.0", "9.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got reactions for %d messages, want 2: %v", len(got), got)
+	}
+	first := got["1.0"]
+	if len(first) != 2 || first[0].Emoji != "tada" || first[0].Count != 2 || len(first[0].UserIDs) != 2 || first[1].Emoji != "+1" {
+		t.Fatalf("1.0: %+v", first)
+	}
+	if e := got["2.0"]; len(e) != 1 || e[0].Emoji != "eyes" {
+		t.Fatalf("2.0: %+v", e)
+	}
+	if empty, err := db.ReactionsFor("C1", nil); err != nil || len(empty) != 0 {
+		t.Fatalf("no ts: %v, %v", empty, err)
+	}
+}

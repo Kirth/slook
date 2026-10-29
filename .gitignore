@@ -1,6 +1,7 @@
 bin/
 dist/
 /slk
+/gui/slk-gio
 *.db
 *.db-journal
 .superpowers/
