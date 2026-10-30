@@ -12,6 +12,7 @@ import (
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/export"
 	"github.com/gammons/slk/internal/msgsync"
+	slackclient "github.com/gammons/slk/internal/slack"
 )
 
 // The cache's status for the search window: what is held, what is in
@@ -39,6 +40,98 @@ func (s *Slack) SetBackfillIgnore(ignore func(name string) bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ignore = ignore
+}
+
+// SetCatchUp shapes the catch-up a connect runs: off, or how many
+// conversations it may fetch ([cache] catch_up, catch_up_limit).
+func (s *Slack) SetCatchUp(on bool, limit int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.catchUpOn, s.catchUpMax = on, limit
+}
+
+// catchUpInterval is the gap between a connect's catch-up requests.
+const catchUpInterval = 3 * time.Second
+
+// listWait bounds how long a first connect's catch-up waits for the
+// conversation list: without it, conversation names (and so
+// backfill_ignore) are unknown, and the run is skipped rather than
+// risk fetching an ignored conversation.
+const listWait = time.Minute
+
+// catchUpAfterConnect fetches one page for each conversation the cache
+// follows whose newest message (per client.counts, unreads) is past
+// what the cache holds: what the socket missed while slk-gio was not
+// listening. It is bounded (msgsync.Stale: only followed, only
+// changed, never what backfill_ignore names, at most catchUpMax),
+// paced catchUpInterval apart, and stops when ctx does (the socket
+// dropped, or slk-gio quit). Each page goes through catchUp, which
+// shows in the sync status and redraws open windows.
+func (s *Slack) catchUpAfterConnect(ctx context.Context, unreads []slackclient.UnreadInfo) {
+	s.mu.Lock()
+	on, limit := s.catchUpOn, s.catchUpMax
+	s.mu.Unlock()
+	if !on || s.sync == nil {
+		return
+	}
+	// The list's names are what backfill_ignore matches: wait for them.
+	deadline := time.Now().Add(listWait)
+	for {
+		s.mu.Lock()
+		ready := len(s.convOrder) > 0
+		s.mu.Unlock()
+		if ready {
+			break
+		}
+		if time.Now().After(deadline) {
+			fmt.Fprintln(os.Stderr, "slk-gio: catch-up skipped: the conversation list did not load")
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	spans, err := s.db.SpansForWorkspace(s.client.TeamID())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "slk-gio: catch-up:", err)
+		return
+	}
+	heads := map[string]string{}
+	for _, sp := range spans { // per channel, oldest first: the last is the head
+		heads[sp.ChannelID] = sp.LatestTS
+	}
+	latest := make(map[string]string, len(unreads))
+	for _, u := range unreads {
+		latest[u.ChannelID] = u.Latest
+	}
+	s.mu.Lock()
+	order := slices.Clone(s.convOrder)
+	s.mu.Unlock()
+	ignored := func(id string) bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.ignoredLocked(id)
+	}
+	stale := msgsync.Stale(order, heads, latest, ignored, limit)
+	if len(stale) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "slk-gio: catching up %d conversations the socket missed\n", len(stale))
+	for i, id := range stale {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(catchUpInterval):
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		s.catchUp(ctx, id)
+	}
 }
 
 // ignoredLocked reports whether the backfill skips a conversation.

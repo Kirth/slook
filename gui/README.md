@@ -260,6 +260,21 @@ is still cached and searchable, and opening one still shows its history:
 backfill_ignore = ["leafcloud-alerts-production", "leafcloud-alerts-staging", "noise-*"]
 ```
 
+Messages that arrive while slk-gio runs are cached as they come. What
+arrives while it is closed, or while the connection is down, is caught
+up when the socket connects. One `client.counts` names the
+conversations with newer messages than the cache holds, and each of
+those the cache already follows gets one page, most recently visited
+first. That covers at most 20 conversations, 3 seconds apart, and never
+anything `backfill_ignore` names. Conversations the cache has never
+followed are left alone, so a first run fetches nothing. To tune it:
+
+```toml
+[cache]
+catch_up = true           # false turns it off
+catch_up_limit = 20       # conversations per connect
+```
+
 `-backfill` turns on a slow background fill (one request every eight
 seconds, paused while a chat window has the keyboard) back to the given
 horizon, then the threads in it; the search window starts and stops the

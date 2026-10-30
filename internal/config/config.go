@@ -203,6 +203,30 @@ type CacheConfig struct {
 	// ("leafcloud-alerts-*"). Messages that arrive live are still
 	// cached, and opening the conversation still fetches its page.
 	BackfillIgnore []string `toml:"backfill_ignore"`
+	// CatchUp turns off (false) the catch-up a socket connect runs: one
+	// history page for each conversation the cache already follows that
+	// got new messages while slk-gio was not listening. On when unset.
+	// Conversations BackfillIgnore names are never caught up.
+	CatchUp *bool `toml:"catch_up"`
+	// CatchUpLimit bounds how many conversations one connect catches
+	// up; 0 means DefaultCatchUpLimit.
+	CatchUpLimit int `toml:"catch_up_limit"`
+}
+
+// DefaultCatchUpLimit is how many conversations a connect catches up
+// when catch_up_limit is unset.
+const DefaultCatchUpLimit = 20
+
+// CatchUpOnConnect reports whether a socket connect catches up the
+// conversations it missed.
+func (c CacheConfig) CatchUpOnConnect() bool { return c.CatchUp == nil || *c.CatchUp }
+
+// CatchUpMax is how many conversations one connect may catch up.
+func (c CacheConfig) CatchUpMax() int {
+	if c.CatchUpLimit <= 0 {
+		return DefaultCatchUpLimit
+	}
+	return c.CatchUpLimit
 }
 
 // IgnoresBackfill reports whether the backfill skips the conversation

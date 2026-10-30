@@ -95,6 +95,7 @@ func main() {
 		if s, ok := be.(*backend.Slack); ok {
 			s.SetPaused(h.anyFocused)
 			s.SetBackfillIgnore(cfg.Cache.IgnoresBackfill)
+			s.SetCatchUp(cfg.Cache.CatchUpOnConnect(), cfg.Cache.CatchUpMax())
 			if doBackfill {
 				s.EnableBackfill(horizon)
 			}

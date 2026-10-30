@@ -1077,3 +1077,18 @@ background = "#000000"
 		t.Fatalf("empty: %q %v", name, colors)
 	}
 }
+
+func TestCacheCatchUp(t *testing.T) {
+	def := Default().Cache
+	if !def.CatchUpOnConnect() || def.CatchUpMax() != DefaultCatchUpLimit {
+		t.Fatalf("defaults: on=%v max=%d", def.CatchUpOnConnect(), def.CatchUpMax())
+	}
+	cfg := loadConfigString(t, `
+[cache]
+catch_up = false
+catch_up_limit = 5
+`)
+	if cfg.Cache.CatchUpOnConnect() || cfg.Cache.CatchUpMax() != 5 {
+		t.Fatalf("set: on=%v max=%d", cfg.Cache.CatchUpOnConnect(), cfg.Cache.CatchUpMax())
+	}
+}

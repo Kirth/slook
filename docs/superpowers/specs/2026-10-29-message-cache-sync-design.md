@@ -24,8 +24,15 @@ the cache can say what it is complete *for*.
   `conversations.history` for every channel. Everything here is one request
   per user action, in the official web client's request shape
   (`HistoryWithVersions`: 28 per page, `inclusive`, `ignore_replies`,
-  `cached_latest_updates`). The only autonomous fetching is the backfill, which
-  is opt-in, slow and bounded, and never runs on reconnect.
+  `cached_latest_updates`). Autonomous fetching is limited to two things. The
+  backfill is opt-in, slow and bounded, and never runs on reconnect. The
+  catch-up on connect (added 2026-10-30, `msgsync.Stale`) fetches one page for
+  each conversation the cache already follows that got new messages while the
+  socket was down. It never catches up a conversation the cache has not
+  followed, nor one `backfill_ignore` names. It is capped
+  (`[cache] catch_up_limit`, default 20), paced 3 s apart, and stops when the
+  socket drops; `[cache] catch_up = false` turns it off. That makes it a
+  handful of requests after time away, never a sweep.
 - **The cache is a cache.** Slack stays authoritative; every open still issues
   one revalidation page, and spans only ever record what Slack returned.
 - The TUI need not keep working, but the root module builds and vets.

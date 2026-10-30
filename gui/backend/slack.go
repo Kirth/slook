@@ -20,6 +20,7 @@ import (
 	"github.com/gammons/slk/gui/rich"
 	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/core/blocks"
 	"github.com/gammons/slk/internal/export"
@@ -75,10 +76,14 @@ type Slack struct {
 	// autoStart is the -backfill flag's horizon. bf is the backfill;
 	// active counts fetches in flight by label; syncPending says a
 	// SyncChanged is already queued. All under mu.
-	runCtx      context.Context
-	paused      func() bool
-	ignore      func(name string) bool // conversations the backfill skips, by name
-	autoStart   *time.Duration
+	runCtx    context.Context
+	paused    func() bool
+	ignore    func(name string) bool // conversations the backfill skips, by name
+	autoStart *time.Duration
+	// catchUpOn and catchUpMax shape the catch-up a connect runs (see
+	// catchUpAfterConnect); on, and DefaultCatchUpLimit, unless set.
+	catchUpOn   bool
+	catchUpMax  int
 	bf          backfillRun
 	active      map[string]int
 	syncPending bool
@@ -124,6 +129,9 @@ func ConnectSlack(ctx context.Context, tok slackclient.Token, db *cache.DB, cach
 		kinds:    map[string]Kind{},
 		profiles: map[string]Profile{},
 		active:   map[string]int{},
+
+		catchUpOn:  true,
+		catchUpMax: config.DefaultCatchUpLimit,
 	}
 	if db != nil {
 		// The workspace row first: users and channels reference it.
@@ -1192,8 +1200,12 @@ func (s *Slack) Run(ctx context.Context, emit func(Event)) error {
 	var (
 		up          bool      // what the windows were last told
 		wasUp       bool      // the socket has been up at least once
-		lastCatchUp time.Time // the last reconnect catch-up
+		lastCatchUp time.Time // the last connect catch-up
+		// conn is the current connection's background work (its
+		// catch-up), ended when the socket drops.
+		conn connScope
 	)
+	defer conn.end()
 	for {
 		select {
 		case <-ctx.Done():
@@ -1252,15 +1264,19 @@ func (s *Slack) Run(ctx context.Context, emit func(Event)) error {
 						_ = s.client.SubscribePresence(peers)
 					}
 					// The socket replays nothing that happened while it
-					// was down: refresh every conversation's read state
-					// in one request. Open windows catch their history up
-					// themselves when they hear the connection is back.
-					if wasUp && time.Since(lastCatchUp) > reconnectGate {
+					// was down (or before slk-gio started): one
+					// client.counts brings every conversation's read
+					// state and newest message, and the conversations
+					// the cache follows that got new messages are caught
+					// up a page each. Open windows catch up themselves
+					// when they hear the connection is back.
+					if !wasUp || time.Since(lastCatchUp) > reconnectGate {
 						lastCatchUp = time.Now()
-						go s.refreshCounts(ctx)
+						go s.afterConnect(conn.begin(ctx), !wasUp)
 					}
 					wasUp = true
 				default:
+					conn.end() // a catch-up in flight stops with the socket
 					fmt.Fprintf(os.Stderr, "slk-gio: %s websocket disconnected; reconnecting\n", time.Now().Format(time.TimeOnly))
 					if s.db != nil {
 						// No span reaches the head any more.
@@ -1291,22 +1307,47 @@ func (s *Slack) Run(ctx context.Context, emit func(Event)) error {
 	}
 }
 
-// refreshCounts asks client.counts for every conversation's read state
-// after a reconnect and hands it to Run, which tells the list.
-func (s *Slack) refreshCounts(ctx context.Context) {
+// connScope is one socket connection's background work: begin starts
+// it (ending the previous one's), end stops it.
+type connScope struct{ cancel context.CancelFunc }
+
+func (c *connScope) begin(parent context.Context) context.Context {
+	c.end()
+	ctx, cancel := context.WithCancel(parent)
+	c.cancel = cancel
+	return ctx
+}
+
+func (c *connScope) end() {
+	if c.cancel != nil {
+		c.cancel()
+		c.cancel = nil
+	}
+}
+
+// afterConnect runs once per connect (gated by reconnectGate): one
+// client.counts for every conversation's read state and newest message.
+// After a reconnect the read state goes to Run for the list (the first
+// connect's is what Conversations just loaded); then the conversations
+// the socket missed are caught up (catchUpAfterConnect).
+func (s *Slack) afterConnect(ctx context.Context, first bool) {
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
 	unreads, _, err := s.client.GetUnreadCountsContext(cctx)
+	cancel()
 	if err != nil {
 		if ctx.Err() == nil {
-			fmt.Fprintln(os.Stderr, "slk-gio: unread counts after reconnect:", err)
+			fmt.Fprintln(os.Stderr, "slk-gio: unread counts after connect:", err)
 		}
 		return
 	}
-	select {
-	case s.queue <- rawCounts{unreads}:
-	case <-ctx.Done():
+	if !first {
+		select {
+		case s.queue <- rawCounts{unreads}:
+		case <-ctx.Done():
+			return
+		}
 	}
+	s.catchUpAfterConnect(ctx, unreads)
 }
 
 // applyEvent writes a message frame to the cache and tells the windows.
