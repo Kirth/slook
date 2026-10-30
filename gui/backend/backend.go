@@ -218,6 +218,21 @@ type PresenceChanged struct {
 	Active bool
 }
 
+// UserGroup is one of the workspace's usergroups: the @team behind a
+// <!subteam^S…> mention. Mine says the user is a member.
+type UserGroup struct {
+	ID          string
+	Handle      string // what a mention reads, without the "@"
+	Name        string
+	Description string
+	Members     []string // user IDs
+	Mine        bool
+}
+
+// UserGroupsChanged is the workspace's usergroups changing (loaded at
+// connect, or changed in Slack). Mine is the IDs of the user's own.
+type UserGroupsChanged struct{ Mine []string }
+
 // NotifyChanged is a conversation's notify level changing.
 type NotifyChanged struct {
 	ChannelID string
@@ -343,6 +358,7 @@ func (ReadChanged) isEvent()       {}
 func (SectionsChanged) isEvent()   {}
 func (MutesChanged) isEvent()      {}
 func (NotifyChanged) isEvent()     {}
+func (UserGroupsChanged) isEvent() {}
 func (PresenceChanged) isEvent()   {}
 func (HistoryUpdated) isEvent()    {}
 func (ReactionChanged) isEvent()   {}
@@ -404,6 +420,9 @@ type Backend interface {
 	// full member list can be huge, and the people the user talks with
 	// are the ones slk has seen.
 	People(ctx context.Context) ([]Person, error)
+	// UserGroups is the workspace's usergroups as last loaded, by
+	// handle; it makes no request. Changes arrive as UserGroupsChanged.
+	UserGroups() []UserGroup
 	// Commands lists the slash commands available, without aliases,
 	// sorted by name.
 	Commands(ctx context.Context) ([]Command, error)

@@ -79,7 +79,7 @@ func newMsgView(h *hub, th *material.Theme, box *inbox, busy func(backend.Attach
 		profiles:    map[string]*profileEntry{},
 		downloading: map[string]bool{},
 	}
-	v.view = richView{th: th, images: h.images, box: box, busy: busy}
+	v.view = richView{th: th, images: h.images, box: box, busy: busy, myGroup: h.isMyGroup}
 	return v
 }
 

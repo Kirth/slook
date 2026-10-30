@@ -61,26 +61,47 @@ func labels(cs []Choice) []string {
 }
 
 func TestMatchPeople(t *testing.T) {
-	got := MatchPeople("ada", people, 10)
+	got := MatchPeople("ada", people, nil, 10)
 	if want := []string{"Ada Lovelace", "Zoë Adams", "Adabot"}; !slices.Equal(labels(got), want) {
 		t.Fatalf("ada: %v, want %v", labels(got), want)
 	}
 	if got[0].Insert != "@Ada Lovelace" || got[0].Wire != "<@U1>" || got[0].ID != "U1" {
 		t.Fatalf("choice %+v", got[0])
 	}
-	if got := MatchPeople("zoe", people, 10); len(got) != 1 || got[0].Label != "Zoë Adams" {
+	if got := MatchPeople("zoe", people, nil, 10); len(got) != 1 || got[0].Label != "Zoë Adams" {
 		t.Fatalf("accent-blind: %v", labels(got))
 	}
-	if got := MatchPeople("augusta", people, 10); len(got) != 1 || got[0].Label != "Ada Lovelace" {
+	if got := MatchPeople("augusta", people, nil, 10); len(got) != 1 || got[0].Label != "Ada Lovelace" {
 		t.Fatalf("real name: %v", labels(got))
 	}
-	if got := MatchPeople("he", people, 10); len(got) == 0 || got[0].Wire != "<!here>" {
+	if got := MatchPeople("he", people, nil, 10); len(got) == 0 || got[0].Wire != "<!here>" {
 		t.Fatalf("special: %v", labels(got))
 	}
-	if got := MatchPeople("", people, 2); len(got) != 2 {
+	if got := MatchPeople("", people, nil, 2); len(got) != 2 {
 		t.Fatalf("limit: %v", labels(got))
 	}
 }
+
+func TestMatchPeopleOffersGroups(t *testing.T) {
+	groups := []backend.UserGroup{
+		{ID: "S1", Handle: "ada-fans", Name: "Ada's fans", Members: []string{"U1", "U2"}},
+		{ID: "S2", Handle: "design", Name: "Design"},
+		{ID: "S3", Handle: "ops", Name: "Platform and Ada support"},
+	}
+	got := MatchPeople("ada", people, groups, 10)
+	if want := []string{"@ada-fans", "Ada Lovelace", "Zoë Adams", "Adabot", "@ops"}; !slices.Equal(labels(got), want) {
+		t.Fatalf("ada: %v, want %v", labels(got), want)
+	}
+	if c := got[0]; c.Insert != "@ada-fans" || c.Wire != "<!subteam^S1|@ada-fans>" || c.Detail != "Ada's fans · 2 members" {
+		t.Fatalf("group choice %+v", c)
+	}
+	m := Mentions{c0(got).Insert: c0(got).Wire}
+	if w := m.Wire("cc @ada-fans please"); w != "cc <!subteam^S1|@ada-fans> please" {
+		t.Fatalf("wire %q", w)
+	}
+}
+
+func c0(cs []Choice) Choice { return cs[0] }
 
 func TestMatchChannels(t *testing.T) {
 	convs := []backend.Conversation{
@@ -116,13 +137,13 @@ func TestMentionsWire(t *testing.T) {
 
 func TestReadableRoundTrip(t *testing.T) {
 	names := func(id string) (string, bool) {
-		n, ok := map[string]string{"U1": "Ada Lovelace", "C1": "general"}[id]
+		n, ok := map[string]string{"U1": "Ada Lovelace", "C1": "general", "S2": "design"}[id]
 		return n, ok
 	}
 	m := Mentions{}
-	wire := "hi <@U1> in <#C1|general>, <!here>; <@U77> unknown"
+	wire := "hi <@U1> in <#C1|general>, <!here>; <@U77> unknown, <!subteam^S1|@eng> and <!subteam^S2>, <!subteam^S9>"
 	read := Readable(wire, names, m)
-	if read != "hi @Ada Lovelace in #general, @here; <@U77> unknown" {
+	if read != "hi @Ada Lovelace in #general, @here; <@U77> unknown, @eng and @design, <!subteam^S9>" {
 		t.Fatalf("readable %q", read)
 	}
 	if back := m.Wire(read); back != wire {

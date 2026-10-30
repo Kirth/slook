@@ -50,6 +50,7 @@ type hub struct {
 	// when they are off).
 	muted          map[string]bool
 	levels         map[string]backend.NotifyLevel // slk's notify levels, by channel ID
+	myGroups       map[string]bool                // the user's own usergroups, by ID
 	notes          *notifications.Center
 	list           *listWindow
 	search         *searchWindow          // the one search window, or nil
@@ -215,6 +216,22 @@ func (h *hub) dispatch(ev backend.Event) {
 		}
 		for _, c := range h.chats {
 			to = append(to, &c.box)
+		}
+	case backend.UserGroupsChanged:
+		h.myGroups = map[string]bool{}
+		for _, id := range ev.Mine {
+			h.myGroups[id] = true
+		}
+		if h.notes != nil {
+			h.notes.SetGroups(ev.Mine)
+		}
+		// Bodies are built when read: open windows read theirs again,
+		// so mentions show the groups' names.
+		for _, c := range h.chats {
+			to = append(to, &c.box)
+		}
+		for _, t := range h.threads {
+			to = append(to, &t.box)
 		}
 	case backend.NotifyChanged:
 		if h.levels == nil {
@@ -627,6 +644,33 @@ func (h *hub) openNote(n notifications.Note) {
 // peopleFresh is how long the people list serves before it is read
 // again: new people show up as messages arrive.
 const peopleFresh = 5 * time.Minute
+
+// seedGroups takes the user's own usergroups from what the backend
+// already knows (its cache), before any UserGroupsChanged: one only
+// comes when the groups change.
+func (h *hub) seedGroups() {
+	var mine []string
+	h.mu.Lock()
+	h.myGroups = map[string]bool{}
+	for _, g := range h.be.UserGroups() {
+		if g.Mine {
+			h.myGroups[g.ID] = true
+			mine = append(mine, g.ID)
+		}
+	}
+	notes := h.notes
+	h.mu.Unlock()
+	if notes != nil {
+		notes.SetGroups(mine)
+	}
+}
+
+// isMyGroup reports whether a usergroup is one of the user's.
+func (h *hub) isMyGroup(id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.myGroups[id]
+}
 
 // people is who @ completes to: the backend's list, read in the
 // background the first time and again once it is peopleFresh old. Until

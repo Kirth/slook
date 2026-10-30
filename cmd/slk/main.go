@@ -43,6 +43,7 @@ import (
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/ui/themeswitcher"
 	"github.com/gammons/slk/internal/ui/workspace"
+	"github.com/gammons/slk/internal/usergroups"
 	"github.com/gammons/slk/internal/wake"
 	"golang.design/x/clipboard"
 	"golang.org/x/term"
@@ -1722,7 +1723,7 @@ func run() error {
 					log.Printf("usergroups fetch for %s failed: %v (subteam mentions will render as @group)", wctx.TeamName, err)
 					return
 				}
-				byID := usergroupHandles(groups)
+				byID := usergroups.Handles(groups)
 				wctx.SetUserGroups(byID)
 				p.Send(ui.UserGroupsLoadedMsg{
 					TeamID:     teamID,

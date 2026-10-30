@@ -66,6 +66,13 @@ the conversation here or in Slack. With `notify_command` set, or
 without a service, the basic notification is shown, which cannot open
 anything.
 
+A mention of a usergroup you are in counts as a mention of you, as in
+Slack. slk reads the workspace's usergroups with their members once per
+connection (one request), keeps them in its cache, and reads them again
+when Slack says one changed (at most once a minute). In messages a
+usergroup reads as `@handle`, in the mention colour when it is yours;
+hovering it shows its name, description and size.
+
 Each conversation can override this in its details panel (click its
 name, then Notifications): **Default** follows `[notifications]`,
 **Every message** notifies for every new message, even while the
@@ -75,8 +82,8 @@ your phone are not changed.
 
 The composer completes as you type:
 
-- `@` suggests people slk has seen, plus `@here`, `@channel` and
-  `@everyone`.
+- `@` suggests people slk has seen, the workspace's usergroups
+  (`@eng`), plus `@here`, `@channel` and `@everyone`.
 - `#` suggests your channels.
 - `:` with two or more letters suggests emoji, the workspace's custom
   ones included.
@@ -349,13 +356,14 @@ with `GIORENDERER=opengl` and without.
 
 ## Not there yet
 
-Dialogs that some commands open (an app's modal) and the buttons on
-ephemeral replies (`/giphy`'s Shuffle and Send) do nothing yet; joining
-a channel you are not in and starting a new DM through `/open` and
-`/msg` are not there either, nor `/leave`. Threads (replies show only
-as a count), reactions (cached, not drawn), scrolling back past the
-newest hundred messages by hand (a search result pages back for you;
-the window does not on scroll yet), custom emoji as pictures
-(they show as `:name:`), usergroup names, strike-through (the text is
-dimmed instead), selecting message text (code blocks can be selected),
-and more than one workspace at a time.
+- **Sending files.** Pasting or dropping a picture or file into the
+  composer does nothing yet; attachments can only be shown and saved.
+- **Starting conversations.** Joining a channel you are not in, or
+  starting a new DM (`/open`, `/msg`), is not there; nor `/leave`.
+- **Typing indicators.** The socket's "is typing" events are not shown.
+- **Interactive apps.** Dialogs some commands open (an app's modal) and
+  the buttons on ephemeral replies (`/giphy`'s Shuffle and Send) do
+  nothing yet.
+- **Selecting message text.** Only code blocks can be selected.
+- **Strike-through** is drawn dimmed instead.
+- **More than one workspace** at a time.

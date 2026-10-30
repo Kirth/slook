@@ -144,7 +144,7 @@ func newListWindow(h *hub, connected bool) *listWindow {
 		presence:  map[string]presence{},
 	}
 	l.box.w = l.w
-	l.view = richView{th: l.th, images: h.images, box: &l.box}
+	l.view = richView{th: l.th, images: h.images, box: &l.box, myGroup: h.isMyGroup}
 	l.filter.SingleLine = true
 	l.filter.Submit = true
 	l.list.Axis = layout.Vertical

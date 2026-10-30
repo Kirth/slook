@@ -53,7 +53,7 @@ func TestFromRichTextStylesAndEntities(t *testing.T) {
 		{Text: " "},
 		{Text: "#general", ID: "C1", Kind: SpanChannel},
 		{Text: " "},
-		{Text: "@backend", Kind: SpanBroadcast},
+		{Text: "@backend", ID: "S1", Kind: SpanBroadcast},
 		{Text: " "},
 		{Text: "@here", Kind: SpanBroadcast},
 		{Text: " "},

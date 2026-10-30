@@ -1024,3 +1024,22 @@ func TestDispatchMeMessage_CapturedFrame(t *testing.T) {
 		t.Fatalf("messages = %v subtypes = %v, want [waves] [me_message]", h.messages, h.subtypes)
 	}
 }
+
+type subteamHandler struct {
+	mockEventHandler
+	changed int
+}
+
+func (h *subteamHandler) OnSubteamChanged() { h.changed++ }
+
+func TestDispatchSubteamEvents(t *testing.T) {
+	h := &subteamHandler{}
+	for _, typ := range []string{"subteam_created", "subteam_updated", "subteam_members_changed", "subteam_self_added", "subteam_self_removed"} {
+		dispatchWebSocketEvent([]byte(`{"type":"`+typ+`","subteam_id":"S1"}`), h)
+	}
+	if h.changed != 5 {
+		t.Fatalf("OnSubteamChanged called %d times, want 5", h.changed)
+	}
+	// A handler without the interface is left alone.
+	dispatchWebSocketEvent([]byte(`{"type":"subteam_updated"}`), &mockEventHandler{})
+}

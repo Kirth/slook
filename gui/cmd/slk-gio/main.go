@@ -93,6 +93,7 @@ func main() {
 		if cfg.Notifications.Enabled {
 			h.notes = notifications.New(cfg.Notifications, be.Self(), notifications.NewSink(cfg.Notifications, h.openNote))
 		}
+		h.seedGroups()
 		if s, ok := be.(*backend.Slack); ok {
 			s.SetPaused(h.anyFocused)
 			s.SetBackfillIgnore(cfg.Cache.IgnoresBackfill)

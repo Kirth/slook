@@ -134,7 +134,7 @@ func inlineSpan(e slack.RichTextSectionElement, n Names) (Span, bool) {
 		if !ok {
 			name = v.UsergroupID
 		}
-		return styled(Span{Text: "@" + name, Kind: SpanBroadcast}, v.Style), true
+		return styled(Span{Text: "@" + name, ID: v.UsergroupID, Kind: SpanBroadcast}, v.Style), true
 	case *slack.RichTextSectionBroadcastElement:
 		return styled(Span{Text: "@" + v.Range, Kind: SpanBroadcast}, v.Style), true
 	case *slack.RichTextSectionEmojiElement:

@@ -43,3 +43,23 @@ func TestInText(t *testing.T) {
 		})
 	}
 }
+
+func TestInGroups(t *testing.T) {
+	mine := []string{"S1", "S22"}
+	for _, c := range []struct {
+		text   string
+		groups []string
+		want   bool
+	}{
+		{"ping <!subteam^S1>", mine, true},
+		{"ping <!subteam^S22|@eng> now", mine, true},
+		{"ping <!subteam^S2|@design>", mine, false},
+		{"ping <!subteam^S11>", mine, false}, // a longer ID is another group
+		{"ping <!subteam^S1>", nil, false},
+		{"S1 in prose", mine, false},
+	} {
+		if got := InGroups(c.text, c.groups); got != c.want {
+			t.Errorf("InGroups(%q, %v) = %v, want %v", c.text, c.groups, got, c.want)
+		}
+	}
+}

@@ -119,14 +119,16 @@ func TestFakeMeIsItalic(t *testing.T) {
 	}
 }
 
-// nextPosted is the next MessagePosted, skipping presence updates.
+// nextPosted is the next MessagePosted, skipping the startup events
+// (presence, usergroups).
 func nextPosted(t *testing.T, got <-chan Event) MessagePosted {
 	t.Helper()
 	for ev := range got {
-		if m, ok := ev.(MessagePosted); ok {
-			return m
-		}
-		if _, ok := ev.(PresenceChanged); !ok {
+		switch ev := ev.(type) {
+		case MessagePosted:
+			return ev
+		case PresenceChanged, UserGroupsChanged:
+		default:
 			t.Fatalf("got %#v, want a message", ev)
 		}
 	}
@@ -323,5 +325,20 @@ func TestFakePeople(t *testing.T) {
 	ps, err := NewFake(time.Unix(1_700_000_000, 0)).People(context.Background())
 	if err != nil || len(ps) == 0 || ps[0].Name != "Ada Lovelace" {
 		t.Fatalf("people %v, %v", ps, err)
+	}
+}
+
+func TestFakeUserGroups(t *testing.T) {
+	f := NewFake(time.Unix(1_700_000_000, 0))
+	groups := f.UserGroups()
+	if len(groups) != 2 || groups[1].Handle != "eng" || !groups[1].Mine || groups[0].Mine {
+		t.Fatalf("groups %+v", groups)
+	}
+	p, err := f.Profile(context.Background(), "S1")
+	if err != nil || p.Name != "Engineering" || p.Handle != "eng" || p.StatusText != "3 members, including you" {
+		t.Fatalf("profile %+v, %v", p, err)
+	}
+	if name, ok := fakeNames.UserGroup("S2"); !ok || name != "design" {
+		t.Fatalf("UserGroup(S2) = %q, %v", name, ok)
 	}
 }

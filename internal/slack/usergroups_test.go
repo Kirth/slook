@@ -39,3 +39,23 @@ func TestGetUserGroupsError(t *testing.T) {
 		t.Error("expected error to propagate")
 	}
 }
+
+func TestGetUserGroupsWithMembersAsksForUsersAndCount(t *testing.T) {
+	var params slack.GetUserGroupsParams
+	mock := &mockSlackAPI{
+		getUserGroupsContextFn: func(ctx context.Context, options ...slack.GetUserGroupsOption) ([]slack.UserGroup, error) {
+			for _, o := range options {
+				o(&params)
+			}
+			return []slack.UserGroup{{ID: "S1", Handle: "eng", Users: []string{"U1"}}}, nil
+		},
+	}
+	c := &Client{api: mock}
+	groups, err := c.GetUserGroupsWithMembers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !params.IncludeUsers || !params.IncludeCount || len(groups) != 1 || groups[0].Users[0] != "U1" {
+		t.Fatalf("params %+v, groups %+v", params, groups)
+	}
+}

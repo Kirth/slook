@@ -982,6 +982,17 @@ func (c *Client) GetUserGroups(ctx context.Context) ([]slack.UserGroup, error) {
 	return groups, nil
 }
 
+// GetUserGroupsWithMembers is GetUserGroups with each group's members
+// and size (include_users, include_count): one larger request, for a
+// client that needs to know which groups the user is in.
+func (c *Client) GetUserGroupsWithMembers(ctx context.Context) ([]slack.UserGroup, error) {
+	groups, err := c.api.GetUserGroupsContext(ctx, slack.GetUserGroupsOptionIncludeUsers(true), slack.GetUserGroupsOptionIncludeCount(true))
+	if err != nil {
+		return nil, fmt.Errorf("getting usergroups: %w", err)
+	}
+	return groups, nil
+}
+
 // ListCustomEmoji fetches the workspace's custom emoji list via Slack's
 // emoji.list API. Returns a map of emoji name -> URL or "alias:targetname".
 // The map is empty if the workspace has no custom emojis.

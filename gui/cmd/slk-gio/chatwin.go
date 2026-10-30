@@ -222,6 +222,7 @@ func newChatWindow(h *hub, conv backend.Conversation, connected bool) *chatWindo
 	c.composeBox = newComposeBox(h, th, &c.box, conv.ID, "")
 	c.onEdit, c.notify = c.composeBox.beginEdit, c.composeBox.note
 	c.composeBox.people, c.composeBox.convs, c.composeBox.rv = h.people, h.cachedConversations, &c.msgView.view
+	c.composeBox.groups = h.be.UserGroups
 	c.onEditLast = func() (backend.Message, bool) { return chat.LastOwn(c.tl.Messages()) }
 	c.list.Axis = layout.Vertical
 	c.list.ScrollToEnd = true
@@ -394,6 +395,10 @@ func (c *chatWindow) apply() {
 		switch v := item.(type) {
 		case backend.NotifyChanged:
 			c.conv.Notify = v.Level
+		case backend.UserGroupsChanged:
+			if !c.loading {
+				go c.resync() // bodies again, with the groups' names
+			}
 		case backend.MutesChanged:
 			c.conv.Muted = v.Muted[c.conv.ID]
 		case historyLoaded:

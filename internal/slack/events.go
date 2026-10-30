@@ -29,6 +29,15 @@ type PendingEventHandler interface {
 	OnPendingEvents()
 }
 
+// SubteamEventHandler optionally learns that the workspace's usergroups
+// changed: one was created, renamed or disabled, or its members (the
+// user among them, perhaps) changed. It carries no payload; a handler
+// that cares reads the groups again (usergroups.list). The dispatcher
+// type-asserts it, so a handler without it is unaffected.
+type SubteamEventHandler interface {
+	OnSubteamChanged()
+}
+
 // EventHandler processes real-time events from Slack.
 type EventHandler interface {
 	// OnMessage delivers a new or edited message. subtype mirrors
@@ -813,6 +822,11 @@ func dispatchWebSocketEvent(data []byte, handler EventHandler) {
 			return
 		}
 		handler.OnChannelSectionChannelsRemoved(raw.SectionID, raw.ChannelIDs)
+
+	case "subteam_created", "subteam_updated", "subteam_members_changed", "subteam_self_added", "subteam_self_removed":
+		if sh, ok := handler.(SubteamEventHandler); ok {
+			sh.OnSubteamChanged()
+		}
 
 	case "pref_change":
 		var evt wsPrefChangeEvent

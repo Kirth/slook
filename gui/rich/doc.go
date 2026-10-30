@@ -22,7 +22,7 @@ const (
 	SpanText      SpanKind = iota
 	SpanMention            // @someone
 	SpanChannel            // #channel
-	SpanBroadcast          // @here, @channel, @everyone, @usergroup
+	SpanBroadcast          // @here, @channel, @everyone, @usergroup (ID set)
 	SpanEmoji              // a custom emoji with no glyph: ":name:"
 	SpanMuted              // secondary text: attachment author, footer
 )

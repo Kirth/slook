@@ -122,6 +122,7 @@ func newThreadWindow(h *hub, conv backend.Conversation, ts string, connected boo
 	t.composeBox = newComposeBox(h, th, &t.box, conv.ID, ts)
 	t.onEdit, t.notify = t.composeBox.beginEdit, t.composeBox.note
 	t.composeBox.people, t.composeBox.convs, t.composeBox.rv = h.people, h.cachedConversations, &t.msgView.view
+	t.composeBox.groups = h.be.UserGroups
 	t.onEditLast = func() (backend.Message, bool) {
 		if m, ok := chat.LastOwn(t.thread.Replies()); ok {
 			return m, true
@@ -268,6 +269,10 @@ func (t *threadWindow) apply() {
 				go t.load()
 			}
 			t.connected = v.Connected
+		case backend.UserGroupsChanged:
+			if !t.loading {
+				go t.load() // bodies again, with the groups' names
+			}
 		case backend.HistoryUpdated:
 			t.thread.Merge(v.Messages, v.Deleted)
 			for _, ts := range v.Deleted {

@@ -132,7 +132,7 @@ func newSearchWindow(h *hub, connected bool) *searchWindow {
 		bars:      map[string]*motion.Tween{},
 	}
 	s.box.w = s.w
-	s.view = richView{th: s.th, images: h.images, box: &s.box}
+	s.view = richView{th: s.th, images: h.images, box: &s.box, myGroup: h.isMyGroup}
 	s.ed.SingleLine = true
 	s.ed.Submit = true
 	s.horizon.Value = "90d"

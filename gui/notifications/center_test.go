@@ -21,7 +21,7 @@ var on = config.Notifications{Enabled: true, OnMention: true, OnDM: true, OnKeyw
 
 func msg(ch, ts, author, text string) backend.Message {
 	return backend.Message{ChannelID: ch, TS: ts, Author: author, AuthorID: "U-" + author, Text: text,
-		Body: rich.FromMrkdwn(text, nil)}
+		Body: rich.FromMrkdwn(text, rich.MapNames{})}
 }
 
 var (
@@ -110,5 +110,29 @@ func TestNoteText(t *testing.T) {
 	b := Body(long)
 	if strings.Contains(b, "\n") || strings.Contains(b, "*") || len([]rune(b)) != bodyRunes || !strings.HasSuffix(b, "…") {
 		t.Fatalf("body %q", b)
+	}
+}
+
+func TestGroupMentionsNotifyWhenYours(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cfg  config.Notifications
+		text string
+		conv backend.Conversation
+		want bool
+	}{
+		{"your group", on, "<!subteam^S1|@eng> look", general, true},
+		{"your group, bare", on, "<!subteam^S1> look", general, true},
+		{"another group", on, "<!subteam^S2|@design> look", general, false},
+		{"your group, muted", on, "<!subteam^S1> look", backend.Conversation{ID: "C1", Kind: backend.KindChannel, Muted: true}, false},
+		{"your group, nothing here", on, "<!subteam^S1> look", backend.Conversation{ID: "C1", Kind: backend.KindChannel, Notify: backend.NotifyNone}, false},
+		{"your group, mentions off", config.Notifications{Enabled: true, OnDM: true}, "<!subteam^S1> look", general, false},
+	} {
+		rec := &recorder{}
+		center := New(c.cfg, "ME", rec)
+		center.SetGroups([]string{"S1"})
+		if got := center.Message(msg("C1", "1.0", "Ada", c.text), c.conv, false); got != c.want {
+			t.Errorf("%s: notified %v, want %v", c.name, got, c.want)
+		}
 	}
 }

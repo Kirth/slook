@@ -89,8 +89,15 @@ var fakeAuthors = []string{"Ada Lovelace", "Grace Hopper", "Linus Torvalds", "Ma
 
 // fakeNames resolves the IDs the fake lines mention.
 var fakeNames = rich.MapNames{
-	Users:    map[string]string{"U1": "Ada Lovelace", "U2": "Grace Hopper", "U3": "Margaret Hamilton", "U4": "Linus Torvalds"},
-	Channels: map[string]string{"C1": "general", "C3": "eng-backend"},
+	Users:      map[string]string{"U1": "Ada Lovelace", "U2": "Grace Hopper", "U3": "Margaret Hamilton", "U4": "Linus Torvalds"},
+	Channels:   map[string]string{"C1": "general", "C3": "eng-backend"},
+	UserGroups: map[string]string{"S1": "eng", "S2": "design"},
+}
+
+// fakeGroups are the fake workspace's usergroups: one the user is in.
+var fakeGroups = []UserGroup{
+	{ID: "S2", Handle: "design", Name: "Design", Description: "Product and visual design", Members: []string{"U1", "U3"}},
+	{ID: "S1", Handle: "eng", Name: "Engineering", Description: "Everyone who ships code", Members: []string{"U2", "U4", fakeSelf}, Mine: true},
 }
 
 // fakeLines are mrkdwn, as Slack would send them, so the formatting
@@ -160,6 +167,8 @@ func NewFake(now time.Time) *Fake {
 	f.replyLocked("C1", log[len(log)-6].TS, "Margaret Hamilton", "Following up in <#C3>", true)
 	// Reactions, one the user is in and one custom, and custom emoji in
 	// a line of text.
+	// Usergroup mentions: one labelled, one bare, one of them the user's.
+	f.appendLocked("C1", "Ada Lovelace", "<!subteam^S1|@eng> the flaky test is back, can someone look? cc <!subteam^S2>")
 	f.appendLocked("C1", "Linus Torvalds", "Merged :partyparrot: and tagged, :shipit: when ready")
 	feed := f.pageLocked("C1", "")
 	newest, earlier := feed[len(feed)-1].TS, feed[len(feed)-4].TS
@@ -283,6 +292,11 @@ var fakeTitles = map[string]string{
 
 func (f *Fake) Profile(_ context.Context, id string) (Profile, error) {
 	name := id
+	for _, g := range fakeGroups {
+		if g.ID == id {
+			return GroupProfile(g), nil
+		}
+	}
 	if n, ok := fakeNames.Users[id]; ok {
 		name = n
 	} else if n, ok := fakeMembers[id]; ok {
@@ -380,6 +394,8 @@ func (f *Fake) SetNotify(ctx context.Context, channelID string, level NotifyLeve
 		return ctx.Err()
 	}
 }
+
+func (f *Fake) UserGroups() []UserGroup { return append([]UserGroup(nil), fakeGroups...) }
 
 func (f *Fake) WebURL(string) string { return "" }
 
@@ -724,6 +740,7 @@ func (f *Fake) Send(ctx context.Context, channelID, text string) error {
 
 func (f *Fake) Run(ctx context.Context, emit func(Event)) error {
 	emit(ConnectionChanged{Connected: true})
+	emit(UserGroupsChanged{Mine: []string{"S1"}})
 	emit(PresenceChanged{UserID: "U1", Active: true})
 	emit(PresenceChanged{UserID: "U3", Active: false})
 	var tick <-chan time.Time

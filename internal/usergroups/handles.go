@@ -1,4 +1,4 @@
-package main
+package usergroups
 
 import (
 	"strings"
@@ -6,23 +6,27 @@ import (
 	"github.com/slack-go/slack"
 )
 
-func usergroupHandles(groups []slack.UserGroup) map[string]string {
+// Handles maps each usergroup's ID to the handle a mention of it uses
+// (the "eng" of @eng). Groups with nothing mentionable are left out.
+func Handles(groups []slack.UserGroup) map[string]string {
 	byID := make(map[string]string, len(groups))
 	for _, g := range groups {
-		handle := g.Handle
-		if handle == "" {
-			// Fall back to the display name, slugified: a name like
-			// "Platform Team" would otherwise become a handle with a
-			// space in it, which neither the @-token composer
-			// autocomplete nor the word-boundary send translation can
-			// round-trip.
-			handle = slugifyHandle(g.Name)
-		}
-		if handle != "" {
-			byID[g.ID] = handle
+		if h := Handle(g); h != "" {
+			byID[g.ID] = h
 		}
 	}
 	return byID
+}
+
+// Handle is a usergroup's mention handle: its own, or its display name
+// slugified ("Platform Team" -> "platform-team"). A name with a space
+// in it would be a handle neither a composer's @-completion nor a
+// send-time translation can round-trip. "" when nothing usable is left.
+func Handle(g slack.UserGroup) string {
+	if g.Handle != "" {
+		return g.Handle
+	}
+	return slugifyHandle(g.Name)
 }
 
 // slugifyHandle turns a usergroup display name into a mention-safe

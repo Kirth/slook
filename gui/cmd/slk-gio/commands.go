@@ -37,6 +37,7 @@ type commandPopup struct {
 // completionSources is what @, # and : complete from.
 type completionSources struct {
 	people  []backend.Person
+	groups  []backend.UserGroup
 	convs   []backend.Conversation
 	customs map[string]string
 }
@@ -60,7 +61,7 @@ func (p *commandPopup) update(text string, caret int, src func() completionSourc
 				p.start = start
 				switch sigil {
 				case '@':
-					p.choices = chat.MatchPeople(q, s.people, popupRows)
+					p.choices = chat.MatchPeople(q, s.people, s.groups, popupRows)
 				case '#':
 					p.choices = chat.MatchChannels(q, s.convs, popupRows)
 				case ':':

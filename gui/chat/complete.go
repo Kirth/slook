@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -97,17 +98,32 @@ var specials = []struct{ name, detail string }{
 	{"everyone", "Notify everyone in the workspace"},
 }
 
-// MatchPeople is what "@query" completes to: the group mentions whose
-// name starts with it, then people by how well a name matches (a
-// display name, real name or handle starting with it, then any word of
-// them, then anywhere), apps last, case- and accent-blind. An empty
-// query lists everyone, apps last.
-func MatchPeople(query string, people []backend.Person, limit int) []Choice {
+// MatchPeople is what "@query" completes to: the broadcasts (@here…)
+// whose name starts with it, the usergroups whose handle or name
+// starts with it, then people by how well a name matches (a display
+// name, real name or handle starting with it, then any word of them,
+// then anywhere), apps last, then usergroups matching further in;
+// case- and accent-blind. An empty query lists everyone, apps last,
+// then the groups.
+func MatchPeople(query string, people []backend.Person, groups []backend.UserGroup, limit int) []Choice {
 	q := itext.Fold(strings.TrimSpace(query))
 	var out []Choice
 	for _, s := range specials {
 		if q != "" && strings.HasPrefix(s.name, q) {
 			out = append(out, Choice{Label: "@" + s.name, Detail: s.detail, Insert: "@" + s.name, Wire: "<!" + s.name + ">"})
+		}
+	}
+	var laterGroups []Choice
+	for _, g := range groups {
+		if g.Handle == "" {
+			continue
+		}
+		c := groupChoice(g)
+		switch rank := groupRank(q, g); {
+		case rank == 0 && q != "":
+			out = append(out, c)
+		case rank >= 0:
+			laterGroups = append(laterGroups, c)
 		}
 	}
 	type ranked struct {
@@ -144,10 +160,34 @@ func MatchPeople(query string, people []backend.Person, limit int) []Choice {
 		}
 		out = append(out, Choice{Label: p.Name, Detail: detail, Insert: "@" + p.Name, Wire: "<@" + p.ID + ">", ID: p.ID, Avatar: p.AvatarURL})
 	}
+	out = append(out, laterGroups...)
 	if len(out) > limit {
 		out = out[:limit]
 	}
 	return out
+}
+
+// groupChoice is a usergroup as a completion: it reads "@handle" and
+// is sent as Slack's <!subteam^ID|@handle>.
+func groupChoice(g backend.UserGroup) Choice {
+	detail := g.Name
+	n := strconv.Itoa(len(g.Members)) + " members"
+	if len(g.Members) == 1 {
+		n = "1 member"
+	}
+	if detail != "" {
+		detail += " · " + n
+	} else {
+		detail = n
+	}
+	return Choice{Label: "@" + g.Handle, Detail: detail, Insert: "@" + g.Handle,
+		Wire: "<!subteam^" + g.ID + "|@" + g.Handle + ">", ID: g.ID}
+}
+
+// groupRank is how well q matches a usergroup's handle or name, as
+// personRank does a person's.
+func groupRank(q string, g backend.UserGroup) int {
+	return personRank(q, backend.Person{Name: g.Handle, RealName: g.Name})
 }
 
 // personRank is how well q matches p's names: 0 a name starts with it,
@@ -282,11 +322,13 @@ var (
 	wireUser    = regexp.MustCompile(`<@([UW][A-Z0-9]+)(?:\|[^>]*)?>`)
 	wireChannel = regexp.MustCompile(`<#([CG][A-Z0-9]+)(?:\|([^>]*))?>`)
 	wireSpecial = regexp.MustCompile(`<!(here|channel|everyone)(?:\|[^>]*)?>`)
+	wireGroup   = regexp.MustCompile(`<!subteam\^([A-Z0-9]+)(?:\|@?([^>]*))?>`)
 )
 
 // Readable is text with Slack's wire forms shown as people read them,
 // for an edit: <@U1> becomes "@Ada Lovelace" when names knows U1,
-// <#C1|general> "#general", <!here> "@here". Each replacement is
+// <#C1|general> "#general", <!here> "@here", <!subteam^S1|@eng> "@eng"
+// (a bare one when names knows S1's handle). Each replacement is
 // recorded in m, so sending turns it back. A form it cannot name stays
 // as it is (and is sent as it is).
 func Readable(s string, names func(id string) (string, bool), m Mentions) string {
@@ -310,6 +352,18 @@ func Readable(s string, names func(id string) (string, bool), m Mentions) string
 		}
 		m["#"+label] = "<#" + sub[1] + "|" + label + ">"
 		return "#" + label
+	})
+	s = wireGroup.ReplaceAllStringFunc(s, func(tok string) string {
+		sub := wireGroup.FindStringSubmatch(tok)
+		handle := sub[2]
+		if handle == "" {
+			handle, _ = names(sub[1])
+		}
+		if handle == "" {
+			return tok
+		}
+		m["@"+handle] = tok
+		return "@" + handle
 	})
 	return wireSpecial.ReplaceAllStringFunc(s, func(tok string) string {
 		name := wireSpecial.FindStringSubmatch(tok)[1]

@@ -183,6 +183,9 @@ type richView struct {
 	// "alias:<name>"); nil until loaded, and custom emoji show as
 	// ":name:" until then.
 	customs map[string]string
+	// myGroup reports whether a usergroup is one of the user's; a
+	// mention of it is drawn as a mention of them. Nil means none.
+	myGroup func(id string) bool
 }
 
 // busyNote is "Downloading…" under an attachment being fetched.
@@ -238,6 +241,13 @@ func (v *richView) spanStyles(spans []rich.Span, size unit.Sp, col color.NRGBA) 
 			st.Color = colMention
 		case s.Kind == rich.SpanBroadcast:
 			st.Color = colBroadcast
+			if s.ID != "" { // a usergroup: its card on hover
+				st.Interactive = true
+				st.Set("user", s.ID)
+				if v.myGroup != nil && v.myGroup(s.ID) {
+					st.Color = colMention
+				}
+			}
 		case s.Kind == rich.SpanMuted, s.Strike:
 			st.Color = colMuted
 		}

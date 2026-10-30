@@ -6,12 +6,14 @@
 package notifications
 
 import (
+	"slices"
 	"strings"
 	"sync"
 
 	"github.com/gammons/slk/gui/backend"
 	"github.com/gammons/slk/gui/rich"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/mention"
 	"github.com/gammons/slk/internal/notify"
 	"github.com/gammons/slk/internal/ui/messages"
 )
@@ -48,7 +50,10 @@ type Center struct {
 
 	mu   sync.Mutex
 	seen map[string]bool
-	ring []string
+	// groups is the IDs of the user's own usergroups: a mention of one
+	// is a mention of the user.
+	groups []string
+	ring   []string
 }
 
 // New is a Center notifying through sink by cfg's rules, for the user
@@ -85,10 +90,28 @@ func (c *Center) Message(m backend.Message, conv backend.Conversation, focused b
 		OnKeyword:     c.cfg.OnKeyword,
 		IsMuted:       conv.Muted,
 	}
-	if !notify.ShouldNotify(ctx, m.ChannelID, author, m.Text, string(kind(conv, m.ChannelID))) {
-		return false
+	if notify.ShouldNotify(ctx, m.ChannelID, author, m.Text, string(kind(conv, m.ChannelID))) {
+		return c.show(m, conv)
 	}
-	return c.show(m, conv)
+	// A mention of one of the user's usergroups is a mention of them,
+	// as in Slack; ShouldNotify cannot know their groups.
+	if c.cfg.OnMention && !conv.Muted && author != c.self && mention.InGroups(m.Text, c.myGroups()) {
+		return c.show(m, conv)
+	}
+	return false
+}
+
+// SetGroups records the user's own usergroups (their IDs).
+func (c *Center) SetGroups(ids []string) {
+	c.mu.Lock()
+	c.groups = slices.Clone(ids)
+	c.mu.Unlock()
+}
+
+func (c *Center) myGroups() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.groups
 }
 
 // show notifies of m, once.

@@ -88,14 +88,16 @@ type Slack struct {
 	active      map[string]int
 	syncPending bool
 
-	mu        sync.Mutex
-	users     map[string]string // user ID -> display name
-	avatars   map[string]string // user or bot ID -> picture URL
-	handles   map[string]string // @-handle -> display name, for group DM names
-	bots      map[string]string // bot ID -> name
-	channels  map[string]string // channel ID -> name
-	kinds     map[string]Kind   // channel ID -> kind
-	profiles  map[string]Profile
+	mu       sync.Mutex
+	users    map[string]string // user ID -> display name
+	avatars  map[string]string // user or bot ID -> picture URL
+	handles  map[string]string // @-handle -> display name, for group DM names
+	bots     map[string]string // bot ID -> name
+	channels map[string]string // channel ID -> name
+	kinds    map[string]Kind   // channel ID -> kind
+	profiles map[string]Profile
+	// groups is the workspace's usergroups (see usergroups.go).
+	groups    groupState
 	peers     []string          // DM partners, whose presence the socket reports
 	commands  []Command         // nil until fetched
 	customs   map[string]string // custom emoji; nil until fetched
@@ -139,6 +141,7 @@ func ConnectSlack(ctx context.Context, tok slackclient.Token, db *cache.DB, cach
 			fmt.Fprintln(os.Stderr, "slk-gio: cache:", err)
 		}
 		s.sync = &msgsync.Syncer{DB: db, Source: client, WorkspaceID: client.TeamID()}
+		s.loadCachedGroups()
 		if cached, err := db.ListUsers(client.TeamID()); err == nil {
 			for _, u := range cached {
 				s.rememberUser(u.ID, u.Name, u.DisplayName, "", u.AvatarURL)
@@ -221,7 +224,12 @@ func (s *Slack) Channel(id string) (string, bool) {
 	name, ok := s.channels[id]
 	return name, ok
 }
-func (s *Slack) UserGroup(string) (string, bool) { return "", false }
+func (s *Slack) UserGroup(id string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g, ok := s.groups.byID[id]
+	return g.Handle, ok && g.Handle != ""
+}
 
 // userName returns a user's name, asking Slack for one it does not know.
 func (s *Slack) userName(ctx context.Context, id string) string {
@@ -974,6 +982,9 @@ func (s *Slack) Profile(ctx context.Context, id string) (Profile, error) {
 	if ok {
 		return p, nil
 	}
+	if p, ok := s.groupProfile(id); ok {
+		return p, nil
+	}
 	if strings.HasPrefix(id, "B") {
 		b, err := s.client.GetBotInfo(ctx, id)
 		if err != nil {
@@ -1299,6 +1310,8 @@ func (s *Slack) Run(ctx context.Context, emit func(Event)) error {
 				s.applyEvent(lctx, v.ev, emit)
 			case rawEmit:
 				emit(v.ev)
+			case rawSubteams:
+				s.groupsChangedInSlack(ctx)
 			case rawReaction:
 				if s.sync != nil {
 					if err := s.sync.ApplyReaction(v.channelID, v.ts, v.user, v.emoji, v.added); err != nil {
@@ -1423,6 +1436,7 @@ func (s *Slack) afterConnect(ctx context.Context, first bool) {
 			return
 		}
 	}
+	s.refreshGroups(ctx)
 	s.catchUpAfterConnect(ctx, unreads)
 }
 
@@ -1506,6 +1520,10 @@ func (h socketHandler) OnChannelSectionChannelsRemoved(id string, ids []string) 
 func (h socketHandler) OnPresenceChange(user, presence string) {
 	h.queue <- rawPresence{user, presence}
 }
+
+// OnSubteamChanged is a usergroup created, changed or its members
+// changed: the groups are read again, at most once a minute.
+func (h socketHandler) OnSubteamChanged() { h.queue <- rawSubteams{} }
 
 // OnPrefChange carries mute changes (muted_channels,
 // all_notifications_prefs); MuteStore ignores the rest.

@@ -27,10 +27,11 @@ import "strings"
 // from internal/notify/notifier.go, where this predicate originated; it is
 // recorded here rather than fixed so the extraction stays behavior-preserving.
 //
-// Usergroup mentions (<!subteam^Sxxxx>) are deliberately NOT detected.
-// Resolving one requires knowing the user's own usergroup memberships, which
-// slk does not have: boot.Subteams.Self (internal/slack/boot/boot.go) is
-// untyped because no capture with a non-empty list has ever been observed.
+// Usergroup mentions (<!subteam^Sxxxx>) are not detected here: resolving one
+// requires knowing the user's own usergroup memberships, which InText is not
+// given (boot.Subteams.Self in internal/slack/boot/boot.go is untyped because
+// no capture with a non-empty list has ever been observed). A caller that
+// knows them, from usergroups.list with its members, adds InGroups.
 //
 // Both gaps can only undercount, never overcount. The two callers recover
 // differently, and only one of them recovers at all: the sidebar badge is
@@ -48,4 +49,30 @@ func InText(text, selfUserID string) bool {
 	return strings.Contains(text, "<!here>") ||
 		strings.Contains(text, "<!channel>") ||
 		strings.Contains(text, "<!everyone>")
+}
+
+// InGroups reports whether text mentions one of the usergroups whose IDs
+// are given (the user's own): <!subteam^Sxxxx>, bare or with its
+// "|@handle" label.
+func InGroups(text string, groups []string) bool {
+	if !strings.Contains(text, "<!subteam^") {
+		return false
+	}
+	for _, id := range groups {
+		if id == "" {
+			continue
+		}
+		tok := "<!subteam^" + id
+		for rest := text; ; {
+			i := strings.Index(rest, tok)
+			if i < 0 {
+				break
+			}
+			rest = rest[i+len(tok):]
+			if strings.HasPrefix(rest, ">") || strings.HasPrefix(rest, "|") {
+				return true
+			}
+		}
+	}
+	return false
 }

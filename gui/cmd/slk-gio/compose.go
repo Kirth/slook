@@ -63,6 +63,7 @@ type composeBox struct {
 	// (and holds the custom emoji).
 	mentions chat.Mentions
 	people   func() []backend.Person
+	groups   func() []backend.UserGroup
 	convs    func() []backend.Conversation
 	rv       *richView
 }
@@ -396,6 +397,9 @@ func (b *composeBox) sources() completionSources {
 	if b.people != nil {
 		s.people = b.people()
 	}
+	if b.groups != nil {
+		s.groups = b.groups()
+	}
 	if b.convs != nil {
 		s.convs = b.convs()
 	}
@@ -419,6 +423,13 @@ func (b *composeBox) nameOf(id string) (string, bool) {
 		for _, c := range b.convs() {
 			if c.ID == id {
 				return c.Name, true
+			}
+		}
+	}
+	if b.groups != nil {
+		for _, g := range b.groups() {
+			if g.ID == id {
+				return g.Handle, true
 			}
 		}
 	}
