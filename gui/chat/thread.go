@@ -1,6 +1,10 @@
 package chat
 
-import "github.com/gammons/slk/gui/backend"
+import (
+	"time"
+
+	"github.com/gammons/slk/gui/backend"
+)
 
 // Thread is one thread's messages, oldest first: its parent and every
 // reply, broadcast or not, including replies only the user can see.
@@ -108,4 +112,36 @@ func (t *Thread) markCounted(ts string) {
 		t.counted = map[string]bool{}
 	}
 	t.counted[ts] = true
+}
+
+// Summary is what the thread's footer says: how many replies there are
+// (ephemerals left out: Slack does not keep them) and when the newest
+// came; zero time when there are none.
+func (t *Thread) Summary() (replies int, last time.Time) {
+	for _, m := range t.Replies() {
+		if m.Ephemeral {
+			continue
+		}
+		replies++
+		if m.Time.After(last) {
+			last = m.Time
+		}
+	}
+	return replies, last
+}
+
+// FullStamp is a thread parent's full date: "Oct 19, 2026 · 21:23".
+func FullStamp(t time.Time) string { return t.Format("Jan 2, 2006 · 15:04") }
+
+// LastReply is the thread footer's time of the newest reply: "Last
+// reply 21:24" today, "Last reply Oct 19, 21:24" earlier this year,
+// "Last reply Oct 19, 2025, 21:24" before that.
+func LastReply(last, now time.Time) string {
+	switch {
+	case SameDay(last, now):
+		return "Last reply " + last.Format("15:04")
+	case last.Year() == now.Year():
+		return "Last reply " + last.Format("Jan 2, 15:04")
+	}
+	return "Last reply " + last.Format("Jan 2, 2006, 15:04")
 }

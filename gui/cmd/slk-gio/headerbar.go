@@ -83,6 +83,9 @@ type headerSpec struct {
 	SubColor color.NRGBA // zero means muted
 	Chips    []headerChip
 	Actions  []headerAction
+	// Seamless leaves out the rule under the bar, for a window whose
+	// content continues the bar's surface (the thread's parent card).
+	Seamless bool
 }
 
 // headerBar is a window's title bar, drawn by the app: the window's
@@ -125,7 +128,9 @@ func (h *headerBar) layout(gtx C, th *material.Theme, spec headerSpec, cfg app.C
 	gtx.Constraints.Max.Y = height
 	size := gtx.Constraints.Min
 	paint.FillShape(gtx.Ops, colHeader, clip.Rect{Max: size}.Op())
-	paint.FillShape(gtx.Ops, colBorder, clip.Rect{Min: image.Pt(0, size.Y-gtx.Dp(1)), Max: size}.Op())
+	if !spec.Seamless {
+		paint.FillShape(gtx.Ops, colBorder, clip.Rect{Min: image.Pt(0, size.Y-gtx.Dp(1)), Max: size}.Op())
+	}
 
 	children := []layout.FlexChild{
 		layout.Rigid(func(gtx C) D {

@@ -7,10 +7,14 @@ import (
 	"time"
 
 	"gioui.org/app"
+	"gioui.org/font"
 	"gioui.org/io/key"
+	"gioui.org/io/pointer"
 	"gioui.org/io/system"
 	"gioui.org/layout"
 	"gioui.org/op"
+	"gioui.org/op/clip"
+	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
@@ -23,6 +27,7 @@ import (
 
 var (
 	iconThread  = mustIcon(icons.CommunicationForum)
+	iconReplies = mustIcon(icons.CommunicationChatBubbleOutline)
 	iconChannel = mustIcon(icons.CommunicationChat)
 )
 
@@ -69,6 +74,9 @@ type threadWindow struct {
 	// then reads from the top, and once it does not, the list follows
 	// its end as a chat does.
 	fits bool
+	// cardH is the parent card's height last frame, so its surface can
+	// be carried under the list's scrollbar gutter to the window edge.
+	cardH int
 }
 
 // threadLoaded carries the thread as the backend first answered.
@@ -189,6 +197,7 @@ func (t *threadWindow) castLabel() string {
 
 func (t *threadWindow) headerSpec() headerSpec {
 	spec := headerSpec{
+		Seamless: true, // the parent card continues the bar
 		Title:    "Thread",
 		Subtitle: messages.ChannelGlyph(string(t.conv.Kind)) + " " + t.conv.Name,
 		Leading:  func(gtx C) D { return tile(gtx, t.th, leadingSize, tint(colAccent), iconThread, "") },
@@ -302,12 +311,11 @@ func (t *threadWindow) settleJump() {
 	t.jump = ""
 }
 
-// The list's rows: the parent (or a note that it is gone), a divider
-// with the reply count, then the replies.
+// The list's rows: the parent card (the parent, or a note that it is
+// gone, and the thread's summary), then the replies.
 const (
 	rowParent  = 0
-	rowDivider = 1
-	rowReplies = 2
+	rowReplies = 1
 )
 
 // row is the list row that shows the message with ts.
@@ -397,19 +405,20 @@ func (t *threadWindow) messages(gtx C) D {
 			gtx.Execute(op.InvalidateCmd{})
 		}
 	}()
+	// The list keeps a gutter for its scrollbar beside the rows; the
+	// card's surface continues under it, so the header reads unbroken
+	// to the window edge.
+	if t.list.Position.First == rowParent && t.cardH > 0 {
+		top := -t.list.Position.Offset
+		bottom := top + t.cardH
+		w := gtx.Constraints.Max.X
+		paint.FillShape(gtx.Ops, colHeader, clip.Rect{Min: image.Pt(0, max(top, 0)), Max: image.Pt(w, bottom)}.Op())
+		paint.FillShape(gtx.Ops, colBorder, clip.Rect{Min: image.Pt(0, bottom-gtx.Dp(1)), Max: image.Pt(w, bottom)}.Op())
+	}
 	return material.List(t.th, &t.list).Layout(gtx, rowReplies+len(replies), func(gtx C, i int) D {
 		switch i {
 		case rowParent:
-			if !hasParent {
-				return layout.Inset{Top: unit.Dp(12), Left: unit.Dp(14), Right: unit.Dp(14)}.Layout(gtx, func(gtx C) D {
-					lbl := secondaryLabel(t.th, "The message this thread started from was deleted.")
-					lbl.Color = colMuted
-					return lbl.Layout(gtx)
-				})
-			}
-			return t.message(gtx, parent, nil)
-		case rowDivider:
-			return t.divider(gtx, replies)
+			return t.parentCard(gtx, parent, hasParent)
 		}
 		var prev *backend.Message
 		if j := i - rowReplies; j > 0 {
@@ -426,20 +435,155 @@ func (t *threadWindow) messages(gtx C) D {
 	})
 }
 
-// divider is the rule between the parent and the replies, with their
-// count.
-func (t *threadWindow) divider(gtx C, replies []backend.Message) D {
-	n := 0
-	for _, m := range replies {
-		if !m.Ephemeral {
-			n++
+// Parent card geometry: the parent's avatar, and the gap from its
+// column to the text.
+const (
+	cardAvatarDp = unit.Dp(44)
+	cardGapDp    = unit.Dp(12)
+)
+
+// parentCard is the thread's head, on the header bar's own surface so
+// the two read as one: the parent with a larger avatar, its author over
+// the full date, its "⋯" actions always showing, its body and
+// reactions, then the thread's summary (how many replies, when the
+// last came) and a rule over the replies. A deleted parent leaves a
+// note in its place.
+func (t *threadWindow) parentCard(gtx C, parent backend.Message, ok bool) D {
+	rec := op.Record(gtx.Ops)
+	dims := layout.Inset{Top: unit.Dp(14), Bottom: unit.Dp(12), Left: unit.Dp(14), Right: unit.Dp(14)}.Layout(gtx, func(gtx C) D {
+		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		var rows []layout.FlexChild
+		if ok {
+			rows = append(rows, layout.Rigid(func(gtx C) D { return t.parentPost(gtx, parent) }))
+		} else {
+			rows = append(rows, layout.Rigid(func(gtx C) D {
+				lbl := secondaryLabel(t.th, "The message this thread started from was deleted.")
+				lbl.Color = colMuted
+				return lbl.Layout(gtx)
+			}))
 		}
+		rows = append(rows, layout.Rigid(func(gtx C) D {
+			return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, t.threadSummary)
+		}))
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
+	})
+	call := rec.Stop()
+	paint.FillShape(gtx.Ops, colHeader, clip.Rect{Max: dims.Size}.Op())
+	call.Add(gtx.Ops)
+	paint.FillShape(gtx.Ops, colBorder, clip.Rect{Min: image.Pt(0, dims.Size.Y-gtx.Dp(1)), Max: dims.Size}.Op())
+	if dims.Size.Y != t.cardH {
+		t.cardH = dims.Size.Y
+		gtx.Execute(op.InvalidateCmd{})
 	}
+	return dims
+}
+
+// parentPost is the parent itself: avatar, author over the full date,
+// the "⋯" menu, then the body indented under the name.
+func (t *threadWindow) parentPost(gtx C, m backend.Message) D {
+	w := t.widgets[m.TS]
+	if w == nil {
+		w = newMsgWidgets()
+		t.widgets[m.TS] = w
+	}
+	w.begin()
+	w.gallery = attachments(m.Body)
+	if m.AuthorID != "" && (w.avatarHover.Hovered() || w.nameHover.Hovered()) {
+		t.authorHover, t.hoverName = m.AuthorID, m.Author
+	}
+	if w.more.Clicked(gtx) {
+		t.menu.show(m, t.pointer)
+	}
+	indent := cardAvatarDp + cardGapDp
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx C) D {
+			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(func(gtx C) D {
+					return layout.Inset{Right: cardGapDp}.Layout(gtx, func(gtx C) D {
+						return w.avatarHover.Layout(gtx, func(gtx C) D {
+							pointer.CursorPointer.Add(gtx.Ops)
+							return t.view.avatar(gtx, m.AuthorID, m.AvatarURL, m.Author, cardAvatarDp)
+						})
+					})
+				}),
+				layout.Flexed(1, func(gtx C) D {
+					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+						layout.Rigid(func(gtx C) D {
+							return w.nameHover.Layout(gtx, func(gtx C) D {
+								pointer.CursorPointer.Add(gtx.Ops)
+								lbl := bodyLabel(t.th, m.Author)
+								lbl.Font.Weight = font.SemiBold
+								lbl.Color = authorColor(m.Author)
+								lbl.MaxLines = 1
+								return lbl.Layout(gtx)
+							})
+						}),
+						layout.Rigid(func(gtx C) D {
+							lbl := captionLabel(t.th, chat.FullStamp(m.Time))
+							lbl.Color = colMuted
+							return lbl.Layout(gtx)
+						}),
+					)
+				}),
+				layout.Rigid(func(gtx C) D { return actionChip(gtx, t.th, &w.more, "⋯") }),
+			)
+		}),
+		layout.Rigid(func(gtx C) D {
+			return layout.Inset{Top: unit.Dp(8), Left: indent}.Layout(gtx, func(gtx C) D {
+				var rows []layout.FlexChild
+				rows = append(rows, layout.Rigid(func(gtx C) D { return t.view.blocks(gtx, w, m.Body) }))
+				if m.Edited {
+					rows = append(rows, layout.Rigid(func(gtx C) D {
+						lbl := secondaryLabel(t.th, "(edited)")
+						lbl.Color = colMuted
+						return lbl.Layout(gtx)
+					}))
+				}
+				if len(m.Reactions) > 0 {
+					rows = append(rows, layout.Rigid(func(gtx C) D { return t.reactions(gtx, w, m) }))
+				}
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
+			})
+		}),
+	)
+}
+
+// threadSummary is the card's footer: a reply icon and how many
+// replies, a hairline, and when the last one came.
+func (t *threadWindow) threadSummary(gtx C) D {
+	n, last := t.thread.Summary()
 	label := "No replies yet"
 	if n > 0 {
 		label = replyCount(n)
 	}
-	return layout.Inset{Top: unit.Dp(10), Bottom: unit.Dp(2), Left: unit.Dp(14), Right: unit.Dp(14)}.Layout(gtx, func(gtx C) D {
-		return ruledCaption(gtx, t.th, label)
-	})
+	children := []layout.FlexChild{
+		layout.Rigid(func(gtx C) D {
+			return layout.Inset{Right: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
+				gtx.Constraints = layout.Exact(image.Pt(gtx.Dp(unit.Dp(16)), gtx.Dp(unit.Dp(16))))
+				return iconReplies.Layout(gtx, colMuted)
+			})
+		}),
+		layout.Rigid(func(gtx C) D {
+			lbl := secondaryLabel(t.th, label)
+			lbl.Color = colMuted
+			return lbl.Layout(gtx)
+		}),
+	}
+	if n > 0 {
+		children = append(children,
+			layout.Rigid(func(gtx C) D {
+				return layout.Inset{Left: unit.Dp(12), Right: unit.Dp(12)}.Layout(gtx, func(gtx C) D {
+					size := image.Pt(gtx.Dp(unit.Dp(1)), gtx.Dp(unit.Dp(14)))
+					paint.FillShape(gtx.Ops, colBorder, clip.Rect{Max: size}.Op())
+					return D{Size: size}
+				})
+			}),
+			layout.Rigid(func(gtx C) D {
+				lbl := secondaryLabel(t.th, chat.LastReply(last, gtx.Now))
+				lbl.Color = colMuted
+				return lbl.Layout(gtx)
+			}),
+		)
+	}
+	return layout.Flex{Alignment: layout.Middle}.Layout(gtx, children...)
 }

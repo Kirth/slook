@@ -3,6 +3,7 @@ package chat
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/gammons/slk/gui/backend"
 )
@@ -117,5 +118,41 @@ func TestThreadDeletes(t *testing.T) {
 	}
 	if got := len(th.Replies()); got != 1 {
 		t.Fatalf("%d replies, want 1", got)
+	}
+}
+
+func TestThreadSummaryAndStamps(t *testing.T) {
+	th := newThread()
+	if n, last := th.Summary(); n != 0 || !last.IsZero() {
+		t.Fatalf("empty: %d %v", n, last)
+	}
+	r1 := reply("1700000200.000100", "r1")
+	r1.Time = time.Date(2026, 10, 19, 21, 24, 0, 0, time.Local)
+	r2 := reply("1700000300.000100", "r2")
+	r2.Time = time.Date(2026, 10, 19, 22, 5, 0, 0, time.Local)
+	eph := reply("1700000400.000100", "only you")
+	eph.Ephemeral, eph.Time = true, time.Date(2026, 10, 20, 9, 0, 0, 0, time.Local)
+	th.Merge([]backend.Message{msg(root, "parent"), r1, r2}, nil)
+	th.Apply(backend.MessagePosted{Message: eph})
+	if n, last := th.Summary(); n != 2 || !last.Equal(r2.Time) {
+		t.Fatalf("summary %d %v", n, last)
+	}
+
+	at := time.Date(2026, 10, 19, 21, 23, 0, 0, time.Local)
+	if got := FullStamp(at); got != "Oct 19, 2026 · 21:23" {
+		t.Fatalf("FullStamp %q", got)
+	}
+	now := time.Date(2026, 10, 19, 23, 0, 0, 0, time.Local)
+	for _, c := range []struct {
+		last time.Time
+		want string
+	}{
+		{at, "Last reply 21:23"},
+		{at.AddDate(0, -1, 0), "Last reply Sep 19, 21:23"},
+		{at.AddDate(-1, 0, 0), "Last reply Oct 19, 2025, 21:23"},
+	} {
+		if got := LastReply(c.last, now); got != c.want {
+			t.Errorf("LastReply(%v) = %q, want %q", c.last, got, c.want)
+		}
 	}
 }
