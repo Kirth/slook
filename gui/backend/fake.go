@@ -285,6 +285,8 @@ func (f *Fake) Profile(_ context.Context, id string) (Profile, error) {
 	name := id
 	if n, ok := fakeNames.Users[id]; ok {
 		name = n
+	} else if n, ok := fakeMembers[id]; ok {
+		name = n
 	}
 	p := Profile{
 		ID:       id,
@@ -314,14 +316,69 @@ func (f *Fake) Conversations(context.Context) ([]Conversation, error) {
 
 // fakeDetails are the fake conversations' topics and sizes.
 var fakeDetails = map[string]Details{
-	"C1":  {Topic: "Company-wide announcements and work-based matters", Members: 48},
-	"C2":  {Purpose: "Non-work banter and water cooler conversation", Members: 41},
-	"C3":  {Topic: "Deploys, migrations and the occasional fire 🔥", Members: 9},
+	"C1": {Topic: "Company-wide announcements and work-based matters", Members: 13,
+		Purpose: "This channel is for workspace-wide communication and announcements. All members are in this channel. Ask <@U3> before posting, and read <https://example.com/handbook|the handbook>.",
+		Created: time.Date(2019, 3, 14, 9, 26, 0, 0, time.Local), CreatorID: "U3", Creator: "Margaret Hamilton"},
+	"C2": {Purpose: "Non-work banter and water cooler conversation", Members: 41,
+		Created: time.Date(2019, 3, 14, 9, 27, 0, 0, time.Local), CreatorID: "U3", Creator: "Margaret Hamilton"},
+	"C3": {Topic: "Deploys, migrations and the occasional fire 🔥", Members: 9,
+		Created: time.Date(2023, 11, 2, 16, 4, 0, 0, time.Local), CreatorID: "U4", Creator: "Linus Torvalds"},
 	"C10": {Topic: "SEV2 open: checkout latency · runbook in the bookmarks", Members: 23},
 }
 
 func (f *Fake) Details(_ context.Context, channelID string) (Details, error) {
-	return fakeDetails[channelID], nil
+	d := fakeDetails[channelID]
+	d.TopicBody, d.PurposeBody = rich.FromMrkdwn(d.Topic, fakeNames), rich.FromMrkdwn(d.Purpose, fakeNames)
+	return d, nil
+}
+
+// fakeMembers are people the fake knows only by ID until asked, so the
+// members panel has names to resolve as it shows them.
+var fakeMembers = map[string]string{
+	"U5": "Katherine Johnson", "U6": "Barbara Liskov", "U7": "Edsger Dijkstra",
+	"U8": "Frances Allen", "U9": "Ken Thompson", "U10": "Radia Perlman",
+	"U11": "Dennis Ritchie", "U12": "Hedy Lamarr",
+}
+
+// Members is everyone the fake knows for a channel (the people of
+// People, then fakeMembers by ID only), the two in a group DM, or the
+// peer of a DM.
+func (f *Fake) Members(ctx context.Context, channelID string) (Members, error) {
+	known, _ := f.People(ctx)
+	var m Members
+	switch {
+	case channelID == "D1":
+		m.People = []Person{known[0], {ID: fakeSelf, Name: "You"}}
+	case channelID == "D2":
+		m.People = []Person{known[1], known[3], {ID: fakeSelf, Name: "You"}}
+	default:
+		m.People = append(m.People, Person{ID: fakeSelf, Name: "You"})
+		for _, p := range known {
+			if !p.Bot {
+				m.People = append(m.People, p)
+			}
+		}
+		for i := 5; i <= 12; i++ {
+			m.People = append(m.People, Person{ID: fmt.Sprintf("U%d", i)})
+		}
+	}
+	m.Total = len(m.People)
+	return m, nil
+}
+
+// SetNotify keeps the level in memory and echoes it.
+func (f *Fake) SetNotify(ctx context.Context, channelID string, level NotifyLevel) error {
+	f.mu.Lock()
+	if c := f.convs[channelID]; c != nil {
+		c.Notify = level
+	}
+	f.mu.Unlock()
+	select {
+	case f.events <- NotifyChanged{ChannelID: channelID, Level: level}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (f *Fake) WebURL(string) string { return "" }

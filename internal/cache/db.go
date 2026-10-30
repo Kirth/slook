@@ -209,6 +209,13 @@ func (db *DB) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_channel_members_channel
 		ON channel_members(workspace_id, channel_id);
 
+	CREATE TABLE IF NOT EXISTS notify_levels (
+		workspace_id TEXT NOT NULL,
+		channel_id   TEXT NOT NULL,
+		level        INTEGER NOT NULL,
+		PRIMARY KEY (workspace_id, channel_id)
+	);
+
 	CREATE TABLE IF NOT EXISTS message_spans (
 		channel_id    TEXT NOT NULL,
 		workspace_id  TEXT NOT NULL,

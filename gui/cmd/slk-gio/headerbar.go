@@ -3,6 +3,9 @@ package main
 import (
 	"image"
 	"image/color"
+	"math"
+
+	"gioui.org/f32"
 
 	"gioui.org/app"
 	"gioui.org/font"
@@ -32,6 +35,8 @@ var (
 	iconNight    = mustIcon(icons.ImageBrightness3)
 	iconMuted    = mustIcon(icons.SocialNotificationsOff)
 	iconSearch   = mustIcon(icons.ActionSearch)
+	iconExpand   = mustIcon(icons.NavigationExpandMore)
+	iconCopy     = mustIcon(icons.ContentContentCopy)
 )
 
 func mustIcon(data []byte) *widget.Icon {
@@ -86,6 +91,13 @@ type headerSpec struct {
 	// Seamless leaves out the rule under the bar, for a window whose
 	// content continues the bar's surface (the thread's parent card).
 	Seamless bool
+	// OnTitle, when set, makes the title and subtitle a button with a
+	// chevron after the title, turned by Expanded (0 closed, 1 open).
+	// The rest of the bar still moves the window: on Wayland a press in
+	// the move area goes to the compositor, so the button sits beside
+	// it rather than in it.
+	OnTitle  func()
+	Expanded float32
 }
 
 // headerBar is a window's title bar, drawn by the app: the window's
@@ -95,16 +107,21 @@ type headerSpec struct {
 type headerBar struct {
 	deco    widget.Decorations
 	actions []widget.Clickable
+	title   widget.Clickable
 }
 
 // update performs what was clicked since the last frame: window
-// actions through w, header actions through their callbacks. Call it
-// before layout, with the actions layout will draw.
-func (h *headerBar) update(gtx C, w *app.Window, cfg app.Config, actions []headerAction) {
+// actions through w, header actions and the title through their
+// callbacks. Call it before layout, with the spec layout will draw.
+func (h *headerBar) update(gtx C, w *app.Window, cfg app.Config, spec headerSpec) {
 	h.deco.Maximized = cfg.Mode == app.Maximized
 	if a := h.deco.Update(gtx); a != 0 {
 		w.Perform(a)
 	}
+	if h.title.Clicked(gtx) && spec.OnTitle != nil {
+		spec.OnTitle()
+	}
+	actions := spec.Actions
 	for i := range actions {
 		if i < len(h.actions) && h.actions[i].Clicked(gtx) && actions[i].onClick != nil {
 			actions[i].onClick()
@@ -142,11 +159,24 @@ func (h *headerBar) layout(gtx C, th *material.Theme, spec headerSpec, cfg app.C
 		// The title area moves the window when dragged.
 		layout.Flexed(1, func(gtx C) D {
 			gtx.Constraints.Min = gtx.Constraints.Max
-			return h.deco.LayoutMove(gtx, func(gtx C) D {
-				return layout.W.Layout(gtx, func(gtx C) D {
-					return h.titles(gtx, th, spec, fg, sub)
+			if spec.OnTitle == nil {
+				return h.deco.LayoutMove(gtx, func(gtx C) D {
+					return layout.W.Layout(gtx, func(gtx C) D {
+						return h.titles(gtx, th, spec, fg, sub)
+					})
 				})
-			})
+			}
+			full := gtx.Constraints.Max
+			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(func(gtx C) D {
+					gtx.Constraints.Min = image.Point{}
+					return h.titleButton(gtx, th, spec, fg, sub)
+				}),
+				layout.Flexed(1, func(gtx C) D {
+					gtx.Constraints.Min = image.Pt(gtx.Constraints.Max.X, full.Y)
+					return h.deco.LayoutMove(gtx, func(gtx C) D { return D{Size: gtx.Constraints.Min} })
+				}),
+			)
 		}),
 	}
 	for i, a := range spec.Actions {
@@ -190,6 +220,35 @@ func (h *headerBar) layout(gtx C, th *material.Theme, spec headerSpec, cfg app.C
 	return D{Size: size}
 }
 
+// titleButton is the title and subtitle as a button that opens the
+// window's details, with a chevron after the title that turns as they
+// open, and a soft highlight under the pointer.
+func (h *headerBar) titleButton(gtx C, th *material.Theme, spec headerSpec, fg, sub color.NRGBA) D {
+	return h.title.Layout(gtx, func(gtx C) D {
+		pointer.CursorPointer.Add(gtx.Ops)
+		m := op.Record(gtx.Ops)
+		dims := layout.Inset{Top: unit.Dp(3), Bottom: unit.Dp(3), Left: unit.Dp(6), Right: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
+			return h.titles(gtx, th, spec, fg, sub)
+		})
+		call := m.Stop()
+		if h.title.Hovered() || spec.Expanded > 0.5 {
+			paint.FillShape(gtx.Ops, colHover, clip.UniformRRect(image.Rectangle{Max: dims.Size}, gtx.Dp(6)).Op(gtx.Ops))
+		}
+		call.Add(gtx.Ops)
+		return dims
+	})
+}
+
+// chevron is the title button's turn-down arrow, rotated half a turn
+// as turn goes from 0 to 1.
+func chevron(gtx C, col color.NRGBA, turn float32) D {
+	px := gtx.Dp(16)
+	c := f32.Pt(float32(px)/2, float32(px)/2)
+	defer op.Affine(f32.AffineId().Rotate(c, turn*math.Pi)).Push(gtx.Ops).Pop()
+	gtx.Constraints = layout.Exact(image.Pt(px, px))
+	return iconExpand.Layout(gtx, col)
+}
+
 // titles is the title (with its status) over the subtitle.
 func (h *headerBar) titles(gtx C, th *material.Theme, spec headerSpec, fg, sub color.NRGBA) D {
 	gtx.Constraints.Min = image.Point{} // its own height, centred by the caller
@@ -203,7 +262,17 @@ func (h *headerBar) titles(gtx C, th *material.Theme, spec headerSpec, fg, sub c
 			lbl.Font.Weight = font.SemiBold
 			lbl.Color = fg
 			lbl.MaxLines = 1
-			return lbl.Layout(gtx)
+			if spec.OnTitle == nil {
+				return lbl.Layout(gtx)
+			}
+			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(lbl.Layout),
+				layout.Rigid(func(gtx C) D {
+					return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, func(gtx C) D {
+						return chevron(gtx, sub, spec.Expanded)
+					})
+				}),
+			)
 		}),
 		layout.Rigid(func(gtx C) D {
 			if spec.Subtitle != "" {

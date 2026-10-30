@@ -3580,3 +3580,21 @@ func TestGetUnreadCounts_ParsesLatest(t *testing.T) {
 		}
 	}
 }
+
+func TestGetUsersInConversationMaxStopsAtTheCap(t *testing.T) {
+	var calls int
+	mock := &mockSlackAPI{
+		getUsersInConversationContextFn: func(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error) {
+			calls++
+			return []string{fmt.Sprintf("U%d", calls)}, fmt.Sprintf("c%d", calls), nil
+		},
+	}
+	c := &Client{api: mock}
+	got, complete, err := c.GetUsersInConversationMax(context.Background(), "C1", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || complete || !reflect.DeepEqual(got, []string{"U1", "U2"}) {
+		t.Fatalf("calls %d, complete %v, got %v", calls, complete, got)
+	}
+}

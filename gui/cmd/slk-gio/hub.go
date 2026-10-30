@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +49,7 @@ type hub struct {
 	// socket's mute changes; notes decides and shows notifications (nil
 	// when they are off).
 	muted          map[string]bool
+	levels         map[string]backend.NotifyLevel // slk's notify levels, by channel ID
 	notes          *notifications.Center
 	list           *listWindow
 	search         *searchWindow          // the one search window, or nil
@@ -107,9 +109,13 @@ func (h *hub) setConversations(convs []backend.Conversation) {
 	h.mu.Lock()
 	h.convs = convs
 	h.muted = map[string]bool{}
+	h.levels = map[string]backend.NotifyLevel{}
 	for _, c := range convs {
 		if c.Muted {
 			h.muted[c.ID] = true
+		}
+		if c.Notify != backend.NotifyDefault {
+			h.levels[c.ID] = c.Notify
 		}
 	}
 	h.mu.Unlock()
@@ -191,7 +197,7 @@ func (h *hub) dispatch(ev backend.Event) {
 		}
 		if h.notes != nil {
 			conv := h.conversationLocked(m.ChannelID)
-			conv.Muted = h.muted[m.ChannelID]
+			conv.Muted, conv.Notify = h.muted[m.ChannelID], h.levels[m.ChannelID]
 			// Off the event goroutine: showing one talks to the desktop.
 			go h.notes.Message(m, conv, len(h.focused) > 0)
 		}
@@ -206,6 +212,27 @@ func (h *hub) dispatch(ev backend.Event) {
 		h.muted = ev.Muted
 		if h.list != nil {
 			to = append(to, &h.list.box)
+		}
+		for _, c := range h.chats {
+			to = append(to, &c.box)
+		}
+	case backend.NotifyChanged:
+		if h.levels == nil {
+			h.levels = map[string]backend.NotifyLevel{}
+		}
+		h.levels[ev.ChannelID] = ev.Level
+		// A copy: the list window may share the slice it handed over.
+		h.convs = slices.Clone(h.convs)
+		for i := range h.convs {
+			if h.convs[i].ID == ev.ChannelID {
+				h.convs[i].Notify = ev.Level
+			}
+		}
+		if h.list != nil {
+			to = append(to, &h.list.box)
+		}
+		if c := h.chats[ev.ChannelID]; c != nil {
+			to = append(to, &c.box)
 		}
 	case backend.SectionsChanged:
 		if h.list != nil {

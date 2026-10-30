@@ -241,6 +241,12 @@ func (l *listWindow) apply() {
 			for i := range l.convs {
 				l.convs[i].Muted = v.Muted[l.convs[i].ID]
 			}
+		case backend.NotifyChanged:
+			for i := range l.convs {
+				if l.convs[i].ID == v.ChannelID {
+					l.convs[i].Notify = v.Level
+				}
+			}
 		case customEmojiLoaded:
 			l.customs = v.customs
 		case backend.ConnectionChanged:
@@ -359,7 +365,7 @@ func (l *listWindow) layout(gtx C) {
 	gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(time.Minute)})
 
 	spec := l.headerSpec()
-	l.hdr.update(gtx, l.w, l.cfg, spec.Actions)
+	l.hdr.update(gtx, l.w, l.cfg, spec)
 
 	layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx C) D { return l.hdr.layout(gtx, l.th, spec, l.cfg) }),

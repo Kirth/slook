@@ -50,6 +50,12 @@ func TestWhatNotifies(t *testing.T) {
 		{"an ephemeral", on, func() backend.Message { m := msg("D1", "1.0", "Slackbot", "hi"); m.Ephemeral = true; return m }, dm, false, false},
 		{"a muted DM", on, func() backend.Message { return msg("D1", "1.0", "Ada", "hi") }, backend.Conversation{ID: "D1", Kind: backend.KindDM, Muted: true}, false, false},
 		{"disabled", config.Notifications{OnDM: true}, func() backend.Message { return msg("D1", "1.0", "Ada", "hi") }, dm, false, false},
+		{"every message in a channel", on, func() backend.Message { return msg("C1", "1.0", "Ada", "lunch?") }, backend.Conversation{ID: "C1", Kind: backend.KindChannel, Notify: backend.NotifyAll}, false, true},
+		{"every message, though muted in Slack", on, func() backend.Message { return msg("C1", "1.0", "Ada", "lunch?") }, backend.Conversation{ID: "C1", Kind: backend.KindChannel, Muted: true, Notify: backend.NotifyAll}, false, true},
+		{"every message, but your own", on, func() backend.Message { m := msg("C1", "1.0", "You", "hi"); m.AuthorID = "ME"; return m }, backend.Conversation{ID: "C1", Kind: backend.KindChannel, Notify: backend.NotifyAll}, false, false},
+		{"every message, while a window has the keyboard", on, func() backend.Message { return msg("C1", "1.0", "Ada", "lunch?") }, backend.Conversation{ID: "C1", Kind: backend.KindChannel, Notify: backend.NotifyAll}, true, false},
+		{"nothing, though a mention", on, func() backend.Message { return msg("C1", "1.0", "Ada", "<@ME> look") }, backend.Conversation{ID: "C1", Kind: backend.KindChannel, Notify: backend.NotifyNone}, false, false},
+		{"nothing, though a DM", on, func() backend.Message { return msg("D1", "1.0", "Ada", "hi") }, backend.Conversation{ID: "D1", Kind: backend.KindDM, Notify: backend.NotifyNone}, false, false},
 		{"a DM the list has not loaded", on, func() backend.Message { return msg("D9", "1.0", "Ada", "hi") }, backend.Conversation{}, false, true},
 	}
 	for _, c := range cases {

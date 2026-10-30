@@ -372,7 +372,7 @@ func (t *threadWindow) layout(gtx C) {
 	}
 
 	spec := t.headerSpec()
-	t.header.update(gtx, t.w, t.cfg, spec.Actions)
+	t.header.update(gtx, t.w, t.cfg, spec)
 	layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx C) D { return t.header.layout(gtx, t.th, spec, t.cfg) }),
 		layout.Flexed(1, t.messages),

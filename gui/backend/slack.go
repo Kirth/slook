@@ -335,6 +335,7 @@ func (s *Slack) Conversations(ctx context.Context) ([]Conversation, error) {
 		}
 	}
 	s.resolveAll(ctx, peers)
+	levels := s.notifyLevels()
 
 	convs := make([]Conversation, 0, len(chans))
 	s.mu.Lock()
@@ -365,6 +366,7 @@ func (s *Slack) Conversations(ctx context.Context) ([]Conversation, error) {
 			conv.Visited = time.Unix(v, 0)
 		}
 		conv.Muted = s.mutes.IsMuted(c.ID)
+		conv.Notify = levels[c.ID]
 		conv.Starred = starred[c.ID]
 		conv.Section, _ = s.sections.SectionForChannel(c.ID)
 		convs = append(convs, conv)
@@ -473,11 +475,22 @@ func (s *Slack) Details(ctx context.Context, channelID string) (Details, error) 
 	if err != nil {
 		return Details{}, err
 	}
-	return Details{
-		Topic:   plainMrkdwn(ch.Topic.Value, s),
-		Purpose: plainMrkdwn(ch.Purpose.Value, s),
-		Members: ch.NumMembers,
-	}, nil
+	d := Details{
+		Topic:       plainMrkdwn(ch.Topic.Value, s),
+		Purpose:     plainMrkdwn(ch.Purpose.Value, s),
+		TopicBody:   rich.FromMrkdwn(ch.Topic.Value, s),
+		PurposeBody: rich.FromMrkdwn(ch.Purpose.Value, s),
+		Members:     ch.NumMembers,
+		CreatorID:   ch.Creator,
+		Archived:    ch.IsArchived,
+	}
+	if ch.Created > 0 {
+		d.Created = ch.Created.Time()
+	}
+	if d.CreatorID != "" {
+		d.Creator = s.userName(ctx, d.CreatorID)
+	}
+	return d, nil
 }
 
 // plainMrkdwn is mrkdwn as one line of plain text.
@@ -1284,6 +1297,8 @@ func (s *Slack) Run(ctx context.Context, emit func(Event)) error {
 				emit(MessagePosted{Message: s.message(lctx, v)})
 			case rawEvent:
 				s.applyEvent(lctx, v.ev, emit)
+			case rawEmit:
+				emit(v.ev)
 			case rawReaction:
 				if s.sync != nil {
 					if err := s.sync.ApplyReaction(v.channelID, v.ts, v.user, v.emoji, v.added); err != nil {

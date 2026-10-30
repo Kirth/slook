@@ -66,6 +66,13 @@ the conversation here or in Slack. With `notify_command` set, or
 without a service, the basic notification is shown, which cannot open
 anything.
 
+Each conversation can override this in its details panel (click its
+name, then Notifications): **Default** follows `[notifications]`,
+**Every message** notifies for every new message, even while the
+conversation is muted in Slack, and **Nothing** silences it. The choice
+is slk's own, kept in its cache; Slack's notification settings and
+your phone are not changed.
+
 The composer completes as you type:
 
 - `@` suggests people slk has seen, plus `@here`, `@channel` and
@@ -123,6 +130,20 @@ whether it is muted; a person's status, title and local time (amber
 with a moon when it is night for them); a group's size. Then its
 actions and minimize, maximize and close.
 
+Clicking a chat window's name opens its details, growing down out of
+the header over the messages; a click on the name again, on the
+messages, or Escape closes them. They have tabs:
+
+- **About**: a channel's whole topic and description (mentions and
+  links work), who created it and when, and its ID with a copy button.
+  For a DM, the person: name, title, status, handle and local time.
+- **Members**: who is in the conversation, with a filter. Names slk
+  does not know yet are looked up as they scroll into view, a few at a
+  time. The list is cached for six hours, and a channel larger than
+  5,000 people shows its first 5,000, so a huge channel costs at most
+  five requests. Hover a picture for the profile card.
+- **Notifications**: how the conversation notifies (see above).
+
 The menu button (or Ctrl+K) opens a quick switcher over the window:
 type to filter every conversation, or pick from those waiting to be
 read; Enter or a click opens it, "All conversations…" opens the list.
@@ -132,7 +153,7 @@ conversation whose window is already open on another workspace brings
 it to this one. Wayland lets no app raise or move its own window, but a
 new window opens where you are, so the old one hands over its messages,
 scroll position, draft and size to a new one and closes; the list
-window does the same. Drag the header to move the window; resize from
+window does the same. Drag the header (beside the name) to move the window; resize from
 its edges. When the compositor draws window decorations itself
 (server-side decorations, and always on X11), its buttons are used and
 the header leaves them out.

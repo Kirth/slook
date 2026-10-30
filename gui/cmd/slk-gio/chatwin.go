@@ -87,6 +87,8 @@ type chatWindow struct {
 	pager chat.Pager
 	// resynced is when the window last caught up after a reconnect.
 	resynced time.Time
+	// info is the details panel the title opens.
+	info infoPanel
 }
 
 // jumpState is a message the window is getting to: loading older pages
@@ -386,7 +388,14 @@ func (c *chatWindow) apply() {
 			}
 			continue
 		}
+		if c.infoApply(item) {
+			continue
+		}
 		switch v := item.(type) {
+		case backend.NotifyChanged:
+			c.conv.Notify = v.Level
+		case backend.MutesChanged:
+			c.conv.Muted = v.Muted[c.conv.ID]
 		case historyLoaded:
 			c.loading = false
 			if v.err != nil {
@@ -584,19 +593,26 @@ func (c *chatWindow) layout(gtx C) {
 	// its enclosing areas, not to areas beside it).
 	defer c.trackPointer(gtx).Pop()
 	c.authorHover = ""
+	c.infoUpdate(gtx)
 	if !c.focused {
 		gtx.Execute(key.FocusCmd{Tag: &c.composer})
 		c.focused = true
 	}
 
 	spec := c.headerSpec(gtx)
-	c.header.update(gtx, c.w, c.cfg, spec.Actions)
+	spec.OnTitle = c.toggleInfo
+	if c.info.visible(gtx.Now) {
+		v, _ := c.info.prog.Value(gtx.Now)
+		spec.Expanded, spec.Seamless = float32(v), true
+	}
+	c.header.update(gtx, c.w, c.cfg, spec)
 
 	layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx C) D { return c.header.layout(gtx, c.th, spec, c.cfg) }),
 		layout.Flexed(1, c.timeline),
 		layout.Rigid(func(gtx C) D { return c.composeBox.layout(gtx, c.hint(), "") }),
 	)
+	c.infoLayout(gtx, gtx.Dp(headerHeight))
 	c.sw.layout(gtx, c.th, &c.view)
 	c.pickerLayout(gtx)
 	c.menuLayout(gtx)

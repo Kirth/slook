@@ -47,13 +47,46 @@ type Conversation struct {
 	Muted    bool
 	Starred  bool
 	Section  string // Slack sidebar section ID; empty for the default one
+	Notify   NotifyLevel
 }
+
+// NotifyLevel is how a conversation notifies on the desktop. It is
+// slk's own setting, kept in its cache; Slack's notification settings
+// are not changed.
+type NotifyLevel int
+
+const (
+	// NotifyDefault follows [notifications]: mentions, DMs and
+	// keywords, and nothing while the conversation is muted in Slack.
+	NotifyDefault NotifyLevel = iota
+	// NotifyAll notifies for every new message, muted in Slack or not.
+	NotifyAll
+	// NotifyNone never notifies.
+	NotifyNone
+)
 
 // Details is what a conversation's header shows beyond its name.
 type Details struct {
-	Topic   string
+	Topic   string // one line, plain, for the header
 	Purpose string
-	Members int // zero when unknown
+	// TopicBody and PurposeBody are the same as rich text, mentions
+	// and links kept, for the info panel.
+	TopicBody   []rich.Block
+	PurposeBody []rich.Block
+	Members     int       // zero when unknown
+	Created     time.Time // zero when unknown
+	CreatorID   string
+	Creator     string // the creator's name
+	Archived    bool
+}
+
+// Members is who is in a conversation. A Person slk has no name for
+// yet carries only its ID. Partial means the list was cut short (a
+// huge channel), Total being the conversation's size when known.
+type Members struct {
+	People  []Person
+	Total   int
+	Partial bool
 }
 
 // Section is one of the user's Slack sidebar sections. Type is Slack's:
@@ -185,6 +218,12 @@ type PresenceChanged struct {
 	Active bool
 }
 
+// NotifyChanged is a conversation's notify level changing.
+type NotifyChanged struct {
+	ChannelID string
+	Level     NotifyLevel
+}
+
 // MutesChanged carries the complete set of muted conversations.
 type MutesChanged struct{ Muted map[string]bool }
 
@@ -303,6 +342,7 @@ func (ConnectionChanged) isEvent() {}
 func (ReadChanged) isEvent()       {}
 func (SectionsChanged) isEvent()   {}
 func (MutesChanged) isEvent()      {}
+func (NotifyChanged) isEvent()     {}
 func (PresenceChanged) isEvent()   {}
 func (HistoryUpdated) isEvent()    {}
 func (ReactionChanged) isEvent()   {}
@@ -381,6 +421,13 @@ type Backend interface {
 	Visited(channelID string)
 	// Details fetches a conversation's topic, purpose and size.
 	Details(ctx context.Context, channelID string) (Details, error)
+	// Members lists who is in a conversation: from the cache when it
+	// was listed lately, else from Slack, at most a few pages (5,000
+	// people) so a huge channel costs a bounded number of requests.
+	Members(ctx context.Context, channelID string) (Members, error)
+	// SetNotify sets a conversation's notify level; Run reports it as a
+	// NotifyChanged.
+	SetNotify(ctx context.Context, channelID string, level NotifyLevel) error
 	// WebURL is the conversation in Slack's web client, or "" if there
 	// is none.
 	WebURL(channelID string) string

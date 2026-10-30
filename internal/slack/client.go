@@ -605,13 +605,22 @@ func (c *Client) GetConversationInfo(ctx context.Context, channelID string) (*sl
 // cancellation both between iterations and during the rate-limit sleep.
 // Mirrors the paginate-until-empty-cursor loop structure.
 func (c *Client) GetUsersInConversation(ctx context.Context, channelID string) ([]string, error) {
+	ids, _, err := c.GetUsersInConversationMax(ctx, channelID, 0)
+	return ids, err
+}
+
+// GetUsersInConversationMax is GetUsersInConversation reading at most
+// maxPages pages (0 for all), so a huge channel costs a bounded number
+// of requests. complete reports whether every member was listed.
+func (c *Client) GetUsersInConversationMax(ctx context.Context, channelID string, maxPages int) (ids []string, complete bool, err error) {
 	var all []string
 	cursor := ""
+	pages := 0
 
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, false, ctx.Err()
 		default:
 		}
 
@@ -630,18 +639,22 @@ func (c *Client) GetUsersInConversation(ctx context.Context, channelID string) (
 				}
 				select {
 				case <-ctx.Done():
-					return nil, ctx.Err()
+					return nil, false, ctx.Err()
 				case <-time.After(wait):
 				}
 				continue
 			}
-			return nil, fmt.Errorf("listing conversation members: %w", err)
+			return nil, false, fmt.Errorf("listing conversation members: %w", err)
 		}
 
 		all = append(all, users...)
+		pages++
 
 		if next == "" {
-			return all, nil
+			return all, true, nil
+		}
+		if maxPages > 0 && pages >= maxPages {
+			return all, false, nil
 		}
 		cursor = next
 	}

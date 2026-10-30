@@ -59,14 +59,24 @@ func New(cfg config.Notifications, self string, sink Sink) *Center {
 
 // Message considers a new message in conv. focused says whether any
 // slk-gio window has the keyboard: then the user is here and nothing
-// notifies. It reports whether the message notified.
+// notifies. conv.Notify overrides the configured rules: NotifyNone
+// silences the conversation, NotifyAll notifies every message, muted
+// in Slack or not. It reports whether the message notified.
 func (c *Center) Message(m backend.Message, conv backend.Conversation, focused bool) bool {
-	if !c.cfg.Enabled || focused || m.Ephemeral || m.Edited || m.FromSelf {
+	if !c.cfg.Enabled || focused || m.Ephemeral || m.Edited || m.FromSelf || conv.Notify == backend.NotifyNone {
 		return false
 	}
 	author := m.AuthorID
 	if author == "" {
 		author = m.Author
+	}
+	if conv.Notify == backend.NotifyAll {
+		// The user asked for every message here, in slk: it holds even
+		// while the conversation is muted in Slack.
+		if author == c.self {
+			return false
+		}
+		return c.show(m, conv)
 	}
 	ctx := notify.NotifyContext{
 		CurrentUserID: c.self,
@@ -78,6 +88,11 @@ func (c *Center) Message(m backend.Message, conv backend.Conversation, focused b
 	if !notify.ShouldNotify(ctx, m.ChannelID, author, m.Text, string(kind(conv, m.ChannelID))) {
 		return false
 	}
+	return c.show(m, conv)
+}
+
+// show notifies of m, once.
+func (c *Center) show(m backend.Message, conv backend.Conversation) bool {
 	if !c.remember(m.ChannelID + "\x00" + m.TS) {
 		return false
 	}

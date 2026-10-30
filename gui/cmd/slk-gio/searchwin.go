@@ -550,7 +550,7 @@ func (s *searchWindow) layout(gtx C) {
 	}
 
 	spec := s.headerSpec()
-	s.hdr.update(gtx, s.w, s.cfg, spec.Actions)
+	s.hdr.update(gtx, s.w, s.cfg, spec)
 
 	layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx C) D { return s.hdr.layout(gtx, s.th, spec, s.cfg) }),
