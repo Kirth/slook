@@ -11,7 +11,7 @@ import (
 	"github.com/gammons/slk/internal/text"
 )
 
-// popupRows is how many commands the popup lists at once.
+// popupRows is how many commands or completions the popup lists at once.
 const popupRows = 8
 
 // Things a chat window's inbox carries for commands.
@@ -21,38 +21,78 @@ type (
 	composeText struct{ text string }
 )
 
-// commandPopup is the list of slash commands shown above the composer
-// while a command name is being typed.
+// commandPopup is the list shown above the composer while something
+// can be completed: slash commands while a command name is typed, and
+// people, channels or emoji while an @, # or : token is (chat.Trigger).
 type commandPopup struct {
 	cmds      []backend.Command // everything the workspace offers
-	matches   []backend.Command // what the current text matches, at most popupRows
+	matches   []backend.Command // the slash commands the text matches, at most popupRows
+	choices   []chat.Choice     // the @, # or : completions, at most popupRows
+	start     int               // where the token the choices replace starts (runes)
 	sel       int
 	dismissed string // Escape hides the popup until the text changes
 	rows      [popupRows]widget.Clickable
 }
 
-// update recomputes the matches for the composer's text.
-func (p *commandPopup) update(text string) {
+// completionSources is what @, # and : complete from.
+type completionSources struct {
+	people  []backend.Person
+	convs   []backend.Conversation
+	customs map[string]string
+}
+
+// update recomputes what the popup lists for the composer's text with
+// the caret at caret (runes). While editing a message there are no
+// commands, only completions.
+func (p *commandPopup) update(text string, caret int, src func() completionSources, editing bool) {
 	if text != p.dismissed {
 		p.dismissed = ""
 	}
-	prev := p.matches
-	p.matches = nil
+	prevN, prevFirst := p.n(), p.first()
+	p.matches, p.choices = nil, nil
 	if p.dismissed == "" {
-		p.matches = chat.MatchCommands(p.cmds, text)
+		if !editing {
+			p.matches = chat.MatchCommands(p.cmds, text)
+		}
+		if len(p.matches) == 0 {
+			if sigil, q, start, ok := chat.Trigger(text, caret); ok {
+				s := src()
+				p.start = start
+				switch sigil {
+				case '@':
+					p.choices = chat.MatchPeople(q, s.people, popupRows)
+				case '#':
+					p.choices = chat.MatchChannels(q, s.convs, popupRows)
+				case ':':
+					p.choices = chat.EmojiChoices(q, s.customs, popupRows)
+				}
+			}
+		}
 	}
 	if len(p.matches) > popupRows {
 		p.matches = p.matches[:popupRows]
 	}
-	if len(prev) != len(p.matches) || len(p.matches) > 0 && prev[0].Name != p.matches[0].Name {
-		p.sel = 0
-	}
-	if p.sel >= len(p.matches) {
+	if p.n() != prevN || p.first() != prevFirst || p.sel >= p.n() {
 		p.sel = 0
 	}
 }
 
-func (p *commandPopup) open() bool { return len(p.matches) > 0 }
+// n is how many rows the popup lists.
+func (p *commandPopup) n() int { return len(p.matches) + len(p.choices) }
+
+// first names the first row, to notice the list changing under the
+// highlight.
+func (p *commandPopup) first() string {
+	switch {
+	case len(p.matches) > 0:
+		return p.matches[0].Name
+	case len(p.choices) > 0:
+		return p.choices[0].Insert
+	}
+	return ""
+}
+
+func (p *commandPopup) open() bool { return p.n() > 0 }
 
 // findConversation matches the start of target ("#general", "@Ada
 // Lovelace hi") against conversation names, case- and accent-blind,

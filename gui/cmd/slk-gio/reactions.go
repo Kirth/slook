@@ -88,12 +88,16 @@ func (v *msgView) pill(gtx C, cl *widget.Clickable, r backend.Reaction) D {
 
 // emoji draws an emoji by name at about size: its character, its
 // picture for a custom one, or ":name:" while that is loading.
-func (v *msgView) emoji(gtx C, name string, size unit.Dp) D {
+func (v *msgView) emoji(gtx C, name string, size unit.Dp) D { return v.view.emoji(gtx, name, size) }
+
+// emoji draws an emoji by name at about size: its character, its
+// picture for a custom one, or ":name:" while that is loading.
+func (v *richView) emoji(gtx C, name string, size unit.Dp) D {
 	if g, ok := rich.EmojiGlyph(name); ok {
 		lbl := material.Label(v.th, unit.Sp(float32(size)*0.85), g)
 		return lbl.Layout(gtx)
 	}
-	if img, ok := v.view.customEmoji(name); ok {
+	if img, ok := v.customEmoji(name); ok {
 		gtx.Constraints = layout.Exact(image.Pt(gtx.Dp(size), gtx.Dp(size)))
 		return emojiPicture(gtx, img)
 	}

@@ -63,3 +63,36 @@ func TestUnchangedOrEmptyEditSendsNothing(t *testing.T) {
 		t.Fatal("unchanged edit did not end")
 	}
 }
+
+func TestCompletingAMentionInsertsReadableTextAndRecordsTheWire(t *testing.T) {
+	b := newComposeBox(nil, nil, nil, "C1", "")
+	b.people = func() []backend.Person {
+		return []backend.Person{{ID: "U1", Name: "Ada Lovelace", Handle: "ada"}}
+	}
+	b.setText("hi @ad")
+	_, caret := b.composer.Selection()
+	b.popup.update(b.composer.Text(), caret, b.sources, false)
+	if len(b.popup.choices) != 1 || b.popup.choices[0].Label != "Ada Lovelace" {
+		t.Fatalf("choices %+v", b.popup.choices)
+	}
+	b.accept(0)
+	if got := b.composer.Text(); got != "hi @Ada Lovelace " {
+		t.Fatalf("composer %q", got)
+	}
+	if got := b.mentions.Wire("hi @Ada Lovelace"); got != "hi <@U1>" {
+		t.Fatalf("sent as %q", got)
+	}
+}
+
+func TestEditShowsMentionsReadably(t *testing.T) {
+	b := newComposeBox(nil, nil, nil, "C1", "")
+	b.people = func() []backend.Person { return []backend.Person{{ID: "U1", Name: "Ada Lovelace"}} }
+	b.convs = func() []backend.Conversation { return nil }
+	b.beginEdit(backend.Message{TS: "1.0", Text: "ping <@U1> &amp; <!here>"})
+	if got := b.composer.Text(); got != "ping @Ada Lovelace & @here" {
+		t.Fatalf("edit shows %q", got)
+	}
+	if got := b.mentions.Wire(b.composer.Text()); got != "ping <@U1> & <!here>" {
+		t.Fatalf("sent as %q", got)
+	}
+}

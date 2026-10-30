@@ -219,6 +219,7 @@ func newChatWindow(h *hub, conv backend.Conversation, connected bool) *chatWindo
 	c.onThread = func(ts string) { h.openThread(c.conv, ts, "") }
 	c.composeBox = newComposeBox(h, th, &c.box, conv.ID, "")
 	c.onEdit, c.notify = c.composeBox.beginEdit, c.composeBox.note
+	c.composeBox.people, c.composeBox.convs, c.composeBox.rv = h.people, h.cachedConversations, &c.msgView.view
 	c.onEditLast = func() (backend.Message, bool) { return chat.LastOwn(c.tl.Messages()) }
 	c.list.Axis = layout.Vertical
 	c.list.ScrollToEnd = true

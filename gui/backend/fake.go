@@ -89,7 +89,7 @@ var fakeAuthors = []string{"Ada Lovelace", "Grace Hopper", "Linus Torvalds", "Ma
 
 // fakeNames resolves the IDs the fake lines mention.
 var fakeNames = rich.MapNames{
-	Users:    map[string]string{"U1": "Ada Lovelace", "U2": "Grace Hopper", "U3": "Margaret Hamilton"},
+	Users:    map[string]string{"U1": "Ada Lovelace", "U2": "Grace Hopper", "U3": "Margaret Hamilton", "U4": "Linus Torvalds"},
 	Channels: map[string]string{"C1": "general", "C3": "eng-backend"},
 }
 
@@ -596,6 +596,17 @@ var fakeCommands = []Command{
 	{Name: "/remind", Usage: "[@someone or #channel] [what] [when]", Desc: "Set a reminder"},
 	{Name: "/shrug", Usage: "your text", Desc: "Appends ¯\\_(ツ)_/¯ to your message"},
 	{Name: "/standup", Usage: "[notes]", Desc: "Post your standup notes", App: "Standup Bot"},
+}
+
+// People is the fake's people, the authors of its messages.
+func (f *Fake) People(context.Context) ([]Person, error) {
+	return []Person{
+		{ID: "U1", Name: "Ada Lovelace", RealName: "Augusta Ada King", Handle: "ada.lovelace"},
+		{ID: "U2", Name: "Grace Hopper", Handle: "grace.hopper"},
+		{ID: "U3", Name: "Margaret Hamilton", Handle: "margaret.hamilton"},
+		{ID: "U4", Name: "Linus Torvalds", Handle: "linus.torvalds"},
+		{ID: "B1", Name: "Standup Bot", Handle: "standup", Bot: true},
+	}, nil
 }
 
 func (f *Fake) Commands(context.Context) ([]Command, error) {

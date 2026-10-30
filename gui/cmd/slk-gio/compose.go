@@ -1,6 +1,7 @@
 package main
 
 import (
+	"image"
 	"strings"
 	"time"
 	"unicode"
@@ -18,6 +19,7 @@ import (
 	"github.com/gammons/slk/gui/backend"
 	"github.com/gammons/slk/gui/chat"
 	"github.com/gammons/slk/internal/slashcmd"
+	"github.com/gammons/slk/internal/ui/messages"
 )
 
 // composeBox is a window's composer: the editor, its slash-command
@@ -52,6 +54,17 @@ type composeBox struct {
 	focusNext  bool // give the composer the keyboard next frame
 	// onEditLast is the message Up in an empty composer edits.
 	onEditLast func() (backend.Message, bool)
+	// editSeed is the text an edit started from, to notice no change.
+	editSeed string
+
+	// mentions maps the readable mentions the composer inserted
+	// ("@Ada Lovelace") to what is sent ("<@U1>"). people and convs are
+	// what @ and # complete from; rv draws the popup's avatars and emoji
+	// (and holds the custom emoji).
+	mentions chat.Mentions
+	people   func() []backend.Person
+	convs    func() []backend.Conversation
+	rv       *richView
 }
 
 // editFailed is Slack refusing an edit: the composer goes back to
@@ -82,7 +95,8 @@ func (b *composeBox) beginEdit(m backend.Message) {
 		b.stash = b.composer.Text()
 	}
 	b.editing = &m
-	b.setText(chat.EditableText(m.Text))
+	b.editSeed = chat.Readable(chat.EditableText(m.Text), b.nameOf, b.mentions)
+	b.setText(b.editSeed)
 	b.popup.matches = nil
 	b.sendErr = ""
 	b.focusNext = true
@@ -130,14 +144,15 @@ func (b *composeBox) submitEdit(raw string) {
 	case text == "":
 		b.note("Delete the message instead of emptying it", true)
 		return
-	case text == strings.TrimSpace(chat.EditableText(m.Text)):
+	case text == strings.TrimSpace(b.editSeed):
 		b.endEdit()
 		return
 	}
+	wire := b.mentions.Wire(text)
 	b.endEdit()
 	b.sendErr = ""
 	go func() {
-		if err := b.h.be.Edit(b.h.ctx, m, text); err != nil {
+		if err := b.h.be.Edit(b.h.ctx, m, wire); err != nil {
 			b.box.post(editFailed{m: m, text: text, err: err})
 		}
 	}()
@@ -177,18 +192,20 @@ func (b *composeBox) editKeys(gtx C) {
 }
 
 func newComposeBox(h *hub, th *material.Theme, box *inbox, channelID, threadTS string) composeBox {
-	b := composeBox{h: h, box: box, th: th, channelID: channelID, threadTS: threadTS}
+	b := composeBox{h: h, box: box, th: th, channelID: channelID, threadTS: threadTS, mentions: chat.Mentions{}}
 	b.composer.Submit = true // Enter sends; Shift+Enter is a new line
 	return b
 }
 
-// send posts text, as a reply when the composer is a thread's.
-func (b *composeBox) send(text string, broadcast bool) {
+// send posts wire (text with its mentions in Slack's form), as a reply
+// when the composer is a thread's; text is what goes back in the
+// composer if it fails.
+func (b *composeBox) send(text, wire string, broadcast bool) {
 	var err error
 	if b.threadTS != "" {
-		err = b.h.be.SendReply(b.h.ctx, b.channelID, b.threadTS, text, broadcast)
+		err = b.h.be.SendReply(b.h.ctx, b.channelID, b.threadTS, wire, broadcast)
 	} else {
-		err = b.h.be.Send(b.h.ctx, b.channelID, text)
+		err = b.h.be.Send(b.h.ctx, b.channelID, wire)
 	}
 	if err != nil {
 		b.box.post(sendFailed{text: text, err: err})
@@ -228,10 +245,8 @@ func (b *composeBox) update(gtx C) {
 			b.submit(s.Text)
 		}
 	}
-	b.popup.update(b.composer.Text())
-	if b.editing != nil {
-		b.popup.matches = nil // an edit is text, never a command
-	}
+	_, caret := b.composer.Selection()
+	b.popup.update(b.composer.Text(), caret, b.sources, b.editing != nil)
 	b.broadcast.Update(gtx)
 }
 
@@ -326,17 +341,20 @@ func (b *composeBox) popupKeys(gtx C) {
 		if !ok || k.State != key.Press {
 			continue
 		}
-		n := len(b.popup.matches)
+		n := b.popup.n()
+		if n == 0 {
+			continue
+		}
 		switch k.Name {
 		case key.NameUpArrow:
 			b.popup.sel = (b.popup.sel + n - 1) % n
 		case key.NameDownArrow:
 			b.popup.sel = (b.popup.sel + 1) % n
 		case key.NameTab:
-			b.complete(b.popup.matches[b.popup.sel])
+			b.accept(b.popup.sel)
 		case key.NameEscape:
 			b.popup.dismissed = b.composer.Text()
-			b.popup.matches = nil
+			b.popup.matches, b.popup.choices = nil, nil
 		}
 	}
 }
@@ -350,9 +368,71 @@ func (b *composeBox) complete(cmd backend.Command) {
 	b.popup.matches = nil
 }
 
-// submit handles Enter in the composer: it completes a command name
-// still being typed, runs a command, or sends a message.
+// accept takes the popup's row i: a command, or a completion.
+func (b *composeBox) accept(i int) {
+	switch p := &b.popup; {
+	case i < len(p.matches):
+		b.complete(p.matches[i])
+	case i-len(p.matches) < len(p.choices):
+		b.insertChoice(p.choices[i-len(p.matches)])
+	}
+}
+
+// insertChoice replaces the token being typed with a completion and a
+// space, remembering how it is sent.
+func (b *composeBox) insertChoice(c chat.Choice) {
+	_, caret := b.composer.Selection()
+	b.composer.SetCaret(b.popup.start, caret)
+	b.composer.Insert(c.Insert + " ")
+	if c.Wire != "" {
+		b.mentions[c.Insert] = c.Wire
+	}
+	b.popup.choices = nil
+}
+
+// sources is what @, # and : complete from right now.
+func (b *composeBox) sources() completionSources {
+	var s completionSources
+	if b.people != nil {
+		s.people = b.people()
+	}
+	if b.convs != nil {
+		s.convs = b.convs()
+	}
+	if b.rv != nil {
+		s.customs = b.rv.customs
+	}
+	return s
+}
+
+// nameOf names a person or conversation by ID, for showing an edit's
+// mentions readably.
+func (b *composeBox) nameOf(id string) (string, bool) {
+	if b.people != nil {
+		for _, p := range b.people() {
+			if p.ID == id {
+				return p.Name, true
+			}
+		}
+	}
+	if b.convs != nil {
+		for _, c := range b.convs() {
+			if c.ID == id {
+				return c.Name, true
+			}
+		}
+	}
+	return "", false
+}
+
+// submit handles Enter in the composer: it takes a completion or
+// completes a command name still being typed, runs a command, or sends
+// a message.
 func (b *composeBox) submit(raw string) {
+	if len(b.popup.choices) > 0 {
+		b.accept(b.popup.sel) // choices are only listed without commands
+		return
+	}
 	if b.editing != nil {
 		b.submitEdit(raw)
 		return
@@ -371,7 +451,8 @@ func (b *composeBox) submit(raw string) {
 		b.sendErr = ""
 		broadcast := b.threadTS != "" && b.broadcast.Value
 		b.broadcast.Value = false // Slack's box resets after each reply too
-		go b.send(strings.TrimSpace(text), broadcast)
+		text = strings.TrimSpace(text)
+		go b.send(text, b.mentions.Wire(text), broadcast)
 		return
 	}
 	b.sendErr = ""
@@ -387,7 +468,7 @@ func (b *composeBox) submit(raw string) {
 		b.sendErr = name + " isn't supported in slk-gio yet"
 	default:
 		b.composer.SetText("")
-		go b.runCommand(text, name, args)
+		go b.runCommand(text, name, b.mentions.Wire(args))
 	}
 }
 
@@ -425,17 +506,17 @@ func (b *composeBox) commandList(gtx C) D {
 	if !p.open() {
 		return D{}
 	}
-	for i := range p.matches {
+	for i := 0; i < p.n(); i++ {
 		if p.rows[i].Clicked(gtx) {
-			b.complete(p.matches[i])
+			b.accept(i)
 			gtx.Execute(key.FocusCmd{Tag: &b.composer})
 			return D{}
 		}
 	}
 	return layout.Inset{Left: unit.Dp(12), Right: unit.Dp(12), Top: unit.Dp(6)}.Layout(gtx, func(gtx C) D {
 		return widget.Border{Color: colBorder, CornerRadius: unit.Dp(6), Width: unit.Dp(1)}.Layout(gtx, func(gtx C) D {
-			rows := make([]layout.FlexChild, 0, len(p.matches))
-			for i, cmd := range p.matches {
+			rows := make([]layout.FlexChild, 0, p.n())
+			for i := 0; i < p.n(); i++ {
 				rows = append(rows, layout.Rigid(func(gtx C) D {
 					return p.rows[i].Layout(gtx, func(gtx C) D {
 						pointer.CursorPointer.Add(gtx.Ops)
@@ -446,7 +527,10 @@ func (b *composeBox) commandList(gtx C) D {
 						return rounded(gtx, bg, unit.Dp(4), func(gtx C) D {
 							gtx.Constraints.Min.X = gtx.Constraints.Max.X
 							return layout.Inset{Top: unit.Dp(5), Bottom: unit.Dp(5), Left: unit.Dp(10), Right: unit.Dp(10)}.Layout(gtx, func(gtx C) D {
-								return b.commandRow(gtx, cmd)
+								if i < len(p.matches) {
+									return b.commandRow(gtx, p.matches[i])
+								}
+								return b.choiceRow(gtx, p.choices[i-len(p.matches)])
 							})
 						})
 					})
@@ -455,6 +539,45 @@ func (b *composeBox) commandList(gtx C) D {
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
 		})
 	})
+}
+
+// choiceRow is one completion: a person's avatar, a channel's glyph or
+// an emoji, then its name and, muted, a detail.
+func (b *composeBox) choiceRow(gtx C, c chat.Choice) D {
+	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+		layout.Rigid(func(gtx C) D {
+			return layout.Inset{Right: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
+				gtx.Constraints.Min = image.Pt(gtx.Dp(unit.Dp(20)), 0)
+				switch {
+				case c.ID != "" && b.rv != nil:
+					return b.rv.avatar(gtx, c.ID, c.Avatar, c.Label, unit.Dp(20))
+				case c.Emoji != "" && b.rv != nil:
+					return b.rv.emoji(gtx, c.Emoji, unit.Dp(18))
+				case c.Kind != "":
+					g := bodyLabel(b.th, messages.ChannelGlyph(string(c.Kind)))
+					g.Color = colMuted
+					return g.Layout(gtx)
+				}
+				return D{Size: gtx.Constraints.Min}
+			})
+		}),
+		layout.Rigid(func(gtx C) D {
+			lbl := bodyLabel(b.th, c.Label)
+			lbl.MaxLines = 1
+			return lbl.Layout(gtx)
+		}),
+		layout.Flexed(1, func(gtx C) D {
+			if c.Detail == "" {
+				return D{}
+			}
+			return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
+				lbl := captionLabel(b.th, c.Detail)
+				lbl.Color = colMuted
+				lbl.MaxLines = 1
+				return lbl.Layout(gtx)
+			})
+		}),
+	)
 }
 
 func (b *composeBox) commandRow(gtx C, cmd backend.Command) D {

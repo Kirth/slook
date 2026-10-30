@@ -109,6 +109,17 @@ type Reaction struct {
 	Mine  bool
 }
 
+// Person is someone a message can mention: their display name, real
+// name and @handle (any may be empty), and a 72px picture.
+type Person struct {
+	ID        string
+	Name      string
+	RealName  string
+	Handle    string
+	AvatarURL string
+	Bot       bool
+}
+
 // Command is a slash command the workspace offers. App is the
 // installed app providing it, empty for Slack's own.
 type Command struct {
@@ -348,6 +359,11 @@ type Backend interface {
 	Images() *imgpkg.Fetcher
 	// Profile describes a user or app by ID, for the hover card.
 	Profile(ctx context.Context, id string) (Profile, error)
+	// People lists the people slk knows in the workspace (everyone it
+	// has seen), for completing @mentions. It makes no request: Slack's
+	// full member list can be huge, and the people the user talks with
+	// are the ones slk has seen.
+	People(ctx context.Context) ([]Person, error)
 	// Commands lists the slash commands available, without aliases,
 	// sorted by name.
 	Commands(ctx context.Context) ([]Command, error)

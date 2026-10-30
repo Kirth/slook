@@ -89,6 +89,7 @@ func main() {
 		})
 		// Desktop notifications for mentions and DMs while no window
 		// has the keyboard; set before any window or event exists.
+		h.people() // start reading who @ completes to
 		if cfg.Notifications.Enabled {
 			h.notes = notifications.New(cfg.Notifications, be.Self(), notifications.NewSink(cfg.Notifications, h.openNote))
 		}

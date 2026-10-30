@@ -113,6 +113,7 @@ func newThreadWindow(h *hub, conv backend.Conversation, ts string, connected boo
 	t.msgView = newMsgView(h, th, &t.box, func(a backend.Attachment) bool { return t.downloading[backend.AttachmentPath(a)] })
 	t.composeBox = newComposeBox(h, th, &t.box, conv.ID, ts)
 	t.onEdit, t.notify = t.composeBox.beginEdit, t.composeBox.note
+	t.composeBox.people, t.composeBox.convs, t.composeBox.rv = h.people, h.cachedConversations, &t.msgView.view
 	t.onEditLast = func() (backend.Message, bool) {
 		if m, ok := chat.LastOwn(t.thread.Replies()); ok {
 			return m, true

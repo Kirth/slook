@@ -831,6 +831,67 @@ func isSlackError(err error, codes ...string) bool {
 // slackbotID is Slackbot's user ID; it needs no lookup.
 const slackbotID = "USLACKBOT"
 
+// People is everyone the cache and this run have names for: cached
+// users merged with the names learned since start. No request.
+func (s *Slack) People(ctx context.Context) ([]Person, error) {
+	byID := map[string]*Person{}
+	if s.db != nil {
+		users, err := s.db.ListUsers(s.client.TeamID())
+		if err != nil {
+			return nil, err
+		}
+		for _, u := range users {
+			if u.ID == "" {
+				continue
+			}
+			name := u.DisplayName
+			if name == "" {
+				name = u.Name
+			}
+			byID[u.ID] = &Person{ID: u.ID, Name: name, Handle: u.Name, AvatarURL: avatar.SizedURL(u.AvatarURL, avatarPx), Bot: u.IsBot}
+		}
+	}
+	s.mu.Lock()
+	handleOf := map[string]string{}
+	for h, name := range s.handles {
+		handleOf[name] = h
+	}
+	for id, name := range s.users {
+		p := byID[id]
+		if p == nil {
+			p = &Person{ID: id, Handle: handleOf[name]}
+			byID[id] = p
+		}
+		if name != "" && name != id {
+			p.Name = name
+		}
+		if a := s.avatars[id]; a != "" {
+			p.AvatarURL = a
+		}
+	}
+	for id, prof := range s.profiles {
+		if p := byID[id]; p != nil {
+			p.RealName = prof.RealName
+			if prof.Handle != "" {
+				p.Handle = prof.Handle
+			}
+		}
+	}
+	s.mu.Unlock()
+	out := make([]Person, 0, len(byID))
+	for _, p := range byID {
+		if p.Name == "" {
+			p.Name = p.Handle
+		}
+		if p.Name == "" || p.ID == slackbotID || p.ID == s.client.UserID() {
+			continue
+		}
+		out = append(out, *p)
+	}
+	slices.SortFunc(out, func(a, b Person) int { return strings.Compare(text.Fold(a.Name), text.Fold(b.Name)) })
+	return out, nil
+}
+
 // Commands lists the workspace's slash commands, fetched once.
 func (s *Slack) Commands(ctx context.Context) ([]Command, error) {
 	s.mu.Lock()

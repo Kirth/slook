@@ -28,6 +28,13 @@ type hub struct {
 	// customEmoji is the workspace's custom emoji, fetched once.
 	customEmoji func() (map[string]string, error)
 
+	// peopleList is who @ completes to, read from the backend at most
+	// every peopleFresh (see people).
+	peopleMu      sync.Mutex
+	peopleList    []backend.Person
+	peopleAt      time.Time
+	peopleLoading bool
+
 	mu    sync.Mutex
 	convs []backend.Conversation // the last list loaded, for /open and /msg
 	// focused is the windows that have the keyboard: chat windows by
@@ -588,4 +595,33 @@ func (h *hub) openNote(n notifications.Note) {
 		return
 	}
 	h.openChatAt(conv, n.TS)
+}
+
+// peopleFresh is how long the people list serves before it is read
+// again: new people show up as messages arrive.
+const peopleFresh = 5 * time.Minute
+
+// people is who @ completes to: the backend's list, read in the
+// background the first time and again once it is peopleFresh old. Until
+// the first read lands it is empty.
+func (h *hub) people() []backend.Person {
+	h.peopleMu.Lock()
+	defer h.peopleMu.Unlock()
+	if !h.peopleLoading && time.Since(h.peopleAt) > peopleFresh {
+		h.peopleLoading = true
+		go func() {
+			list, err := h.be.People(h.ctx)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "slk-gio: people:", err)
+			}
+			h.peopleMu.Lock()
+			defer h.peopleMu.Unlock()
+			h.peopleLoading = false
+			h.peopleAt = time.Now()
+			if err == nil {
+				h.peopleList = list
+			}
+		}()
+	}
+	return h.peopleList
 }

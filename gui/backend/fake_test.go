@@ -318,3 +318,10 @@ func TestFakeSearchOrders(t *testing.T) {
 		t.Fatalf("newest: first is %s, want %s", recent[0].Message.TS, newer.TS)
 	}
 }
+
+func TestFakePeople(t *testing.T) {
+	ps, err := NewFake(time.Unix(1_700_000_000, 0)).People(context.Background())
+	if err != nil || len(ps) == 0 || ps[0].Name != "Ada Lovelace" {
+		t.Fatalf("people %v, %v", ps, err)
+	}
+}

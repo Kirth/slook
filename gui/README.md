@@ -66,6 +66,19 @@ the conversation here or in Slack. With `notify_command` set, or
 without a service, the basic notification is shown, which cannot open
 anything.
 
+The composer completes as you type:
+
+- `@` suggests people slk has seen, plus `@here`, `@channel` and
+  `@everyone`.
+- `#` suggests your channels.
+- `:` with two or more letters suggests emoji, the workspace's custom
+  ones included.
+
+Up and Down choose, Tab or Enter take one, and Escape hides the list.
+The composer shows readable text (`@Ada Lovelace`, `#general`), and the
+message goes out in Slack's form, so mentions notify and channel names
+link. Editing a message shows its mentions the same readable way.
+
 Every message has an actions menu: "⋯" among the actions shown while
 the pointer is over it, or a right-click anywhere on it. Copy text and
 Copy link put the message or its permalink on the clipboard, and Open
