@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/gammons/slk/internal/theme"
 )
 
 func TestPresetsSetEveryColour(t *testing.T) {
@@ -56,7 +56,7 @@ func TestResolve(t *testing.T) {
 		t.Fatalf("unknown: %v", w)
 	}
 
-	nord, _ := styles.ThemeColorsByName("nord")
+	nord, _ := theme.ColorsByName("nord")
 	p, w = Resolve("Nord", nil)
 	bg, _ := parseHex(nord.Background)
 	fg, _ := parseHex(nord.Text)

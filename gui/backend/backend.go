@@ -4,7 +4,7 @@
 // internal/slack) and Fake (made-up conversations that post on a timer).
 //
 // This is a stopgap. The TUI's ports in internal/core return and push
-// internal/ui message types, so a second frontend cannot use them yet;
+// the TUI's own message types, so a second frontend cannot use them yet;
 // once the events move into core, this interface should be replaced by
 // those ports.
 package backend

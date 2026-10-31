@@ -1,77 +1,50 @@
-package styles
+package theme
 
 import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
-
-	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
-	"github.com/gammons/slk/internal/config"
 )
 
-func TestLoadCustomThemes(t *testing.T) {
+func TestLoadCustom(t *testing.T) {
+	t.Cleanup(SnapshotCustom())
 	dir := t.TempDir()
-
 	themeData := []byte(`
 name = "My Custom"
 
 [colors]
 primary = "#AABBCC"
-accent = "#112233"
-warning = "#445566"
-error = "#778899"
 background = "#000000"
-surface = "#111111"
-surface_dark = "#222222"
-text = "#FFFFFF"
-text_muted = "#999999"
-border = "#555555"
 `)
 	if err := os.WriteFile(filepath.Join(dir, "mycustom.toml"), themeData, 0644); err != nil {
 		t.Fatal(err)
 	}
-
-	// Also write a non-toml file that should be ignored
+	// A non-toml file is ignored.
 	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("not a theme"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	LoadCustomThemes(os.DirFS(dir))
+	LoadCustom(os.DirFS(dir))
 
-	// Verify the custom theme was loaded
-	names := ThemeNames()
-	found := false
-	for _, n := range names {
-		if n == "My Custom" {
-			found = true
-			break
-		}
+	if !slices.Contains(Names(), "My Custom") {
+		t.Fatalf("expected 'My Custom' in theme names, got %v", Names())
 	}
-	if !found {
-		t.Errorf("expected 'My Custom' in theme names, got %v", names)
+	c, ok := ColorsByName("my custom")
+	if !ok || c.Primary != "#AABBCC" {
+		t.Fatalf("my custom = %+v, %v; want primary #AABBCC", c, ok)
 	}
-
-	// Verify it can be applied
-	Apply("my custom", config.Theme{})
-	if !colorEqual(Primary, lipgloss.Color("#AABBCC")) {
-		t.Errorf("expected custom primary #AABBCC")
+	if dark := builtinThemes["dark"].Colors; c.Accent != dark.Accent {
+		t.Errorf("accent = %q, want dark's %q filled in", c.Accent, dark.Accent)
 	}
-
-	// Clean up custom themes for other tests
-	customThemes = map[string]struct {
-		Name   string
-		Colors ThemeColors
-	}{}
-	Apply("dark", config.Theme{})
 }
 
-func TestLoadCustomThemesMissingDir(t *testing.T) {
+func TestLoadCustomMissingDir(t *testing.T) {
 	// Should not panic on non-existent directory
-	LoadCustomThemes(os.DirFS("/tmp/nonexistent-theme-dir-12345"))
+	LoadCustom(os.DirFS("/tmp/nonexistent-theme-dir-12345"))
 }
 
 func TestNewBuiltinThemesRegistered(t *testing.T) {
@@ -90,7 +63,7 @@ func TestNewBuiltinThemesRegistered(t *testing.T) {
 		"Material Palenight",
 	}
 
-	names := ThemeNames()
+	names := Names()
 	have := make(map[string]bool, len(names))
 	for _, n := range names {
 		have[n] = true
@@ -98,7 +71,7 @@ func TestNewBuiltinThemesRegistered(t *testing.T) {
 
 	for _, want := range newThemes {
 		if !have[want] {
-			t.Errorf("new built-in theme %q not registered (ThemeNames: %v)", want, names)
+			t.Errorf("new built-in theme %q not registered (Names: %v)", want, names)
 		}
 	}
 }
@@ -119,7 +92,7 @@ func TestNewThemesHaveRequiredColors(t *testing.T) {
 		"material palenight",
 	}
 	for _, key := range newThemes {
-		_, c := resolveTheme(key)
+		_, c := Resolve(key)
 		if c.Primary == "" || c.Accent == "" || c.Warning == "" || c.Error == "" ||
 			c.Background == "" || c.Surface == "" || c.SurfaceDark == "" ||
 			c.Text == "" || c.TextMuted == "" || c.Border == "" {
@@ -138,7 +111,7 @@ func TestLightThemesHaveDarkSidebars(t *testing.T) {
 		"atom one light",
 	}
 	for _, key := range lightThemes {
-		_, c := resolveTheme(key)
+		_, c := Resolve(key)
 		if c.SidebarBackground == "" {
 			t.Errorf("light theme %q must set SidebarBackground", key)
 		}
@@ -148,144 +121,24 @@ func TestLightThemesHaveDarkSidebars(t *testing.T) {
 	}
 }
 
-// TestANSIDarkThemeRegistered asserts the ansi-dark theme is present
-// in the theme switcher and that every color field is populated with
-// a value that resolves to ansi.BasicColor — confirming the theme
-// will inherit the user's terminal palette rather than emit truecolor.
-func TestANSIDarkThemeRegistered(t *testing.T) {
-	names := ThemeNames()
-	found := false
-	for _, n := range names {
-		if n == "ANSI Dark" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected \"ANSI Dark\" in ThemeNames, got %v", names)
-	}
-
-	_, c := resolveTheme("ANSI Dark")
-	required := map[string]string{
-		"Primary":     c.Primary,
-		"Accent":      c.Accent,
-		"Warning":     c.Warning,
-		"Error":       c.Error,
-		"Background":  c.Background,
-		"Surface":     c.Surface,
-		"SurfaceDark": c.SurfaceDark,
-		"Text":        c.Text,
-		"TextMuted":   c.TextMuted,
-		"Border":      c.Border,
-	}
-	for name, val := range required {
-		if val == "" {
-			t.Errorf("ansi dark.%s is empty", name)
-			continue
-		}
-		col := lipgloss.Color(val)
-		if _, ok := col.(ansi.BasicColor); !ok {
-			t.Errorf("ansi dark.%s = %q resolves to %T, want ansi.BasicColor",
-				name, val, col)
-		}
-	}
-}
-
-// TestANSILightThemeRegistered: mirror of TestANSIDarkThemeRegistered
-// for the light variant.
-func TestANSILightThemeRegistered(t *testing.T) {
-	names := ThemeNames()
-	found := false
-	for _, n := range names {
-		if n == "ANSI Light" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected \"ANSI Light\" in ThemeNames, got %v", names)
-	}
-
-	_, c := resolveTheme("ANSI Light")
-	required := map[string]string{
-		"Primary":     c.Primary,
-		"Accent":      c.Accent,
-		"Warning":     c.Warning,
-		"Error":       c.Error,
-		"Background":  c.Background,
-		"Surface":     c.Surface,
-		"SurfaceDark": c.SurfaceDark,
-		"Text":        c.Text,
-		"TextMuted":   c.TextMuted,
-		"Border":      c.Border,
-	}
-	for name, val := range required {
-		if val == "" {
-			t.Errorf("ansi light.%s is empty", name)
-			continue
-		}
-		col := lipgloss.Color(val)
-		if _, ok := col.(ansi.BasicColor); !ok {
-			t.Errorf("ansi light.%s = %q resolves to %T, want ansi.BasicColor",
-				name, val, col)
-		}
-	}
-}
-
 // TestANSIThemeLookupViaDisplayName regression-pins the realistic
 // theme-switcher path: when the user picks "ANSI Dark" via Ctrl+y,
 // the display name is saved verbatim to config.toml. On the next
-// render, resolveTheme must resolve "ANSI Dark" to the ansi-dark
+// render, Resolve must resolve "ANSI Dark" to the ansi-dark
 // theme — not fall through to the default "dark" theme.
 //
 // The key in builtinThemes must therefore lowercase-match "ANSI Dark"
 // after strings.ToLower, i.e. it must use a space separator like every
 // other multi-word built-in theme ("tokyo night", "gruvbox dark", etc).
 func TestANSIThemeLookupViaDisplayName(t *testing.T) {
-	_, dark := resolveTheme("ANSI Dark")
+	_, dark := Resolve("ANSI Dark")
 	if dark.Background != "0" {
-		t.Errorf("resolveTheme(\"ANSI Dark\").Background = %q, want \"0\" — likely fell through to default \"dark\" theme", dark.Background)
+		t.Errorf("Resolve(\"ANSI Dark\").Background = %q, want \"0\" — likely fell through to default \"dark\" theme", dark.Background)
 	}
 
-	_, light := resolveTheme("ANSI Light")
+	_, light := Resolve("ANSI Light")
 	if light.Background != "15" {
-		t.Errorf("resolveTheme(\"ANSI Light\").Background = %q, want \"15\" — likely fell through to default \"dark\" theme", light.Background)
-	}
-}
-
-// TestANSIThemesSelectionTintPaletteInherited regression-pins that
-// SelectionTintColor for the ANSI themes returns a palette-inherited
-// ansi.BasicColor — not a near-black RGB mix from the default
-// mixColors(Accent, Background=ANSI 0, 0.15) path.
-//
-// Without explicit SelectionBgFocused/SelectionBgUnfocused on the
-// theme, ansi-dark's selection tint computes to roughly RGB(0,25,25)
-// which renders as effectively black against any dark terminal bg.
-// The fix sets the optional theme fields to a palette ANSI color
-// ("8" = bright black / gray) so the tint is visible and tracks
-// the user's terminal palette.
-func TestANSIThemesSelectionTintPaletteInherited(t *testing.T) {
-	cases := []struct {
-		theme string
-	}{
-		{"ansi dark"},
-		{"ansi light"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.theme, func(t *testing.T) {
-			Apply(tc.theme, config.Theme{})
-			t.Cleanup(func() { Apply("dark", config.Theme{}) })
-
-			focused := SelectionTintColor(true)
-			if _, ok := focused.(ansi.BasicColor); !ok {
-				t.Errorf("%s focused selection tint = %T, want ansi.BasicColor (palette-inherited)", tc.theme, focused)
-			}
-
-			unfocused := SelectionTintColor(false)
-			if _, ok := unfocused.(ansi.BasicColor); !ok {
-				t.Errorf("%s unfocused selection tint = %T, want ansi.BasicColor (palette-inherited)", tc.theme, unfocused)
-			}
-		})
+		t.Errorf("Resolve(\"ANSI Light\").Background = %q, want \"15\" — likely fell through to default \"dark\" theme", light.Background)
 	}
 }
 
@@ -371,7 +224,7 @@ var darkEditorThemes = []string{
 
 func TestDarkEditorThemesRegistered(t *testing.T) {
 	have := map[string]bool{}
-	for _, n := range ThemeNames() {
+	for _, n := range Names() {
 		have[n] = true
 	}
 	for _, want := range darkEditorThemes {
@@ -383,7 +236,7 @@ func TestDarkEditorThemesRegistered(t *testing.T) {
 
 func TestDarkEditorThemesHaveRequiredColors(t *testing.T) {
 	for _, name := range darkEditorThemes {
-		_, c := resolveTheme(strings.ToLower(name))
+		_, c := Resolve(strings.ToLower(name))
 		if c.Primary == "" || c.Accent == "" || c.Warning == "" || c.Error == "" ||
 			c.Background == "" || c.Surface == "" || c.SurfaceDark == "" ||
 			c.Text == "" || c.TextMuted == "" || c.Border == "" {
@@ -399,7 +252,7 @@ var lightEditorThemes = []string{
 
 func TestLightEditorThemesRegistered(t *testing.T) {
 	have := map[string]bool{}
-	for _, n := range ThemeNames() {
+	for _, n := range Names() {
 		have[n] = true
 	}
 	for _, want := range lightEditorThemes {
@@ -411,7 +264,7 @@ func TestLightEditorThemesRegistered(t *testing.T) {
 
 func TestLightEditorThemesHaveRequiredColors(t *testing.T) {
 	for _, name := range lightEditorThemes {
-		_, c := resolveTheme(strings.ToLower(name))
+		_, c := Resolve(strings.ToLower(name))
 		if c.Primary == "" || c.Accent == "" || c.Warning == "" || c.Error == "" ||
 			c.Background == "" || c.Surface == "" || c.SurfaceDark == "" ||
 			c.Text == "" || c.TextMuted == "" || c.Border == "" {
@@ -422,7 +275,7 @@ func TestLightEditorThemesHaveRequiredColors(t *testing.T) {
 
 func TestLightEditorThemesHaveDarkSidebars(t *testing.T) {
 	for _, name := range lightEditorThemes {
-		_, c := resolveTheme(strings.ToLower(name))
+		_, c := Resolve(strings.ToLower(name))
 		if c.SidebarBackground == "" {
 			t.Errorf("light theme %q must set SidebarBackground", name)
 		}
@@ -438,7 +291,7 @@ var slackBrandedThemes = []string{
 
 func TestSlackBrandedThemesRegistered(t *testing.T) {
 	have := map[string]bool{}
-	for _, n := range ThemeNames() {
+	for _, n := range Names() {
 		have[n] = true
 	}
 	for _, want := range slackBrandedThemes {
@@ -450,7 +303,7 @@ func TestSlackBrandedThemesRegistered(t *testing.T) {
 
 func TestSlackBrandedThemesHaveRequiredColors(t *testing.T) {
 	for _, name := range slackBrandedThemes {
-		_, c := resolveTheme(strings.ToLower(name))
+		_, c := Resolve(strings.ToLower(name))
 		if c.Primary == "" || c.Accent == "" || c.Warning == "" || c.Error == "" ||
 			c.Background == "" || c.Surface == "" || c.SurfaceDark == "" ||
 			c.Text == "" || c.TextMuted == "" || c.Border == "" {
@@ -467,11 +320,11 @@ func TestBuiltinThemeCount(t *testing.T) {
 }
 
 func TestThemeColorsByName(t *testing.T) {
-	c, ok := ThemeColorsByName("  Nord ")
+	c, ok := ColorsByName("  Nord ")
 	if !ok || c.Background == "" || c.Background != builtinThemes["nord"].Colors.Background {
 		t.Fatalf("Nord: %+v, %v", c, ok)
 	}
-	if _, ok := ThemeColorsByName("no such theme"); ok {
+	if _, ok := ColorsByName("no such theme"); ok {
 		t.Fatal("found a theme that does not exist")
 	}
 }

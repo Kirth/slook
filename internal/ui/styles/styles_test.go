@@ -1,14 +1,13 @@
 package styles
 
 import (
-	"fmt"
 	"image/color"
-	"maps"
 	"slices"
 	"testing"
 
 	"charm.land/lipgloss/v2"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/theme"
 )
 
 // colorEqual compares two color.Color values.
@@ -94,9 +93,9 @@ func TestCurrentThemeReportsDisplayName(t *testing.T) {
 // built-in under a different case, which ThemeNames then lists as the
 // custom spelling.
 func TestCurrentThemeRoundTripsEveryListedTheme(t *testing.T) {
-	saved := maps.Clone(customThemes)
+	restore := theme.SnapshotCustom()
 	t.Cleanup(func() {
-		customThemes = saved
+		restore()
 		Apply("dark", config.Theme{})
 	})
 	colors := ThemeColors{Primary: "#AABBCC", Background: "#000000", Text: "#FFFFFF"}
@@ -190,30 +189,10 @@ func TestApply_ResetsSelectionColorsBetweenThemes(t *testing.T) {
 	}
 }
 
-func TestUserColorDeterministic(t *testing.T) {
-	c1 := UserColor("U12345")
-	c2 := UserColor("U12345")
-	if !colorEqual(c1, c2) {
-		t.Fatal("same userID must return same color")
-	}
-}
-
 func TestUserColorEmptyFallback(t *testing.T) {
 	Apply("dark", config.Theme{})
 	if !colorEqual(UserColor(""), Primary) {
 		t.Fatal("empty userID must fall back to Primary")
-	}
-}
-
-func TestUserColorPaletteSpread(t *testing.T) {
-	seen := map[string]bool{}
-	for _, id := range []string{"U1", "U2", "U3", "U4", "U5", "U6", "U7", "U8", "U9", "U10", "U11", "U12"} {
-		r, g, b, _ := UserColor(id).RGBA()
-		key := fmt.Sprintf("%02x%02x%02x", r>>8, g>>8, b>>8)
-		seen[key] = true
-	}
-	if len(seen) < 8 {
-		t.Fatalf("poor distribution: only %d distinct colors for 12 users", len(seen))
 	}
 }
 

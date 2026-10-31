@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/theme"
 )
 
 // Regression net for loading user theme files: which files register,
@@ -16,10 +17,7 @@ import (
 
 func TestSeam_CustomThemeDirectory(t *testing.T) {
 	t.Cleanup(func() {
-		customThemes = map[string]struct {
-			Name   string
-			Colors ThemeColors
-		}{}
+		theme.ClearCustom()
 		Apply("dark", config.Theme{})
 	})
 	dir := t.TempDir()

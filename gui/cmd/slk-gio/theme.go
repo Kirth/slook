@@ -24,7 +24,7 @@ import (
 	"github.com/gammons/slk/gui/motion"
 	"github.com/gammons/slk/gui/palette"
 	"github.com/gammons/slk/gui/sidebar"
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/gammons/slk/internal/theme"
 )
 
 type (
@@ -199,10 +199,10 @@ func warmUp(th *material.Theme) {
 	}
 }
 
-// authorColor is the TUI's per-user color, keyed by name since that is
-// what the prototype's messages carry.
+// authorColor is the shared per-user color (theme.UserColor), keyed by
+// name since that is what the prototype's messages carry.
 func authorColor(name string) color.NRGBA {
-	return color.NRGBAModel.Convert(styles.UserColor(name)).(color.NRGBA)
+	return theme.UserColor(name)
 }
 
 // cardColor is the stripe color of a legacy attachment: Slack's named

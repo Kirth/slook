@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gammons/slk/internal/ui/styles"
+	"github.com/gammons/slk/internal/theme"
 )
 
 // Palette is every colour the GUI draws with, by role.
@@ -124,7 +124,7 @@ func Resolve(name string, overrides map[string]string) (Palette, []string) {
 	}
 	p, ok := Presets[key]
 	if !ok {
-		if tc, found := styles.ThemeColorsByName(key); found {
+		if tc, found := theme.ColorsByName(key); found {
 			var bad []string
 			p, bad = fromTUI(tc)
 			for _, b := range bad {
@@ -185,7 +185,7 @@ func (p *Palette) fields() map[string]*color.NRGBA {
 // fromTUI maps a TUI theme onto the palette's roles, deriving what the
 // TUI has no colour for by mixing. bad lists colours it could not read
 // (they fall back to dark's).
-func fromTUI(tc styles.ThemeColors) (Palette, []string) {
+func fromTUI(tc theme.Colors) (Palette, []string) {
 	base := Presets[Default]
 	var bad []string
 	get := func(name, s string, fallback color.NRGBA) color.NRGBA {
