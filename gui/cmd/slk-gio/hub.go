@@ -489,6 +489,41 @@ func (h *hub) openChatWith(conv backend.Conversation, text string) {
 	}
 }
 
+// joinAndOpen joins a channel the user is not in and opens its window,
+// with text in its composer when that is empty. It returns at once; a
+// failure is reported to from (the window that asked) as a note.
+func (h *hub) joinAndOpen(r backend.ChannelResult, text string, from *inbox) {
+	go func() {
+		conv, err := h.be.Join(h.ctx, r.ID)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio: join #"+r.Name+":", err)
+			from.post(sendFailed{note: "Could not join #" + r.Name + ": " + err.Error()})
+			return
+		}
+		h.openChatWith(conv, text)
+	}()
+}
+
+// channelsFound is Slack's answer to a filter's channel search (see
+// chat.RemoteSearch).
+type channelsFound struct {
+	q   string
+	res []backend.ChannelResult
+	err error
+}
+
+// searchChannels asks Slack which channels match q, off the window's
+// event loop, and posts the answer to box as a channelsFound.
+func (h *hub) searchChannels(q string, box *inbox) {
+	go func() {
+		res, err := h.be.SearchChannels(h.ctx, q)
+		if err == nil && res == nil {
+			res = []backend.ChannelResult{} // answered: nothing matches
+		}
+		box.post(channelsFound{q: q, res: res, err: err})
+	}()
+}
+
 // adoptChat opens a window that takes over an open one's state, for
 // moveHere; the old window closes itself after.
 func (h *hub) adoptChat(st chatState) {

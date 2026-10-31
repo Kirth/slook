@@ -100,6 +100,14 @@ type Section struct {
 	Type  string
 }
 
+// ChannelResult is a channel a search found: Member says the user is
+// in it. Kind is KindChannel or KindPrivate; a search finds no DMs.
+type ChannelResult struct {
+	ID, Name string
+	Kind     Kind
+	Member   bool
+}
+
 // Message is one message, ready to display. Body is its content as
 // blocks of styled spans; AuthorID keys the author's avatar and
 // AvatarURL is a 72px picture, empty when none is known.
@@ -597,6 +605,15 @@ type Backend interface {
 	// a message from a conversation the list does not know. It is also
 	// reported through Run as a ConversationOpened.
 	Conversation(ctx context.Context, id string) (Conversation, error)
+	// SearchChannels asks Slack which channels match query, joined or
+	// not (edgeapi channels/search): for finding one the user is not
+	// in. Callers debounce (one request per pause in typing); an empty
+	// query is nil with no request.
+	SearchChannels(ctx context.Context, query string) ([]ChannelResult, error)
+	// Join joins a channel (a no-op when the user is in it already) and
+	// describes it. It is also reported through Run as a
+	// ConversationOpened.
+	Join(ctx context.Context, channelID string) (Conversation, error)
 	// Details fetches a conversation's topic, purpose and size.
 	Details(ctx context.Context, channelID string) (Details, error)
 	// Members lists who is in a conversation: from the cache when it

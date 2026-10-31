@@ -3,6 +3,8 @@ package backend
 import (
 	"context"
 	"errors"
+	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -402,5 +404,87 @@ func TestFakeThreads(t *testing.T) {
 	}
 	if ev := (<-f.events).(ThreadsUnread); ev.Count != 0 {
 		t.Fatalf("count %+v", ev)
+	}
+}
+
+func TestFakeSearchChannelsFindsUnjoined(t *testing.T) {
+	f := NewFake(time.Unix(1_700_000_000, 0))
+	f.Interval = 0
+	ctx := context.Background()
+
+	res, err := f.SearchChannels(ctx, "SRE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0] != (ChannelResult{ID: "C20", Name: "platform-sre", Kind: KindChannel}) {
+		t.Fatalf("search sre = %#v, want platform-sre, not joined", res)
+	}
+	res, _ = f.SearchChannels(ctx, "design")
+	var got []string
+	for _, r := range res {
+		got = append(got, r.Name+":"+strconv.FormatBool(r.Member))
+	}
+	if want := []string{"design-review:true", "design-crit:false"}; !slices.Equal(got, want) {
+		t.Fatalf("search design = %v, want %v", got, want)
+	}
+	if res, err := f.SearchChannels(ctx, ""); res != nil || err != nil {
+		t.Fatalf("empty query = %v, %v; want nothing", res, err)
+	}
+	if res, _ := f.SearchChannels(ctx, "ada"); len(res) != 0 {
+		t.Fatalf("search ada = %v; DMs are not channels", res)
+	}
+}
+
+func TestFakeJoinOpensTheChannel(t *testing.T) {
+	f := NewFake(time.Unix(1_700_000_000, 0))
+	f.Interval = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan Event, 16)
+	go f.Run(ctx, func(ev Event) { got <- ev })
+
+	conv, err := f.Join(ctx, "C22")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conv.ID != "C22" || conv.Name != "cat-pictures" || conv.Kind != KindChannel {
+		t.Fatalf("joined %#v", conv)
+	}
+	for ev := range got {
+		if o, ok := ev.(ConversationOpened); ok {
+			if o.Conv.ID != "C22" {
+				t.Fatalf("opened %#v, want C22", o.Conv)
+			}
+			break
+		}
+	}
+	convs, _ := f.Conversations(ctx)
+	if !slices.ContainsFunc(convs, func(c Conversation) bool { return c.ID == "C22" }) {
+		t.Fatal("C22 is not in the conversations after joining")
+	}
+	if hist, err := f.History(ctx, "C22"); err != nil || len(hist) == 0 {
+		t.Fatalf("history after joining = %d messages, %v", len(hist), err)
+	}
+	if res, _ := f.SearchChannels(ctx, "cat"); len(res) != 1 || !res[0].Member {
+		t.Fatalf("search after joining = %#v, want a member", res)
+	}
+
+	// Joining again is a no-op without an event; an unknown channel fails.
+	if _, err := f.Join(ctx, "C22"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Join(ctx, "C99"); err == nil || err.Error() != "channel_not_found" {
+		t.Fatalf("join C99 = %v, want channel_not_found", err)
+	}
+	if err := f.Send(ctx, "C1", "after"); err != nil {
+		t.Fatal(err)
+	}
+	for ev := range got {
+		if _, ok := ev.(ConversationOpened); ok {
+			t.Fatalf("joining a channel the user is in reported %#v", ev)
+		}
+		if _, ok := ev.(MessagePosted); ok {
+			break
+		}
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"strings"
 	"time"
 	"unicode"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/gammons/slk/gui/backend"
 	"github.com/gammons/slk/gui/chat"
+	"github.com/gammons/slk/internal/slackfmt"
 	"github.com/gammons/slk/internal/slashcmd"
 )
 
@@ -502,8 +504,9 @@ func (b *composeBox) runCommand(typed, name, args string) {
 }
 
 // openNamed is /open and /msg: it opens the window of a conversation
-// the user is in, by name. For /msg (kind "dm") the target is a direct
-// message and the rest of args is put in its composer, not sent.
+// by name. For /msg (kind "dm") the target is a direct message and the
+// rest of args is put in its composer, not sent. For /open (and /join)
+// a channel the user is not in is looked up on Slack and joined.
 func (b *composeBox) openNamed(typed, args, kind string) {
 	convs, err := b.h.conversations()
 	if err != nil {
@@ -515,12 +518,51 @@ func (b *composeBox) openNamed(typed, args, kind string) {
 		b.box.post(sendFailed{text: typed, note: "Name a conversation to open"})
 		return
 	}
+	if kind == "" {
+		b.openChannel(typed, target, convs)
+		return
+	}
 	conv, rest, ok := findConversation(convs, target, kind == "dm")
 	if !ok {
 		b.box.post(sendFailed{text: typed, note: "No conversation named " + strings.Fields(target)[0]})
 		return
 	}
 	b.h.openChatWith(conv, strings.TrimSpace(rest))
+}
+
+// openChannel is /open and /join: a <#C1|name> mention by its ID, else
+// a conversation the user is in by name, else a channel of that exact
+// name Slack finds (one channels/search), which is joined. What follows
+// the name goes in the window's composer.
+func (b *composeBox) openChannel(typed, target string, convs []backend.Conversation) {
+	first := strings.Fields(target)[0]
+	after := strings.TrimSpace(strings.TrimPrefix(target, first))
+	if ms := slackfmt.MentionedChannels(first); len(ms) == 1 && strings.HasPrefix(first, "<#") {
+		for _, c := range convs {
+			if c.ID == ms[0].ID {
+				b.h.openChatWith(c, after)
+				return
+			}
+		}
+		b.h.joinAndOpen(backend.ChannelResult{ID: ms[0].ID, Name: cmp.Or(ms[0].Label, ms[0].ID)}, after, b.box)
+		return
+	}
+	if conv, rest, ok := findConversation(convs, target, false); ok {
+		b.h.openChatWith(conv, strings.TrimSpace(rest))
+		return
+	}
+	name := strings.TrimPrefix(first, "#")
+	res, err := b.h.be.SearchChannels(b.h.ctx, name)
+	if err != nil {
+		b.box.post(sendFailed{text: typed, note: "Could not look for #" + name + ": " + err.Error()})
+		return
+	}
+	r, ok := chat.ExactChannel(name, res)
+	if !ok {
+		b.box.post(sendFailed{text: typed, note: "No conversation named " + name})
+		return
+	}
+	b.h.joinAndOpen(r, after, b.box)
 }
 
 // commandList draws the popup's rows.

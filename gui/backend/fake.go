@@ -42,6 +42,9 @@ type Fake struct {
 	logs  map[string][]Message
 	convs map[string]*Conversation // activity state, by ID
 	order []string
+	// unjoined is channels the user is not in, which SearchChannels
+	// finds and Join moves into convs.
+	unjoined map[string]*Conversation
 	// followed is the threads the user follows in C1, by parent ts:
 	// true while it has unread replies.
 	followed map[string]bool
@@ -85,6 +88,13 @@ var fakeQuiet = []struct {
 	{"C16", "kubernetes-upgrades", KindPrivate, 61, ""},
 	{"C17", "hackathon", KindChannel, 360, ""},
 	{"D3", "Margaret Hamilton", KindDM, 45, ""}, // peer U3
+}
+
+// fakeUnjoined are channels the user is not in, to find and join.
+var fakeUnjoined = []Conversation{
+	{ID: "C20", Name: "platform-sre", Kind: KindChannel},
+	{ID: "C21", Name: "design-crit", Kind: KindChannel},
+	{ID: "C22", Name: "cat-pictures", Kind: KindChannel},
 }
 
 // fakeSections mirror a Slack sidebar with one custom section.
@@ -134,6 +144,11 @@ func NewFake(now time.Time) *Fake {
 		logs:     map[string][]Message{},
 		seq:      now.Add(-2 * time.Hour).Unix(),
 		convs:    map[string]*Conversation{},
+		unjoined: map[string]*Conversation{},
+	}
+	for _, c := range fakeUnjoined {
+		c := c
+		f.unjoined[c.ID] = &c
 	}
 	for i, c := range fakeConversations {
 		c := c

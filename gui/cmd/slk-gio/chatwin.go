@@ -419,6 +419,8 @@ func (c *chatWindow) apply() {
 			c.failedEdit(v)
 		case commandsLoaded:
 			c.popup.cmds = v.cmds
+		case channelsFound:
+			c.sw.found(v)
 		case composeText:
 			if c.composer.Len() == 0 {
 				c.composer.SetText(v.text)
@@ -571,12 +573,15 @@ func (c *chatWindow) layout(gtx C) {
 	fillBackground(gtx)
 	c.sizeDp = image.Pt(int(float32(gtx.Constraints.Max.X)/gtx.Metric.PxPerDp), int(float32(gtx.Constraints.Max.Y)/gtx.Metric.PxPerDp))
 	convs := c.h.cachedConversations()
-	if chosen, showAll, closed := c.sw.update(gtx, convs, c.conv.ID); closed {
+	search := func(q string) { c.h.searchChannels(q, &c.box) }
+	if pick := c.sw.update(gtx, convs, c.conv.ID, search); pick.closed {
 		gtx.Execute(key.FocusCmd{Tag: &c.composer})
 		switch {
-		case chosen != nil:
-			c.h.openChat(*chosen)
-		case showAll:
+		case pick.conv != nil:
+			c.h.openChat(*pick.conv)
+		case pick.join != nil:
+			c.h.joinAndOpen(*pick.join, "", &c.box)
+		case pick.all:
 			c.h.showList()
 		}
 	}

@@ -16,6 +16,7 @@ import (
 	"gioui.org/widget/material"
 
 	"github.com/gammons/slk/gui/backend"
+	"github.com/gammons/slk/gui/chat"
 	"github.com/gammons/slk/gui/sidebar"
 	"github.com/gammons/slk/internal/slackfmt"
 )
@@ -25,18 +26,48 @@ const switcherRows = 8
 
 // switcher is a chat window's quick switcher (Ctrl+K or the menu
 // button): a filter over every conversation, unread ones first when it
-// is empty. Choosing one opens its window, here: an open window on
-// another workspace is moved to this one.
+// is empty, and under them the channels the user is not in that Slack
+// finds for the filter (asked once typing pauses; see
+// chat.RemoteSearch). Choosing a conversation opens its window, here:
+// an open window on another workspace is moved to this one. Choosing a
+// channel the user is not in joins it.
 type switcher struct {
-	open    bool
-	focus   bool // move the keyboard to the filter next frame
-	ed      widget.Editor
-	rl      readline
-	sel     int
-	rows    [switcherRows + 1]widget.Clickable // the last is "All conversations"
+	open  bool
+	focus bool // move the keyboard to the filter next frame
+	ed    widget.Editor
+	rl    readline
+	sel   int
+	// rows are the lines' clickables by position: the conversations,
+	// the channels to join, then "All conversations".
+	rows    [2*switcherRows + 1]widget.Clickable
 	results []backend.Conversation
+	// remote is the channel search; joinable is its answer for the
+	// filter, without the channels the user is in; remoteErr is a
+	// search that failed.
+	remote    chat.RemoteSearch
+	joinable  []backend.ChannelResult
+	remoteErr string
 	// openedAt is when it last opened, for its entrance.
 	openedAt time.Time
+}
+
+// switcherPick is what the switcher's update chose: a conversation to
+// open, a channel to join, or the list (all); closed is whether it
+// closed.
+type switcherPick struct {
+	conv   *backend.Conversation
+	join   *backend.ChannelResult
+	all    bool
+	closed bool
+}
+
+// found takes Slack's answer to the switcher's channel search.
+func (s *switcher) found(v channelsFound) {
+	s.remote.Done(v.q, v.res)
+	s.remoteErr = ""
+	if v.err != nil {
+		s.remoteErr = "Could not search channels: " + v.err.Error()
+	}
 }
 
 func (s *switcher) toggle() {
@@ -77,11 +108,12 @@ func switcherMatches(convs []backend.Conversation, query, current string) []back
 	return out
 }
 
-// update handles the switcher's keys and clicks. It returns the
-// conversation chosen, or showAll for "All conversations".
-func (s *switcher) update(gtx C, convs []backend.Conversation, current string) (chosen *backend.Conversation, showAll, closed bool) {
+// update handles the switcher's keys and clicks. search asks Slack
+// which channels match a query (hub.searchChannels), its answer coming
+// back through found.
+func (s *switcher) update(gtx C, convs []backend.Conversation, current string, search func(q string)) switcherPick {
 	if !s.open {
-		return nil, false, false
+		return switcherPick{}
 	}
 	for {
 		ev, ok := gtx.Event(
@@ -96,7 +128,7 @@ func (s *switcher) update(gtx C, convs []backend.Conversation, current string) (
 		if !ok || k.State != key.Press {
 			continue
 		}
-		n := len(s.results) + 1
+		n := s.n()
 		switch k.Name {
 		case key.NameUpArrow:
 			s.sel = (s.sel + n - 1) % n
@@ -104,7 +136,7 @@ func (s *switcher) update(gtx C, convs []backend.Conversation, current string) (
 			s.sel = (s.sel + 1) % n
 		case key.NameEscape:
 			s.open = false
-			return nil, false, true
+			return switcherPick{closed: true}
 		}
 	}
 	s.rl.keys(gtx, &s.ed)
@@ -121,8 +153,20 @@ func (s *switcher) update(gtx C, convs []backend.Conversation, current string) (
 			submitted = true
 		}
 	}
-	s.results = switcherMatches(convs, s.ed.Text(), current)
-	if s.sel > len(s.results) {
+	q := s.ed.Text()
+	s.results = switcherMatches(convs, q, current)
+	s.remote.Type(q, gtx.Now)
+	if rq, ok := s.remote.Due(gtx.Now); ok && search != nil {
+		search(rq)
+	}
+	if at := s.remote.Wake(); !at.IsZero() {
+		gtx.Execute(op.InvalidateCmd{At: at})
+	}
+	s.joinable = chat.Unjoined(s.remote.Results(q), convs)
+	if len(s.joinable) > switcherRows {
+		s.joinable = s.joinable[:switcherRows]
+	}
+	if s.sel >= s.n() {
 		s.sel = 0
 	}
 	pick := -1
@@ -134,18 +178,27 @@ func (s *switcher) update(gtx C, convs []backend.Conversation, current string) (
 			pick = i
 		}
 	}
+	local, remote := len(s.results), len(s.joinable)
 	switch {
 	case pick < 0:
-		return nil, false, false
-	case pick < len(s.results):
+		return switcherPick{}
+	case pick < local:
 		c := s.results[pick]
 		s.open = false
-		return &c, false, true
+		return switcherPick{conv: &c, closed: true}
+	case pick < local+remote:
+		r := s.joinable[pick-local]
+		s.open = false
+		return switcherPick{join: &r, closed: true}
 	default:
 		s.open = false
-		return nil, true, true
+		return switcherPick{all: true, closed: true}
 	}
 }
+
+// n is how many lines the switcher lists: conversations, channels to
+// join, and "All conversations".
+func (s *switcher) n() int { return len(s.results) + len(s.joinable) + 1 }
 
 // layout draws the switcher as a panel over the window's top, under the
 // header.
@@ -178,6 +231,23 @@ func (s *switcher) panel(gtx C, th *material.Theme, view *richView) D {
 				}))
 			}
 			n := len(s.results)
+			if len(s.joinable) > 0 || s.remoteErr != "" {
+				children = append(children, layout.Rigid(func(gtx C) D {
+					text := "Channels you're not in"
+					if len(s.joinable) == 0 {
+						text = s.remoteErr
+					}
+					lbl := captionLabel(th, text)
+					lbl.Color = colMuted
+					return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(2), Left: unit.Dp(8)}.Layout(gtx, lbl.Layout)
+				}))
+			}
+			for i, r := range s.joinable {
+				children = append(children, layout.Rigid(func(gtx C) D {
+					return s.row(gtx, th, view, n+i, func(gtx C) D { return joinLine(gtx, th, r) })
+				}))
+			}
+			n += len(s.joinable)
 			children = append(children, layout.Rigid(func(gtx C) D {
 				return s.row(gtx, th, view, n, func(gtx C) D {
 					lbl := secondaryLabel(th, "All conversations…")
@@ -238,6 +308,30 @@ func switcherConv(gtx C, th *material.Theme, view *richView, c backend.Conversat
 				return lbl.Layout(gtx)
 			}
 			return D{}
+		}),
+	)
+}
+
+// joinLine is a channel the user is not in: its glyph, its name, and
+// "Join" at the end.
+func joinLine(gtx C, th *material.Theme, r backend.ChannelResult) D {
+	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+		layout.Rigid(func(gtx C) D {
+			gtx.Constraints.Min.X = gtx.Dp(30)
+			g := bodyLabel(th, slackfmt.ChannelGlyph(string(r.Kind)))
+			g.Color = colMuted
+			return g.Layout(gtx)
+		}),
+		layout.Flexed(1, func(gtx C) D {
+			lbl := bodyLabel(th, r.Name)
+			lbl.MaxLines = 1
+			lbl.Color = colMuted
+			return lbl.Layout(gtx)
+		}),
+		layout.Rigid(func(gtx C) D {
+			lbl := captionLabel(th, "Join")
+			lbl.Color = colAccent
+			return lbl.Layout(gtx)
 		}),
 	)
 }

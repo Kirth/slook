@@ -240,6 +240,15 @@ its edges. When the compositor draws window decorations itself
 (server-side decorations, and always on X11), its buttons are used and
 the header leaves them out.
 
+Channels you are not in show up too. Once typing in the switcher (or
+the list's filter) pauses for 300 ms, slk-gio asks Slack once which
+channels match (edgeapi `channels/search`, as Slack's own client does;
+nothing is fetched until you type two letters), and lists the ones you
+are not in under "Channels you're not in". Choosing one, or Enter when
+nothing you are in matches, joins it (`conversations.join`) and opens
+its window. `/open #channel` and `/join #channel` do the same for a
+channel named exactly that.
+
 At the top of the list, **Threads** counts the threads you follow
 (ones you started, replied in or were mentioned in) that have replies
 you have not read. It opens the Threads window: each thread with its
@@ -305,9 +314,10 @@ client does; what it produces comes back like any message, and a reply
 only you can see (`/remind`'s confirmation, say) shows in a tinted box
 marked "Only visible to you" until the window reloads. A refused command
 ("/nope is not a valid command") is reported under the composer with
-the text put back. `/open #channel` and `/msg @person [text]` are handled
+the text put back. `/open #channel` (or `/join`) and `/msg @person [text]` are handled
 locally, as Slack's client does, and open that conversation's window
-(`/msg` puts the text in its composer). A leading space sends `/text` as
+(`/msg` puts the text in its composer); `/open` joins a channel you
+are not in. A leading space sends `/text` as
 a plain message.
 
 ### Editing keys
@@ -472,8 +482,8 @@ with `GIORENDERER=opengl` and without.
 
 - **Sending files.** Pasting or dropping a picture or file into the
   composer does nothing yet; attachments can only be shown and saved.
-- **Starting conversations.** Joining a channel you are not in, or
-  starting a new DM (`/open`, `/msg`), is not there; nor `/leave`.
+- **Starting conversations.** Starting a new DM with someone you have
+  no DM with (`/msg`) is not there; nor `/leave`.
 - **Interactive apps.** Dialogs some commands open (an app's modal) and
   the buttons on ephemeral replies (`/giphy`'s Shuffle and Send) do
   nothing yet.

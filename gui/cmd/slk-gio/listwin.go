@@ -65,6 +65,15 @@ type listWindow struct {
 	sizeDp    image.Point
 	moved     bool
 	shown     bool // the first frame is out
+
+	// remote searches Slack for channels the user is not in as the
+	// filter is typed; joinable is its answer without the ones listed,
+	// joins their rows by ID. note is a failure to show under the
+	// filter (a search, a join).
+	remote   chat.RemoteSearch
+	joinable []backend.ChannelResult
+	joins    map[string]*widget.Clickable
+	note     string
 }
 
 // listState is what the list hands to its replacement when it moves to
@@ -143,7 +152,8 @@ type listItem struct {
 	kind  int
 	group *sidebar.Group
 	conv  backend.Conversation
-	quiet bool // a conversation shown from an expanded fold
+	quiet bool                  // a conversation shown from an expanded fold
+	join  backend.ChannelResult // a channel the user is not in (itemJoin)
 }
 
 const (
@@ -151,7 +161,11 @@ const (
 	itemConv
 	itemFold
 	itemThreads // the Threads row, first
+	itemJoin    // a channel the user is not in, from Slack's search
 )
+
+// joinHeading heads the channels a filter finds that the user is not in.
+var joinHeading = &sidebar.Group{Key: "join", Title: "Channels you're not in"}
 
 func newListWindow(h *hub, connected bool) *listWindow {
 	l := &listWindow{
@@ -162,6 +176,7 @@ func newListWindow(h *hub, connected bool) *listWindow {
 		connected: connected,
 		index:     map[string]int{},
 		rows:      map[string]*widget.Clickable{},
+		joins:     map[string]*widget.Clickable{},
 		folds:     map[string]*widget.Clickable{},
 		expanded:  map[string]bool{},
 		presence:  map[string]presence{},
@@ -280,6 +295,14 @@ func (l *listWindow) apply() {
 			}
 		case customEmojiLoaded:
 			l.customs = v.customs
+		case channelsFound:
+			l.remote.Done(v.q, v.res)
+			l.note = ""
+			if v.err != nil {
+				l.note = "Could not search channels: " + v.err.Error()
+			}
+		case sendFailed:
+			l.note = v.note
 		case backend.ConnectionChanged:
 			l.connected = v.Connected
 		case raiseWindow:
@@ -325,6 +348,12 @@ func (l *listWindow) items(now time.Time) []listItem {
 		for _, c := range sidebar.Search(l.convs, q) {
 			out = append(out, listItem{kind: itemConv, conv: c})
 		}
+		if len(l.joinable) > 0 {
+			out = append(out, listItem{kind: itemHeading, group: joinHeading})
+			for _, r := range l.joinable {
+				out = append(out, listItem{kind: itemJoin, join: r})
+			}
+		}
 		return out
 	}
 	groups := sidebar.Arrange(l.convs, l.sections, now, sidebar.QuietAfter)
@@ -360,14 +389,26 @@ func (l *listWindow) layout(gtx C) {
 		if !ok {
 			break
 		}
-		if _, ok := ev.(widget.SubmitEvent); ok {
+		switch ev.(type) {
+		case widget.SubmitEvent:
 			submitted = true
+		case widget.ChangeEvent:
+			l.note = ""
 		}
 	}
 	for id, btn := range l.rows {
 		if btn.Clicked(gtx) {
 			if c := l.conv(id); c != nil {
 				l.open(*c)
+			}
+		}
+	}
+	for id, btn := range l.joins {
+		if btn.Clicked(gtx) {
+			for _, r := range l.joinable {
+				if r.ID == id {
+					l.h.joinAndOpen(r, "", &l.box)
+				}
 			}
 		}
 	}
@@ -379,15 +420,23 @@ func (l *listWindow) layout(gtx C) {
 	if l.threadsRow.Clicked(gtx) {
 		l.h.showThreads()
 	}
+	l.searchRemote(gtx)
 	items := l.items(gtx.Now)
 	if submitted && strings.TrimSpace(l.filter.Text()) != "" {
+		// The first match: a conversation the user is in, else a
+		// channel to join.
 		for _, it := range items {
 			if it.kind == itemConv {
 				l.open(it.conv)
 				break
 			}
+			if it.kind == itemJoin {
+				l.h.joinAndOpen(it.join, "", &l.box)
+				break
+			}
 		}
 		l.filter.SetText("")
+		l.searchRemote(gtx)
 		items = l.items(gtx.Now)
 	}
 	if !l.focused {
@@ -406,6 +455,16 @@ func (l *listWindow) layout(gtx C) {
 		layout.Rigid(func(gtx C) D {
 			return layout.UniformInset(unit.Dp(10)).Layout(gtx, framedEditor(l.th, &l.filter, "Find a conversation"))
 		}),
+		layout.Rigid(func(gtx C) D {
+			if l.note == "" {
+				return D{}
+			}
+			return layout.Inset{Left: unit.Dp(12), Right: unit.Dp(12), Bottom: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
+				lbl := secondaryLabel(l.th, l.note)
+				lbl.Color = colError
+				return lbl.Layout(gtx)
+			})
+		}),
 		layout.Rigid(divider),
 		layout.Flexed(1, func(gtx C) D {
 			switch {
@@ -413,6 +472,8 @@ func (l *listWindow) layout(gtx C) {
 				return notice(gtx, l.th, "Loading conversations…", colMuted)
 			case l.loadErr != "":
 				return notice(gtx, l.th, l.loadErr, colError)
+			case len(items) == 0 && l.remote.Searching():
+				return notice(gtx, l.th, "Searching channels…", colMuted)
 			case len(items) == 0 && strings.TrimSpace(l.filter.Text()) != "":
 				return notice(gtx, l.th, "No conversation matches.", colMuted)
 			}
@@ -425,6 +486,8 @@ func (l *listWindow) layout(gtx C) {
 					return l.fold(gtx, it.group)
 				case itemThreads:
 					return l.threadsLine(gtx)
+				case itemJoin:
+					return l.joinRow(gtx, it.join)
 				}
 				return l.row(gtx, it.conv, it.quiet)
 			})
@@ -581,6 +644,57 @@ func (l *listWindow) row(gtx C, c backend.Conversation, quiet bool) D {
 						return name.Layout(gtx)
 					}),
 					layout.Rigid(func(gtx C) D { return l.rowEnd(gtx, c) }),
+				)
+			})
+		})
+	})
+}
+
+// searchRemote keeps the channel search in step with the filter: asks
+// Slack once typing pauses, and takes what it found that the list does
+// not have.
+func (l *listWindow) searchRemote(gtx C) {
+	q := l.filter.Text()
+	l.remote.Type(q, gtx.Now)
+	if rq, ok := l.remote.Due(gtx.Now); ok {
+		l.h.searchChannels(rq, &l.box)
+	}
+	if at := l.remote.Wake(); !at.IsZero() {
+		gtx.Execute(op.InvalidateCmd{At: at})
+	}
+	l.joinable = chat.Unjoined(l.remote.Results(q), l.convs)
+}
+
+// joinRow is a channel the user is not in; choosing it joins it.
+func (l *listWindow) joinRow(gtx C, r backend.ChannelResult) D {
+	btn := l.joins[r.ID]
+	if btn == nil {
+		btn = new(widget.Clickable)
+		l.joins[r.ID] = btn
+	}
+	return btn.Layout(gtx, func(gtx C) D {
+		pointer.CursorPointer.Add(gtx.Ops)
+		return hoverFill(gtx, btn.Hovered(), func(gtx C) D {
+			return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4), Left: unit.Dp(12), Right: unit.Dp(12)}.Layout(gtx, func(gtx C) D {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx C) D {
+						gtx.Constraints.Min.X = gtx.Dp(unit.Dp(28))
+						g := bodyLabel(l.th, slackfmt.ChannelGlyph(string(r.Kind)))
+						g.Color = colMuted
+						return g.Layout(gtx)
+					}),
+					layout.Flexed(1, func(gtx C) D {
+						name := bodyLabel(l.th, r.Name)
+						name.MaxLines = 1
+						name.Color = colMuted
+						return name.Layout(gtx)
+					}),
+					layout.Rigid(func(gtx C) D {
+						lbl := captionLabel(l.th, "Join")
+						lbl.Color = colAccent
+						return lbl.Layout(gtx)
+					}),
 				)
 			})
 		})
