@@ -62,11 +62,11 @@ type msgView struct {
 	}
 
 	// picker chooses a reaction for a message; menu is a message's
-	// actions and confirm asks before deleting one; clip is text waiting
-	// for the next frame to reach the clipboard.
+	// actions and confirm asks before deleting or forwarding one; clip
+	// is text waiting for the next frame to reach the clipboard.
 	picker  reactPicker
 	menu    msgMenu
-	confirm confirmDelete
+	confirm confirmDialog
 	clip    string
 	// onEdit starts editing one of the user's messages in the window's
 	// composer; notify shows a note under the messages (an error, or a
@@ -83,6 +83,9 @@ type msgView struct {
 	// when m cannot be marked unread from (an ephemeral, a thread's
 	// parent). Nil offers it for nothing.
 	markUnread func(m backend.Message) func()
+	// onForward starts forwarding m: choosing where to, then a note.
+	// Nil offers no "Forward…".
+	onForward func(m backend.Message)
 }
 
 func newMsgView(h *hub, th *material.Theme, box *inbox, busy func(backend.Attachment) bool) msgView {
@@ -135,6 +138,12 @@ func (v *msgView) applyCommon(item any) (handled bool, note string) {
 		return true, "Could not react: " + it.err.Error()
 	case deleteFailed:
 		return true, "Could not delete: " + it.err.Error()
+	case forwarded:
+		if it.err != nil {
+			return true, "Could not forward: " + it.err.Error()
+		}
+		v.notify("Forwarded to "+it.to, false)
+		return true, ""
 	case permalinkReady:
 		switch {
 		case it.err != nil:

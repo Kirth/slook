@@ -752,6 +752,21 @@ func (h *hub) openChatAt(conv backend.Conversation, ts string) {
 	h.toChat(conv.ID, jumpTo{ts})
 }
 
+// forward forwards m from a window that cannot choose where to (a
+// thread's): the conversation's window does the choosing, opened if it
+// is not.
+func (h *hub) forward(conv backend.Conversation, m backend.Message) {
+	h.mu.Lock()
+	c := h.chats[conv.ID]
+	h.mu.Unlock()
+	if c == nil {
+		h.openChat(conv)
+	} else {
+		c.box.post(raiseWindow{})
+	}
+	h.toChat(conv.ID, forwardRequest{m})
+}
+
 // toChat posts an item to whichever window shows the conversation now:
 // a result for a window that has since moved reaches its replacement.
 func (h *hub) toChat(channelID string, item any) {

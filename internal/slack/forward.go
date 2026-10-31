@@ -9,9 +9,10 @@ import (
 )
 
 // ForwardMessage posts a permalink with Slack's native message preview rather
-// than copying the body through SendMessage's rich-text conversion. It returns
+// than copying the body through SendMessage's rich-text conversion. A
+// non-empty comment goes before the permalink, on its own line. It returns
 // the destination message's actual timestamp and the source permalink on success.
-func (c *Client) ForwardMessage(ctx context.Context, sourceChannelID, ts, destinationChannelID string) (postedTS string, permalink string, err error) {
+func (c *Client) ForwardMessage(ctx context.Context, sourceChannelID, ts, destinationChannelID, comment string) (postedTS string, permalink string, err error) {
 	permalink, err = c.GetPermalink(ctx, sourceChannelID, ts)
 	if err != nil {
 		return "", "", fmt.Errorf("forwarding message: %w", err)
@@ -20,8 +21,16 @@ func (c *Client) ForwardMessage(ctx context.Context, sourceChannelID, ts, destin
 		return "", "", fmt.Errorf("forwarding message: empty permalink")
 	}
 
+	text := permalink
+	if comment != "" {
+		// Unconfirmed: whether Slack still unfurls a permalink that
+		// follows other text. If it does not, post text=comment with
+		// attachments=[{"from_url": permalink}] instead (the forwarding
+		// spec's shape).
+		text = comment + "\n" + permalink
+	}
 	_, postedTS, err = c.api.PostMessageContext(ctx, destinationChannelID,
-		slack.MsgOptionText(permalink, false),
+		slack.MsgOptionText(text, false),
 		// slack-go has no enable-media-unfurl option. Set both flags
 		// explicitly, then restore the SDK's configured post endpoint
 		// (including enterprise workspace URLs) with MsgOptionPost.

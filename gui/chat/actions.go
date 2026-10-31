@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/gammons/slk/gui/backend"
+	"github.com/gammons/slk/internal/slackurl"
 )
 
 // slackEntities are the only escapes Slack's message text uses.
@@ -24,4 +25,25 @@ func LastOwn(msgs []backend.Message) (backend.Message, bool) {
 		}
 	}
 	return backend.Message{}, false
+}
+
+// ForwardedLink is the permalink a forwarded message consists of: its
+// text is exactly one Slack archive link, <url> or <url|label>, and
+// nothing else (the TUI's rule for "open the original"). A message with
+// a comment, or with a link among other text, is not one.
+func ForwardedLink(text string) (string, bool) {
+	t := strings.TrimSpace(text)
+	if len(t) < 2 || t[0] != '<' || t[len(t)-1] != '>' {
+		return "", false
+	}
+	inner := t[1 : len(t)-1]
+	url, _, _ := strings.Cut(inner, "|")
+	if strings.ContainsAny(inner, "<>\n") || strings.ContainsAny(url, " \t") {
+		return "", false
+	}
+	url = slackEntities.Replace(url) // Slack's text escapes & in a link
+	if _, ok := slackurl.Parse(url); !ok {
+		return "", false
+	}
+	return url, true
 }

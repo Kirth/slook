@@ -185,7 +185,11 @@ and everything after it unread again, in Slack too (in a thread window,
 the thread from that reply on); the list shows it unread, with its
 mentions counted, and the window does not read it again while you stay
 in it: it is read once you leave the window and come back, or when a new
-message arrives. For your own messages there is also Edit
+message arrives. Forward… shares the message in another conversation:
+the quick switcher opens on your conversations to choose where ("Forward
+to…"), then a dialog takes an optional note; Slack posts the note and
+the message's permalink, which it shows as a preview of the original.
+A thread window's Forward… chooses in the conversation's window. For your own messages there is also Edit
 message and Delete message…. Edit puts the message in the composer:
 Enter saves, and Escape or Cancel puts back what you were writing. Up
 in an empty composer edits your last message there. Delete asks first:

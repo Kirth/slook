@@ -93,6 +93,9 @@ type chatWindow struct {
 	resynced time.Time
 	// info is the details panel the title opens.
 	info infoPanel
+	// forwarding is the message whose destination the switcher is
+	// choosing (pick mode); nil when none.
+	forwarding *backend.Message
 }
 
 // jumpState is a message the window is getting to: loading older pages
@@ -234,6 +237,7 @@ func newChatWindow(h *hub, conv backend.Conversation, connected bool) *chatWindo
 		}
 		return func() { c.markUnreadFrom(b) }
 	}
+	c.onForward = c.startForward
 	c.composeBox = newComposeBox(h, th, &c.box, conv.ID, "")
 	c.composeBox.deliver = func(item any) { h.toChat(conv.ID, item) }
 	c.onEdit, c.notify = c.composeBox.beginEdit, c.composeBox.note
@@ -471,6 +475,8 @@ func (c *chatWindow) apply() {
 			}
 		case unreadFailed:
 			c.unreadFailed(v)
+		case forwardRequest:
+			c.startForward(v.m)
 		case backend.Event:
 			if p, ok := v.(backend.MessagePosted); ok && p.Message.ChannelID == c.conv.ID && !p.Message.Ephemeral && !p.Message.InThreadOnly {
 				c.gate.Arrived(p.Message.TS) // something new to read
@@ -593,7 +599,14 @@ func (c *chatWindow) layout(gtx C) {
 	c.sizeDp = image.Pt(int(float32(gtx.Constraints.Max.X)/gtx.Metric.PxPerDp), int(float32(gtx.Constraints.Max.Y)/gtx.Metric.PxPerDp))
 	convs := c.h.cachedConversations()
 	search := func(q string) { c.h.searchChannels(q, &c.box) }
-	if pick := c.sw.update(gtx, convs, c.conv.ID, search); pick.closed {
+	picking := c.sw.pick
+	if pick := c.sw.update(gtx, convs, c.conv.ID, search); pick.closed && picking {
+		gtx.Execute(key.FocusCmd{Tag: &c.composer})
+		if pick.conv != nil && c.forwarding != nil {
+			c.confirm = c.forwardDialog(*c.forwarding, *pick.conv)
+		}
+		c.forwarding = nil
+	} else if pick.closed {
 		gtx.Execute(key.FocusCmd{Tag: &c.composer})
 		switch {
 		case pick.conv != nil:
@@ -863,4 +876,18 @@ func (c *chatWindow) unreadFailed(v unreadFailed) {
 	}
 	c.failed(sendFailed{note: "Could not mark unread: " + v.err.Error()})
 	c.markRead()
+}
+
+// forwardRequest asks a chat window to forward m (a thread window has
+// no switcher and asks its conversation's window; hub.forward).
+type forwardRequest struct{ m backend.Message }
+
+// startForward opens the switcher to choose where m goes; the choice
+// opens forwardDialog.
+func (c *chatWindow) startForward(m backend.Message) {
+	c.forwarding = &m
+	if c.sw.open {
+		c.sw.toggle()
+	}
+	c.sw.togglePick("Forward to…")
 }

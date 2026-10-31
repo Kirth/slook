@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"image"
 	"io"
+	"os"
 	"strings"
 
 	"gioui.org/io/clipboard"
@@ -30,6 +32,11 @@ type (
 	}
 	// deleteFailed is Slack refusing a deletion.
 	deleteFailed struct{ err error }
+	// forwarded is a forward done (err nil) or refused, to name.
+	forwarded struct {
+		to  string
+		err error
+	}
 )
 
 // msgMenu is the actions menu of one message, opened from its "⋯"
@@ -40,7 +47,7 @@ type msgMenu struct {
 	focus  bool // take the keyboard next frame, for Escape
 	target backend.Message
 	at     image.Point // where it was opened, in window pixels
-	items  [8]widget.Clickable
+	items  [9]widget.Clickable
 	// scrim takes clicks outside the menu (closing it), panel the ones
 	// on it between items.
 	// They are bytes, not struct{}: two zero-size fields side by side
@@ -60,14 +67,83 @@ func (mm *msgMenu) show(m backend.Message, at image.Point) {
 	mm.open, mm.focus, mm.target, mm.at = true, true, m, at
 }
 
-// confirmDelete asks before deleting a message.
-type confirmDelete struct {
-	open            bool
-	focus           bool
-	target          backend.Message
+// confirmDialog asks before doing something: a title, an optional
+// muted body, an optional one-line editor (a note to send along),
+// Cancel and the OK button, filled red when danger. onOK gets the
+// editor's text ("" without one); onCancel, when set, runs on Cancel,
+// Escape or a click outside. Deleting a message is one
+// (deleteDialog), forwarding one another.
+type confirmDialog struct {
+	open        bool
+	focus       bool
+	title, body string
+	okLabel     string
+	cancelLabel string // "Cancel" when empty
+	danger      bool
+	ed          *widget.Editor
+	hint        string // the editor's placeholder
+	onOK        func(text string)
+	onCancel    func()
+
 	cancel, confirm widget.Clickable
 	// scrim and panel are bytes so their tags differ; see msgMenu.
 	scrim, panel byte
+}
+
+// deleteDialog asks before deleting m, quoting its start.
+func (v *msgView) deleteDialog(m backend.Message) confirmDialog {
+	return confirmDialog{
+		open: true, focus: true,
+		title:   "Delete this message? This can't be undone.",
+		body:    messagePreview(m),
+		okLabel: "Delete", danger: true,
+		onOK: func(string) {
+			go func() {
+				if err := v.h.be.Delete(v.h.ctx, m.ChannelID, m.TS); err != nil {
+					v.box.post(deleteFailed{err})
+				}
+			}()
+		},
+	}
+}
+
+// forwardDialog asks for a note to send with m to conversation to, and
+// forwards it on OK.
+func (v *msgView) forwardDialog(m backend.Message, to backend.Conversation) confirmDialog {
+	name := to.Name
+	if to.Kind == backend.KindChannel || to.Kind == backend.KindPrivate {
+		name = "#" + name
+	}
+	ed := new(widget.Editor)
+	ed.SingleLine, ed.Submit = true, true
+	body := messagePreview(m)
+	if m.Author != "" && body != "" {
+		body = m.Author + ": " + body
+	}
+	return confirmDialog{
+		open: true, focus: true,
+		title: "Forward to " + name, body: body,
+		ed: ed, hint: "Add a message (optional)",
+		okLabel: "Forward",
+		onOK: func(comment string) {
+			go func() {
+				err := v.h.be.Forward(v.h.ctx, m, to.ID, comment)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "slk-gio: forward:", err)
+				}
+				v.box.post(forwarded{to: name, err: err})
+			}()
+		},
+	}
+}
+
+// messagePreview is m's text on one line, cut at 120 characters.
+func messagePreview(m backend.Message) string {
+	preview := strings.Join(strings.Fields(rich.PlainBlocks(m.Body)), " ")
+	if r := []rune(preview); len(r) > 120 {
+		preview = string(r[:120]) + "…"
+	}
+	return preview
 }
 
 // menuItems is what the menu offers for m.
@@ -87,6 +163,9 @@ func (v *msgView) menuItems(m backend.Message) []menuItem {
 		{label: "Copy link", act: func() { v.permalink(m, false) }},
 		{label: "Open in Slack", act: func() { v.permalink(m, true) }},
 	}...)
+	if v.onForward != nil && !m.Ephemeral {
+		items = append(items, menuItem{label: "Forward…", act: func() { v.onForward(m) }})
+	}
 	if v.markUnread != nil && !m.Ephemeral {
 		if act := v.markUnread(m); act != nil {
 			items = append(items, menuItem{label: "Mark unread from here", act: act})
@@ -96,7 +175,7 @@ func (v *msgView) menuItems(m backend.Message) []menuItem {
 		items = append(items,
 			menuItem{label: "Edit message", act: func() { v.onEdit(m) }},
 			menuItem{label: "Delete message…", danger: true, act: func() {
-				v.confirm = confirmDelete{open: true, focus: true, target: m}
+				v.confirm = v.deleteDialog(m)
 			}})
 	}
 	return items
@@ -156,32 +235,63 @@ func (v *msgView) menuUpdate(gtx C) (closed bool) {
 		}
 	}
 	if v.confirm.open {
-		d := &v.confirm
-		yes := d.confirm.Clicked(gtx)
-		no := d.cancel.Clicked(gtx) || dismissed(gtx, &d.scrim, &d.panel)
+		return v.confirm.update(gtx)
+	}
+	return false
+}
+
+// update handles the dialog's buttons and keys: Enter (in the editor
+// too) is OK, Escape or a click outside is Cancel. It reports whether
+// the dialog closed.
+func (d *confirmDialog) update(gtx C) (closed bool) {
+	yes := d.confirm.Clicked(gtx)
+	no := d.cancel.Clicked(gtx) || dismissed(gtx, &d.scrim, &d.panel)
+	for {
+		ev, ok := gtx.Event(key.Filter{Focus: &d.panel, Name: key.NameReturn}, key.Filter{Focus: &d.panel, Name: key.NameEnter})
+		if !ok {
+			break
+		}
+		if k, ok := ev.(key.Event); ok && k.State == key.Press {
+			yes = true
+		}
+	}
+	if d.ed != nil {
 		for {
-			ev, ok := gtx.Event(key.Filter{Focus: &d.panel, Name: key.NameReturn}, key.Filter{Focus: &d.panel, Name: key.NameEnter})
+			ev, ok := gtx.Event(key.Filter{Focus: d.ed, Name: key.NameEscape})
 			if !ok {
 				break
 			}
 			if k, ok := ev.(key.Event); ok && k.State == key.Press {
+				no = true
+			}
+		}
+		for {
+			ev, ok := d.ed.Update(gtx)
+			if !ok {
+				break
+			}
+			if _, ok := ev.(widget.SubmitEvent); ok {
 				yes = true
 			}
 		}
-		switch {
-		case yes:
-			d.open = false
-			m := d.target
-			go func() {
-				if err := v.h.be.Delete(v.h.ctx, m.ChannelID, m.TS); err != nil {
-					v.box.post(deleteFailed{err})
-				}
-			}()
-			return true
-		case no:
-			d.open = false
-			return true
+	}
+	switch {
+	case yes:
+		d.open = false
+		text := ""
+		if d.ed != nil {
+			text = strings.TrimSpace(d.ed.Text())
 		}
+		if d.onOK != nil {
+			d.onOK(text)
+		}
+		return true
+	case no:
+		d.open = false
+		if d.onCancel != nil {
+			d.onCancel()
+		}
+		return true
 	}
 	return false
 }
@@ -320,44 +430,50 @@ func menuRowAt(gtx C, th *material.Theme, cl *widget.Clickable, label string, da
 	})
 }
 
-// confirmLayout draws the delete confirmation in the middle of the
-// window: what will be deleted, Cancel and Delete.
-func (v *msgView) confirmLayout(gtx C) {
-	d := &v.confirm
+// confirmLayout draws the confirmation dialog in the middle of the
+// window.
+func (v *msgView) confirmLayout(gtx C) { v.confirm.layout(gtx, v.th) }
+
+// layout draws the dialog in the middle of the window: its title, body
+// and editor, Cancel and OK.
+func (d *confirmDialog) layout(gtx C, th *material.Theme) {
 	popupScrim(gtx, &d.scrim)
-	preview := strings.Join(strings.Fields(rich.PlainBlocks(d.target.Body)), " ")
-	if r := []rune(preview); len(r) > 120 {
-		preview = string(r[:120]) + "…"
-	}
 	width := min(gtx.Dp(380), gtx.Constraints.Max.X-gtx.Dp(24))
 	cgtx := gtx
 	cgtx.Constraints = layout.Constraints{Min: image.Pt(width, 0), Max: image.Pt(width, gtx.Constraints.Max.Y)}
+	cancel := d.cancelLabel
+	if cancel == "" {
+		cancel = "Cancel"
+	}
 	rec := op.Record(gtx.Ops)
 	dims := popupFrame(cgtx, func(gtx C) D {
 		return layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx C) D {
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(bodyLabel(th, d.title).Layout),
 				layout.Rigid(func(gtx C) D {
-					lbl := bodyLabel(v.th, "Delete this message? This can't be undone.")
-					return lbl.Layout(gtx)
-				}),
-				layout.Rigid(func(gtx C) D {
-					if preview == "" {
+					if d.body == "" {
 						return D{}
 					}
 					return layout.Inset{Top: unit.Dp(6)}.Layout(gtx, func(gtx C) D {
-						lbl := secondaryLabel(v.th, preview)
+						lbl := secondaryLabel(th, d.body)
 						lbl.Color = colMuted
 						lbl.MaxLines = 3
 						return lbl.Layout(gtx)
 					})
 				}),
 				layout.Rigid(func(gtx C) D {
+					if d.ed == nil {
+						return D{}
+					}
+					return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, framedEditor(th, d.ed, d.hint))
+				}),
+				layout.Rigid(func(gtx C) D {
 					return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, func(gtx C) D {
 						return layout.Flex{}.Layout(gtx,
 							layout.Flexed(1, func(gtx C) D { return D{Size: image.Pt(gtx.Constraints.Min.X, 0)} }),
-							layout.Rigid(func(gtx C) D { return dialogButton(gtx, v.th, &d.cancel, "Cancel", false) }),
+							layout.Rigid(func(gtx C) D { return dialogButton(gtx, th, &d.cancel, cancel, false) }),
 							layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
-							layout.Rigid(func(gtx C) D { return dialogButton(gtx, v.th, &d.confirm, "Delete", true) }),
+							layout.Rigid(func(gtx C) D { return dialogButton(gtx, th, &d.confirm, d.okLabel, d.danger) }),
 						)
 					})
 				}),
@@ -366,7 +482,17 @@ func (v *msgView) confirmLayout(gtx C) {
 	})
 	call := rec.Stop()
 	off := image.Pt((gtx.Constraints.Max.X-dims.Size.X)/2, max(gtx.Dp(headerHeight)+gtx.Dp(40), (gtx.Constraints.Max.Y-dims.Size.Y)/3))
-	popupPanel(gtx, off, dims, call, &d.panel, &d.focus)
+	if d.ed == nil {
+		popupPanel(gtx, off, dims, call, &d.panel, &d.focus)
+		return
+	}
+	// The editor takes the keyboard; Escape and Enter are read from it.
+	focus := false
+	popupPanel(gtx, off, dims, call, &d.panel, &focus)
+	if d.focus {
+		gtx.Execute(key.FocusCmd{Tag: d.ed})
+		d.focus = false
+	}
 }
 
 // dialogButton is a dialog's button; the dangerous one is filled red.

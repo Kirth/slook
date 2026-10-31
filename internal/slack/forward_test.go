@@ -21,15 +21,21 @@ func TestForwardMessageRequests(t *testing.T) {
 		postBody      string
 		wantError     string
 		wantPost      bool
+		comment       string
 	}{
-		{"success", `{"ok":true,"permalink":"` + permalink + `"}`, `{"ok":true,"channel":"Cdestination","ts":"124.000000"}`, "", true},
-		{"permalink failure", `{"ok":false,"error":"message_not_found"}`, "", "message_not_found", false},
-		{"empty permalink", `{"ok":true,"permalink":""}`, "", "empty permalink", false},
-		{"post failure", `{"ok":true,"permalink":"` + permalink + `"}`, `{"ok":false,"error":"not_in_channel"}`, "not_in_channel", true},
-		{"empty post timestamp", `{"ok":true,"permalink":"` + permalink + `"}`, `{"ok":true,"channel":"Cdestination","ts":""}`, "empty message timestamp", true},
-		{"missing post timestamp", `{"ok":true,"permalink":"` + permalink + `"}`, `{"ok":true,"channel":"Cdestination"}`, "empty message timestamp", true},
+		{"success", `{"ok":true,"permalink":"` + permalink + `"}`, `{"ok":true,"channel":"Cdestination","ts":"124.000000"}`, "", true, ""},
+		{"with comment", `{"ok":true,"permalink":"` + permalink + `"}`, `{"ok":true,"channel":"Cdestination","ts":"124.000000"}`, "", true, "fyi"},
+		{"permalink failure", `{"ok":false,"error":"message_not_found"}`, "", "message_not_found", false, ""},
+		{"empty permalink", `{"ok":true,"permalink":""}`, "", "empty permalink", false, ""},
+		{"post failure", `{"ok":true,"permalink":"` + permalink + `"}`, `{"ok":false,"error":"not_in_channel"}`, "not_in_channel", true, ""},
+		{"empty post timestamp", `{"ok":true,"permalink":"` + permalink + `"}`, `{"ok":true,"channel":"Cdestination","ts":""}`, "empty message timestamp", true, ""},
+		{"missing post timestamp", `{"ok":true,"permalink":"` + permalink + `"}`, `{"ok":true,"channel":"Cdestination"}`, "empty message timestamp", true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			wantText := permalink
+			if tc.comment != "" {
+				wantText = tc.comment + "\n" + permalink
+			}
 			var paths []string
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				paths = append(paths, r.URL.Path)
@@ -48,7 +54,7 @@ func TestForwardMessageRequests(t *testing.T) {
 						t.Errorf("post method = %s", r.Method)
 					}
 					for key, want := range map[string]string{
-						"channel": "Cdestination", "text": permalink,
+						"channel": "Cdestination", "text": wantText,
 						"unfurl_links": "true", "unfurl_media": "true",
 					} {
 						if got := r.PostForm.Get(key); got != want {
@@ -68,7 +74,7 @@ func TestForwardMessageRequests(t *testing.T) {
 			}))
 			defer srv.Close()
 			c := &Client{api: slack.New("xoxc-test", slack.OptionAPIURL(srv.URL+"/"))}
-			postedTS, postedText, err := c.ForwardMessage(context.Background(), "Csource", "123.000456", "Cdestination")
+			postedTS, postedText, err := c.ForwardMessage(context.Background(), "Csource", "123.000456", "Cdestination", tc.comment)
 			if tc.wantError == "" {
 				if err != nil {
 					t.Fatalf("ForwardMessage: %v", err)
@@ -121,7 +127,7 @@ func TestForwardMessageContextAndErrors(t *testing.T) {
 						return "", "", cause
 					},
 				}
-				postedTS, postedText, err := (&Client{api: api}).ForwardMessage(ctx, "Csource", "123.000456", "Cdestination")
+				postedTS, postedText, err := (&Client{api: api}).ForwardMessage(ctx, "Csource", "123.000456", "Cdestination", "")
 				if postedTS != "" || postedText != "" {
 					t.Errorf("failed forward result = (%q, %q), want empty values", postedTS, postedText)
 				}

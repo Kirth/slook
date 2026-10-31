@@ -53,6 +53,12 @@ type switcher struct {
 	remoteErr string
 	// openedAt is when it last opened, for its entrance.
 	openedAt time.Time
+	// pick is the switcher choosing a conversation for something else
+	// (where to forward a message), title saying what for: it lists the
+	// user's conversations only, the window's own included, with no
+	// "New message…", no channels to join and no "All conversations…".
+	pick  bool
+	title string
 }
 
 // switcherPick is what the switcher's update chose: a conversation to
@@ -77,11 +83,21 @@ func (s *switcher) found(v channelsFound) {
 
 func (s *switcher) toggle() {
 	s.open = !s.open
+	s.pick, s.title = false, ""
 	if s.open {
 		s.openedAt = time.Now()
 		s.ed.SingleLine, s.ed.Submit = true, true
 		s.ed.SetText("")
 		s.sel, s.focus, s.reset = 0, true, true
+	}
+}
+
+// togglePick opens the switcher to choose a conversation for title
+// ("Forward to…"), or closes it.
+func (s *switcher) togglePick(title string) {
+	s.toggle()
+	if s.open {
+		s.pick, s.title = true, title
 	}
 }
 
@@ -159,8 +175,14 @@ func (s *switcher) update(gtx C, convs []backend.Conversation, current string, s
 		}
 	}
 	q := s.ed.Text()
-	s.newMsg = q == ""
+	s.newMsg = q == "" && !s.pick
+	if s.pick {
+		current = "" // forwarding here is a choice too
+	}
 	s.results = switcherMatches(convs, q, current)
+	if s.pick {
+		q = "" // never searches Slack: a pick is among the user's own
+	}
 	s.remote.Type(q, gtx.Now)
 	if rq, ok := s.remote.Due(gtx.Now); ok && search != nil {
 		search(rq)
@@ -211,6 +233,8 @@ func (s *switcher) update(gtx C, convs []backend.Conversation, current string, s
 		r := s.joinable[pick-local]
 		s.open = false
 		return switcherPick{join: &r, closed: true}
+	case s.pick:
+		return switcherPick{} // no "All conversations…" line
 	default:
 		s.open = false
 		return switcherPick{all: true, closed: true}
@@ -219,7 +243,13 @@ func (s *switcher) update(gtx C, convs []backend.Conversation, current string, s
 
 // n is how many lines the switcher lists: "New message…",
 // conversations, channels to join, and "All conversations".
-func (s *switcher) n() int { return s.lead() + len(s.results) + len(s.joinable) + 1 }
+func (s *switcher) n() int {
+	n := s.lead() + len(s.results) + len(s.joinable)
+	if !s.pick {
+		n++ // "All conversations…"
+	}
+	return max(n, 1)
+}
 
 // lead is how many lines come before the conversations: 1 for "New
 // message…".
@@ -251,8 +281,12 @@ func (s *switcher) layout(gtx C, th *material.Theme, view *richView) {
 func (s *switcher) panel(gtx C, th *material.Theme, view *richView) D {
 	return overlayFrame(gtx, func(gtx C) D {
 		return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx C) D {
+			hint := "Jump to a conversation"
+			if s.pick {
+				hint = s.title
+			}
 			children := []layout.FlexChild{
-				layout.Rigid(framedEditor(th, &s.ed, "Jump to a conversation")),
+				layout.Rigid(framedEditor(th, &s.ed, hint)),
 				layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
 			}
 			lead := s.lead()
@@ -288,6 +322,9 @@ func (s *switcher) panel(gtx C, th *material.Theme, view *richView) D {
 				}))
 			}
 			n += len(s.joinable)
+			if s.pick {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+			}
 			children = append(children, layout.Rigid(func(gtx C) D {
 				return s.row(gtx, th, view, n, func(gtx C) D {
 					lbl := secondaryLabel(th, "All conversations…")

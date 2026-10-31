@@ -576,6 +576,10 @@ type Backend interface {
 	Delete(ctx context.Context, channelID, ts string) error
 	// Permalink is a link to the message in Slack.
 	Permalink(ctx context.Context, channelID, ts string) (string, error)
+	// Forward shares m in another conversation as its permalink, which
+	// Slack shows as a preview of m, after comment when there is one.
+	// The posted message comes back through Run as a MessagePosted.
+	Forward(ctx context.Context, m Message, toChannelID, comment string) error
 	// Threads lists the threads the user follows, newest activity
 	// first, from the cache; it makes no request.
 	Threads(ctx context.Context) ([]ThreadSummary, error)

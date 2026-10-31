@@ -33,3 +33,28 @@ func TestLastOwn(t *testing.T) {
 		t.Fatal("found an own message among others' and ephemerals")
 	}
 }
+
+func TestForwardedLink(t *testing.T) {
+	const link = "https://acme.slack.com/archives/C1/p1700000000000100"
+	for _, tc := range []struct {
+		text string
+		want string
+	}{
+		{"<" + link + ">", link},
+		{"  <" + link + ">\n", link},
+		{"<" + link + "?thread_ts=1700000000.000000&cid=C1>", link + "?thread_ts=1700000000.000000&cid=C1"},
+		{"<" + link + "|a message>", link},
+		{"<" + link + "?thread_ts=1700000000.000000&amp;cid=C1>", link + "?thread_ts=1700000000.000000&cid=C1"},
+		{"fyi\n<" + link + ">", ""},
+		{"<" + link + "> <" + link + ">", ""},
+		{"<https://example.com/x>", ""},
+		{"<https://acme.slack.com/archives/C1>", ""},
+		{link, ""},
+		{"", ""},
+	} {
+		got, ok := ForwardedLink(tc.text)
+		if got != tc.want || ok != (tc.want != "") {
+			t.Errorf("ForwardedLink(%q) = %q, %v; want %q", tc.text, got, ok, tc.want)
+		}
+	}
+}

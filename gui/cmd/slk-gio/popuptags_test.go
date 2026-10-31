@@ -13,7 +13,7 @@ import (
 func TestPopupTagsAreDistinct(t *testing.T) {
 	var picker reactPicker
 	var menu msgMenu
-	var confirm confirmDelete
+	var confirm confirmDialog
 	var info infoPanel
 	var newMsg newMessagePicker
 	var pres presenceMenu
@@ -23,7 +23,7 @@ func TestPopupTagsAreDistinct(t *testing.T) {
 	}{
 		{"reaction picker", &picker.scrim, &picker.panel},
 		{"message menu", &menu.scrim, &menu.panel},
-		{"delete confirmation", &confirm.scrim, &confirm.panel},
+		{"confirmation dialog", &confirm.scrim, &confirm.panel},
 		{"info panel", &info.scrim, &info.tag},
 		{"new message", &newMsg.scrim, &newMsg.panel},
 		{"presence menu", &pres.scrim, &pres.panel},

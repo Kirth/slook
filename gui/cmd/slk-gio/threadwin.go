@@ -127,6 +127,7 @@ func newThreadWindow(h *hub, conv backend.Conversation, ts string, connected boo
 	t.composeBox = newComposeBox(h, th, &t.box, conv.ID, ts)
 	t.composeBox.deliver = func(item any) { h.toThread(t.key, item) }
 	t.onEdit, t.notify = t.composeBox.beginEdit, t.composeBox.note
+	t.onForward = func(m backend.Message) { h.forward(t.conv, m) }
 	t.markUnread = func(m backend.Message) func() {
 		b, ok := chat.ThreadUnreadBoundary(t.key.ts, t.thread.Replies(), m.TS)
 		if !ok {
