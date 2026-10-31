@@ -569,3 +569,58 @@ func TestFakeOpenConversationMakesAGroup(t *testing.T) {
 		t.Fatalf("eight people: %v", err)
 	}
 }
+
+func TestFakeUploadPostsFilesWithCaption(t *testing.T) {
+	f := NewFake(time.Unix(1_700_000_000, 0))
+	f.Interval = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan Event, 16)
+	go f.Run(ctx, func(ev Event) { got <- ev })
+	<-got // connected
+
+	files := []core.PendingAttachment{
+		{Filename: "slk-paste-2026-10-31-12-00-00.png", Bytes: []byte("png"), Mime: "image/png", Size: 3},
+		{Filename: "report.pdf", Path: "/tmp/report.pdf", Mime: "application/pdf", Size: 820 << 10},
+	}
+	var progress [][2]int
+	if err := f.Upload(ctx, "C1", "", files, "photos *now*", func(d, n int) { progress = append(progress, [2]int{d, n}) }); err != nil {
+		t.Fatal(err)
+	}
+	if want := [][2]int{{1, 2}, {2, 2}}; !slices.Equal(progress, want) {
+		t.Fatalf("progress %v, want %v", progress, want)
+	}
+	m := nextPosted(t, got).Message
+	if !m.FromSelf || m.ChannelID != "C1" || m.Text != "photos *now*" {
+		t.Fatalf("posted %#v, want the user's caption in C1", m)
+	}
+	var img *rich.Image
+	var file *rich.File
+	for _, b := range m.Body {
+		switch b := b.(type) {
+		case rich.Image:
+			img = &b
+		case rich.File:
+			file = &b
+		}
+	}
+	if img == nil || img.FileName != files[0].Filename || img.URL != "fake://"+files[0].Filename {
+		t.Fatalf("image %#v in %#v", img, m.Body)
+	}
+	if file == nil || file.Name != "report.pdf" || file.Size != 820<<10 {
+		t.Fatalf("file %#v in %#v", file, m.Body)
+	}
+	msgs, err := f.History(ctx, "C1")
+	if err != nil || msgs[len(msgs)-1].TS != m.TS || len(msgs[len(msgs)-1].Body) != len(m.Body) {
+		t.Fatalf("history does not end with the upload: %v", err)
+	}
+
+	// In a thread it is a reply.
+	parent := msgs[0].TS
+	if err := f.Upload(ctx, "C1", parent, files[:1], "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if r := nextPosted(t, got).Message; r.ThreadTS != parent || !r.InThreadOnly {
+		t.Fatalf("thread upload %#v, want a reply under %s", r, parent)
+	}
+}

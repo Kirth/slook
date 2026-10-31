@@ -157,6 +157,7 @@ type chatState struct {
 	sizeDp    image.Point
 	jump      jumpState
 	pager     chat.Pager
+	upload    uploadState
 }
 
 // newChatWindowFrom opens a window that carries on where another left
@@ -174,6 +175,7 @@ func newChatWindowFrom(h *hub, st chatState) *chatWindow {
 	c.jump.loading = false
 	c.pager = st.pager
 	c.pager.Loading = false
+	c.adoptUpload(st.upload)
 	if st.sizeDp.X > 0 && st.sizeDp.Y > 0 {
 		c.w.Option(app.Size(unit.Dp(st.sizeDp.X), unit.Dp(st.sizeDp.Y)))
 	}
@@ -199,7 +201,7 @@ func (c *chatWindow) moveHere(text, jumpTS string) {
 		conv: c.conv, connected: c.connected, tl: c.tl, loading: c.loading, loadErr: c.loadErr,
 		details: c.details, profiles: c.profiles, cmds: c.popup.cmds, marked: c.marked,
 		draft: draft, position: c.list.Position, peer: c.peer, sizeDp: c.sizeDp, jump: jump,
-		pager: c.pager,
+		pager: c.pager, upload: c.uploadState(),
 	})
 	c.w.Perform(system.ActionClose)
 }
@@ -221,6 +223,7 @@ func newChatWindow(h *hub, conv backend.Conversation, connected bool) *chatWindo
 	c.msgView = newMsgView(h, th, &c.box, func(a backend.Attachment) bool { return c.downloading[backend.AttachmentPath(a)] })
 	c.onThread = func(ts string) { h.openThread(c.conv, ts, "") }
 	c.composeBox = newComposeBox(h, th, &c.box, conv.ID, "")
+	c.composeBox.deliver = func(item any) { h.toChat(conv.ID, item) }
 	c.onEdit, c.notify = c.composeBox.beginEdit, c.composeBox.note
 	c.composeBox.people, c.composeBox.convs, c.composeBox.rv = h.people, h.cachedConversations, &c.msgView.view
 	c.composeBox.groups = h.be.UserGroups
@@ -393,7 +396,7 @@ func (c *chatWindow) apply() {
 			}
 			continue
 		}
-		if c.infoApply(item) || c.typingApply(item) {
+		if c.infoApply(item) || c.typingApply(item) || c.attachApply(item) {
 			continue
 		}
 		switch v := item.(type) {

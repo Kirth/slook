@@ -25,6 +25,7 @@ import (
 	"github.com/gammons/slk/gui/internal/richtext"
 	"github.com/gammons/slk/gui/internal/styledtext"
 	"github.com/gammons/slk/gui/rich"
+	"github.com/gammons/slk/internal/attach"
 	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
@@ -570,7 +571,7 @@ func (v *richView) fileChip(gtx C, c *openClick, f rich.File) D {
 						return lbl.Layout(gtx)
 					}),
 					layout.Rigid(func(gtx C) D {
-						lbl := captionLabel(v.th, strings.TrimSpace(humanSize(f.Size)+"  "+f.Mime))
+						lbl := captionLabel(v.th, strings.TrimSpace(attach.HumanSize(f.Size)+"  "+f.Mime))
 						lbl.Color = colMuted
 						return lbl.Layout(gtx)
 					}),
@@ -666,19 +667,6 @@ func fitBox(w, h, max int) image.Point {
 		return image.Pt(max, h*max/w)
 	}
 	return image.Pt(w*max/h, max)
-}
-
-func humanSize(n int64) string {
-	switch {
-	case n <= 0:
-		return ""
-	case n < 1024:
-		return fmt.Sprintf("%d B", n)
-	case n < 1024*1024:
-		return fmt.Sprintf("%.0f KB", float64(n)/1024)
-	default:
-		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
-	}
 }
 
 // avatar draws a user's picture, or a colored disc with their initial

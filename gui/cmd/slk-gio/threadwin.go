@@ -102,6 +102,7 @@ type threadState struct {
 	position  layout.Position
 	sizeDp    image.Point
 	jump      string
+	upload    uploadState
 }
 
 func newThreadWindow(h *hub, conv backend.Conversation, ts string, connected bool) *threadWindow {
@@ -120,6 +121,7 @@ func newThreadWindow(h *hub, conv backend.Conversation, ts string, connected boo
 	t.box.w = t.w
 	t.msgView = newMsgView(h, th, &t.box, func(a backend.Attachment) bool { return t.downloading[backend.AttachmentPath(a)] })
 	t.composeBox = newComposeBox(h, th, &t.box, conv.ID, ts)
+	t.composeBox.deliver = func(item any) { h.toThread(t.key, item) }
 	t.onEdit, t.notify = t.composeBox.beginEdit, t.composeBox.note
 	t.composeBox.people, t.composeBox.convs, t.composeBox.rv = h.people, h.cachedConversations, &t.msgView.view
 	t.composeBox.groups = h.be.UserGroups
@@ -151,6 +153,7 @@ func newThreadWindowFrom(h *hub, st threadState) *threadWindow {
 	t.composer.SetText(st.draft)
 	t.broadcast.Value = st.broadcast
 	t.list.Position = st.position
+	t.adoptUpload(st.upload)
 	if st.sizeDp.X > 0 && st.sizeDp.Y > 0 {
 		t.w.Option(app.Size(unit.Dp(st.sizeDp.X), unit.Dp(st.sizeDp.Y)))
 	}
@@ -176,6 +179,7 @@ func (t *threadWindow) moveHere(text, jumpTS string) {
 		conv: t.conv, ts: t.key.ts, connected: t.connected, thread: t.thread, loading: t.loading,
 		loadErr: t.loadErr, profiles: t.profiles, cmds: t.popup.cmds, marked: t.marked, draft: draft,
 		broadcast: t.broadcast.Value, position: t.list.Position, sizeDp: t.sizeDp, jump: jump,
+		upload: t.uploadState(),
 	})
 	t.w.Perform(system.ActionClose)
 }
@@ -243,7 +247,7 @@ func (t *threadWindow) apply() {
 			}
 			continue
 		}
-		if t.typingApply(item) {
+		if t.typingApply(item) || t.attachApply(item) {
 			continue
 		}
 		switch v := item.(type) {

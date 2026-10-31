@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gammons/slk/gui/rich"
+	"github.com/gammons/slk/internal/core"
 	imgpkg "github.com/gammons/slk/internal/image"
 )
 
@@ -542,6 +543,12 @@ type Backend interface {
 	// conversation when broadcast is set. It comes back through Run as
 	// a MessagePosted.
 	SendReply(ctx context.Context, channelID, threadTS, text string, broadcast bool) error
+	// Upload posts files to a conversation, or in the thread under
+	// threadTS, with caption as the message's text (on the last file:
+	// Slack shows each file it is sent alone as its own message). It
+	// calls progress(n, total) as the nth file starts. It is not
+	// optimistic: the files come back through Run once Slack has them.
+	Upload(ctx context.Context, channelID, threadTS string, files []core.PendingAttachment, caption string, progress func(done, total int)) error
 	// React adds the user's reaction name to a message, or removes it
 	// (add false). The change comes back through Run as a
 	// ReactionChanged.

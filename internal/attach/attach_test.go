@@ -37,13 +37,14 @@ func TestResolvePath(t *testing.T) {
 
 func TestHumanSize(t *testing.T) {
 	for n, want := range map[int64]string{
-		0:                 "<1 KB",
-		1023:              "<1 KB",
+		0:                 "",
+		812:               "812 B",
+		1023:              "1023 B",
 		1024:              "1 KB",
 		243 * 1024:        "243 KB",
+		300_000:           "293 KB",
 		MaxSize:           "10.0 MB",
 		12_900_000:        "12.3 MB",
-		1024*1024 - 1:     "1023 KB",
 		3*1024*1024 + 512: "3.0 MB",
 	} {
 		if got := HumanSize(n); got != want {

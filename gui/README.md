@@ -151,6 +151,19 @@ The composer shows readable text (`@Ada Lovelace`, `#general`), and the
 message goes out in Slack's form, so mentions notify and channel names
 link. Editing a message shows its mentions the same readable way.
 
+Files go with a message as chips above the composer. Ctrl+V attaches
+the picture on the clipboard (a screenshot; read with `wl-paste` on
+Wayland or `xclip` on X11, since Gio's own clipboard is text-only) or
+the file a pasted path names (`/…`, `~/…`, `./…`, or a file manager's
+`file://` copy); other text pastes as usual. The paperclip beside the
+composer opens the desktop's file chooser (`zenity`, else `kdialog`,
+else `yad`). Each file may be up to 10 MB; × on a chip takes it off.
+Enter sends them, the text as their caption (on the last file), in the
+conversation or the thread: "Uploading 1/2…" shows under the messages
+and the caption cannot change until it is done. If an upload fails the
+files and caption stay for another try. A window brought to another
+workspace takes its chips, and an upload in flight, with it.
+
 Every message has an actions menu: "⋯" among the actions shown while
 the pointer is over it, or a right-click anywhere on it. Copy text and
 Copy link put the message or its permalink on the clipboard, and Open
@@ -490,8 +503,8 @@ with `GIORENDERER=opengl` and without.
 
 ## Not there yet
 
-- **Sending files.** Pasting or dropping a picture or file into the
-  composer does nothing yet; attachments can only be shown and saved.
+- **Dropping files** onto a window does nothing: Gio has no drag-and-drop
+  from the desktop.
 - **Leaving conversations.** `/leave` is not there.
 - **Interactive apps.** Dialogs some commands open (an app's modal) and
   the buttons on ephemeral replies (`/giphy`'s Shuffle and Send) do

@@ -695,6 +695,16 @@ func (h *hub) toChat(channelID string, item any) {
 	}
 }
 
+// toThread is toChat for a thread's window.
+func (h *hub) toThread(k threadKey, item any) {
+	h.mu.Lock()
+	t := h.threads[k]
+	h.mu.Unlock()
+	if t != nil {
+		t.box.post(item)
+	}
+}
+
 // openThread opens a thread's window, or brings it here if it is open
 // (see moveHere). jumpTS, when set, is a reply to scroll to and light.
 func (h *hub) openThread(conv backend.Conversation, ts, jumpTS string) {

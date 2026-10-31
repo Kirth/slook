@@ -68,6 +68,21 @@ type composeBox struct {
 
 	// typing is who is typing here, drawn under the editor.
 	typing typingState
+
+	// files go with the next message, its text their caption (see
+	// attach.go). uploading is a send of them in flight: the caption is
+	// read-only and Enter does nothing until uploadDone; uploadNote is
+	// its progress under the messages.
+	files       chat.Attachments
+	uploading   bool
+	uploadNote  string
+	removeChips []widget.Clickable
+	attachBtn   widget.Clickable
+	choosing    bool // the file chooser is open
+	pasteNext   bool // paste the clipboard's text next frame
+	// deliver posts to whichever window holds the composer now
+	// (hub.toChat, hub.toThread); nil posts to box.
+	deliver func(any)
 }
 
 // editFailed is Slack refusing an edit: the composer goes back to
@@ -238,6 +253,7 @@ func (b *composeBox) update(gtx C) {
 		b.focusNext = false
 	}
 	b.popupKeys(gtx)
+	b.attachKeys(gtx) // before the editor sees Ctrl+V
 	b.rl.keys(gtx, &b.composer)
 	for {
 		ev, ok := b.composer.Update(gtx)
@@ -259,12 +275,20 @@ func (b *composeBox) update(gtx C) {
 // layout draws the note, the command popup, the editor with hint as
 // its placeholder, and in a thread the broadcast box labelled castLabel.
 func (b *composeBox) layout(gtx C, hint, castLabel string) D {
-	if b.editing != nil {
+	switch {
+	case b.editing != nil:
 		hint = "Editing message — Enter to save, Esc to cancel"
+	case b.uploading:
+		hint = "Uploading…"
+	case !b.files.Empty():
+		hint = "Add a message, or press Enter to send the files"
 	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx C) D {
 			text, col := b.sendErr, colError
+			if text == "" && b.uploading {
+				text, col = b.uploadNote, colMuted
+			}
 			if text == "" && b.info != "" && gtx.Now.Before(b.infoUntil) {
 				text, col = b.info, colMuted
 				gtx.Execute(op.InvalidateCmd{At: b.infoUntil})
@@ -296,6 +320,12 @@ func (b *composeBox) layout(gtx C, hint, castLabel string) D {
 			})
 		}),
 		layout.Rigid(func(gtx C) D {
+			if b.editing != nil {
+				return D{}
+			}
+			return b.chips(gtx)
+		}),
+		layout.Rigid(func(gtx C) D {
 			in := layout.UniformInset(unit.Dp(12))
 			if b.editing != nil {
 				in.Top = unit.Dp(4)
@@ -306,7 +336,12 @@ func (b *composeBox) layout(gtx C, hint, castLabel string) D {
 			if b.typingShown() {
 				in.Bottom = 0 // the typing strip is the space under it
 			}
-			return in.Layout(gtx, framedEditor(b.th, &b.composer, hint))
+			return in.Layout(gtx, func(gtx C) D {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Flexed(1, framedEditor(b.th, &b.composer, hint)),
+					layout.Rigid(b.attachButton),
+				)
+			})
 		}),
 		layout.Rigid(func(gtx C) D {
 			if !b.typingShown() {
@@ -460,6 +495,13 @@ func (b *composeBox) submit(raw string) {
 	}
 	if b.editing != nil {
 		b.submitEdit(raw)
+		return
+	}
+	if b.uploading {
+		return
+	}
+	if !b.files.Empty() {
+		b.submitFiles(raw)
 		return
 	}
 	if b.popup.open() && !chat.IsCommand(b.popup.cmds, strings.ToLower(strings.TrimSpace(raw))) {

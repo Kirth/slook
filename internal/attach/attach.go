@@ -55,17 +55,20 @@ func ResolvePath(text string) (string, bool) {
 	return filepath.Clean(s), true
 }
 
-// HumanSize is a file size for people: "<1 KB", "243 KB", "12.3 MB".
+// HumanSize is a file size for people: "812 B", "243 KB", "12.3 MB";
+// "" for an unknown (zero or negative) size.
 func HumanSize(size int64) string {
 	const kb = 1024
 	const mb = 1024 * kb
 	switch {
-	case size >= mb:
-		return fmt.Sprintf("%.1f MB", float64(size)/float64(mb))
-	case size >= kb:
-		return fmt.Sprintf("%d KB", size/kb)
+	case size <= 0:
+		return ""
+	case size < kb:
+		return fmt.Sprintf("%d B", size)
+	case size < mb:
+		return fmt.Sprintf("%.0f KB", float64(size)/kb)
 	default:
-		return "<1 KB"
+		return fmt.Sprintf("%.1f MB", float64(size)/mb)
 	}
 }
 
