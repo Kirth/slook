@@ -1,4 +1,4 @@
-package main
+package adapt
 
 import (
 	"context"
@@ -17,11 +17,11 @@ func TestMissingStarredConversations_BootClosedIM(t *testing.T) {
 		{ID: "D2", UserID: "U2"}, // unstarred, closed
 		{ID: "D3", UserID: "U3", IsOpen: true},
 	}}
-	loaded := bootConversations(res)
+	loaded := Conversations(res)
 	if len(loaded) != 1 || loaded[0].ID != "D3" {
 		t.Fatalf("ordinary fallback = %+v", loaded)
 	}
-	got := missingStarredConversations(context.Background(), []string{"D3"}, []string{"D1", "D3", "D1"}, res.IMs,
+	got := MissingStarredConversations(context.Background(), []string{"D3"}, []string{"D1", "D3", "D1"}, res.IMs,
 		func(context.Context, string) (*slack.Channel, error) {
 			t.Fatal("boot IM should not need a lookup")
 			return nil, nil
@@ -33,7 +33,7 @@ func TestMissingStarredConversations_BootClosedIM(t *testing.T) {
 
 func TestMissingStarredConversations_ReadOnlyLookup(t *testing.T) {
 	var calls []string
-	got := missingStarredConversations(context.Background(), []string{"D0"}, []string{"D0", "D1", "D1", "D2"}, nil,
+	got := MissingStarredConversations(context.Background(), []string{"D0"}, []string{"D0", "D1", "D1", "D2"}, nil,
 		func(_ context.Context, id string) (*slack.Channel, error) {
 			calls = append(calls, id)
 			return &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: id, IsIM: true, User: "U" + id}}}, nil
@@ -59,7 +59,7 @@ func TestMissingStarredConversations_InvalidOrUnavailable(t *testing.T) {
 		{"malformed", &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "D1"}}}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := missingStarredConversations(context.Background(), nil, []string{"D1"}, nil,
+			got := MissingStarredConversations(context.Background(), nil, []string{"D1"}, nil,
 				func(context.Context, string) (*slack.Channel, error) { return tc.channel, tc.err })
 			if len(got) != 0 {
 				t.Fatalf("added invalid conversation: %+v", got)
@@ -68,7 +68,7 @@ func TestMissingStarredConversations_InvalidOrUnavailable(t *testing.T) {
 	}
 	// An archived boot IM is already known to be ineligible, not a reason
 	// to spend a request trying to rediscover it.
-	got := missingStarredConversations(context.Background(), nil, []string{"D1"}, []boot.IM{{ID: "D1", UserID: "U1", IsArchived: true}},
+	got := MissingStarredConversations(context.Background(), nil, []string{"D1"}, []boot.IM{{ID: "D1", UserID: "U1", IsArchived: true}},
 		func(context.Context, string) (*slack.Channel, error) {
 			t.Fatal("lookup of archived boot IM")
 			return nil, nil
@@ -81,7 +81,7 @@ func TestMissingStarredConversations_InvalidOrUnavailable(t *testing.T) {
 func TestMissingStarredConversations_Cancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	got := missingStarredConversations(ctx, nil, []string{"D1"}, []boot.IM{{ID: "D1", UserID: "U1"}},
+	got := MissingStarredConversations(ctx, nil, []string{"D1"}, []boot.IM{{ID: "D1", UserID: "U1"}},
 		func(context.Context, string) (*slack.Channel, error) {
 			t.Fatal("lookup after cancellation")
 			return nil, nil
@@ -92,7 +92,7 @@ func TestMissingStarredConversations_Cancellation(t *testing.T) {
 	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
 	calls := 0
-	got = missingStarredConversations(ctx, nil, []string{"D1", "D2"}, nil,
+	got = MissingStarredConversations(ctx, nil, []string{"D1", "D2"}, nil,
 		func(ctx context.Context, _ string) (*slack.Channel, error) { calls++; cancel(); return nil, ctx.Err() })
 	if len(got) != 0 || calls != 1 {
 		t.Fatalf("added = %+v, calls = %d", got, calls)
@@ -101,7 +101,7 @@ func TestMissingStarredConversations_Cancellation(t *testing.T) {
 
 func TestMissingStarredConversations_ContinuesAfterFailure(t *testing.T) {
 	var calls []string
-	got := missingStarredConversations(context.Background(), nil, []string{"missing", "C1", "D1"}, []boot.IM{{ID: "D1"}},
+	got := MissingStarredConversations(context.Background(), nil, []string{"missing", "C1", "D1"}, []boot.IM{{ID: "D1"}},
 		func(_ context.Context, id string) (*slack.Channel, error) {
 			calls = append(calls, id)
 			if id == "missing" {

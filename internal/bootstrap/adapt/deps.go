@@ -1,21 +1,23 @@
-package main
-
-// bootstrap_adapters.go wires slk's concrete clients onto
-// internal/bootstrap's interfaces.
+// Package adapt wires slk's concrete clients onto internal/bootstrap's
+// interfaces, and turns what a boot returned into what a frontend
+// lists.
 //
-// It is a separate file from main.go for a reason that outlives the
-// task that created it: internal/bootstrap deliberately does not import
-// internal/slack (see that package's comment on import direction), so
-// every mismatch between the two shows up here as a small named type.
-// Buried in main.go those types would read as noise; gathered here they
-// read as the list of translations the import rule costs, and each one
-// can carry the reason it is not a pass-through.
+// It is a package of its own, beside internal/bootstrap rather than in
+// it, for a reason that outlives the task that created it:
+// internal/bootstrap deliberately does not import internal/slack (see
+// that package's comment on import direction), so every mismatch
+// between the two shows up here as a small named type. Gathered here
+// they read as the list of translations the import rule costs, and
+// each one can carry the reason it is not a pass-through. (It lived in
+// cmd/slk as bootstrap_adapters.go until the TUI's retirement moved the
+// boot into the Gio frontend.)
 //
 // Everything in this file is deliberately trivial. Where an adapter
 // does anything at all beyond forwarding — boundedMessageVersions and
 // rawMessages — that is where the decisions are, and both are written
 // as free functions taking narrow interfaces so a test can observe
 // them without a live Slack connection or a live workspace.
+package adapt
 
 import (
 	"context"
@@ -25,7 +27,6 @@ import (
 
 	"github.com/gammons/slk/internal/bootstrap"
 	"github.com/gammons/slk/internal/cache"
-	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/msgsync"
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/boot"
@@ -33,10 +34,10 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// newBootstrapDeps assembles the dependency set bootstrap.Run takes.
+// NewDeps assembles the dependency set bootstrap.Run takes.
 //
-// It exists as a function rather than a struct literal inline in
-// connectWorkspace so that TestBootstrapDeps_PopulatesEveryDependency
+// It exists as a function rather than a struct literal at the call
+// site so that TestBootstrapDeps_PopulatesEveryDependency
 // can assert every field is populated. That test is not decoration.
 // bootstrap.Run errors on a nil Boot, Counts, View, History or Store,
 // but a nil Revalidate or Store is LOG-AND-SKIP inside revalidate() —
@@ -47,8 +48,9 @@ import (
 //
 // accessToken is the xoxc credential; it is passed separately because
 // edge.New takes the token directly rather than going through
-// *slackclient.Client, which does not expose it.
-func newBootstrapDeps(c *slackclient.Client, db *cache.DB, accessToken, openChannelID string, health *edge.Health) bootstrap.Deps {
+// *slackclient.Client, which does not expose it. logf receives the
+// boot's diagnostics; nil discards them.
+func NewDeps(c *slackclient.Client, db *cache.DB, accessToken, openChannelID string, health *edge.Health, logf func(string, ...any)) bootstrap.Deps {
 	return bootstrap.Deps{
 		WorkspaceID: c.TeamID(),
 		Boot:        bootAdapter{c},
@@ -63,7 +65,7 @@ func newBootstrapDeps(c *slackclient.Client, db *cache.DB, accessToken, openChan
 		Health:        health,
 		Store:         storeAdapter{db},
 		OpenChannelID: openChannelID,
-		Log:           debuglog.General,
+		Log:           logf,
 	}
 }
 
@@ -89,16 +91,13 @@ func (a viewAdapter) ConversationsView(ctx context.Context, channelID string) (*
 
 // countsAdapter satisfies bootstrap.CountsFetcher.
 //
-// ctx is accepted and discarded, because GetUnreadCounts takes none —
-// it builds its request with http.NewRequest, not
-// http.NewRequestWithContext. The interface keeps the parameter so that
-// giving GetUnreadCounts a ctx later is a change to one line here
-// rather than a change to bootstrap's interface, and so that this
-// adapter does not have to pretend cancellation works when it does not.
+// It goes through GetUnreadCountsContext, so the boot's ctx bounds the
+// call (the context-free GetUnreadCounts this used to forward to could
+// not be cancelled).
 type countsAdapter struct{ c *slackclient.Client }
 
-func (a countsAdapter) Counts(_ context.Context) (bootstrap.Counts, error) {
-	unreads, threads, err := a.c.GetUnreadCounts()
+func (a countsAdapter) Counts(ctx context.Context) (bootstrap.Counts, error) {
+	unreads, threads, err := a.c.GetUnreadCountsContext(ctx)
 	if err != nil {
 		// Zero value, not a partially-filled one: bootstrap treats a
 		// counts failure as non-fatal and logs it, and handing back
@@ -120,6 +119,7 @@ func (a countsAdapter) Counts(_ context.Context) (bootstrap.Counts, error) {
 			MentionCount: u.MentionCount,
 			HasUnread:    u.HasUnread,
 			LastRead:     u.LastRead,
+			Latest:       u.Latest,
 		})
 	}
 	return out, nil
@@ -255,7 +255,7 @@ func boundedMessageVersions(src messageWindowSource, channelID string) (map[stri
 	return msgsync.Versions(src, channelID)
 }
 
-// bootMutedChannels adapts a bootstrap.Result to
+// Muted adapts a bootstrap.Result to
 // service.MutedChannelsClient, so the mute store bootstraps from
 // client.userBoot's prefs rather than from a second users.prefs.get
 // round trip.
@@ -264,7 +264,7 @@ func boundedMessageVersions(src messageWindowSource, channelID string) (map[stri
 // package must not import internal/slack, which owns
 // ParseMutedFromAllNotificationsPrefs — hence the raw strings on
 // Result.
-type bootMutedChannels struct{ res *bootstrap.Result }
+type Muted struct{ Res *bootstrap.Result }
 
 // GetMutedChannels merges the two prefs the same way
 // slackclient.GetMutedChannels does, and in the same order: the legacy
@@ -275,14 +275,14 @@ type bootMutedChannels struct{ res *bootstrap.Result }
 // that ship it.
 //
 // ctx is unused: everything needed was already fetched.
-func (b bootMutedChannels) GetMutedChannels(_ context.Context) ([]string, error) {
+func (b Muted) GetMutedChannels(_ context.Context) ([]string, error) {
 	merged := map[string]bool{}
-	for _, id := range strings.Split(b.res.LegacyMutedRaw, ",") {
+	for _, id := range strings.Split(b.Res.LegacyMutedRaw, ",") {
 		if id = strings.TrimSpace(id); id != "" {
 			merged[id] = true
 		}
 	}
-	for _, id := range slackclient.ParseMutedFromAllNotificationsPrefs(b.res.MutePrefsRaw) {
+	for _, id := range slackclient.ParseMutedFromAllNotificationsPrefs(b.Res.MutePrefsRaw) {
 		merged[id] = true
 	}
 	out := make([]string, 0, len(merged))
@@ -292,17 +292,17 @@ func (b bootMutedChannels) GetMutedChannels(_ context.Context) ([]string, error)
 	return out, nil
 }
 
-// bootUserDisplayName picks the name to show for a user
+// UserDisplayName picks the name to show for a user
 // conversations.view returned.
 //
 // The chain is display name, then profile real name, then the handle —
 // identical to bootstrap's own userDisplayName, deliberately, so the
-// name this puts in wctx.UserNames and the name edge revalidation
+// name a frontend shows and the name edge revalidation
 // writes to the cache cannot disagree and flicker between them on a
 // restart. boot.User also carries a TOP-LEVEL RealName, which is a
 // different key with a possibly different value; it is not consulted,
 // for the same reason.
-func bootUserDisplayName(u boot.User) string {
+func UserDisplayName(u boot.User) string {
 	if u.Profile.DisplayName != "" {
 		return u.Profile.DisplayName
 	}
@@ -312,146 +312,7 @@ func bootUserDisplayName(u boot.User) string {
 	return u.Name
 }
 
-// bootConversations converts what client.userBoot returned into the
-// slack.Channel values the sidebar builder consumes.
-//
-// It exists because users.conversations is not reliably available. On
-// the Enterprise Grid org in gammons/slk#5 that call is rejected, and
-// because connectWorkspace treated the failure as fatal the whole
-// workspace was dropped: no channels, no threads, and no active
-// workspace at all. userBoot had already returned all 217 of that
-// user's conversations moments earlier, so slk was discarding a
-// session over data it already held.
-//
-// The mapping only has to satisfy buildChannelItem, which reads ID,
-// Name, Topic, IsIM, IsMpIM, IsPrivate, IsMember and User. Everything
-// else on slack.Channel is left zero deliberately: a field invented
-// here would read as measured downstream.
-//
-// IsMember is true for every channels[] entry because userBoot returns
-// the user's OWN conversation list -- there is no is_member on the
-// entries and none is needed. Ordinary IMs are filtered to the open ones;
-// missingStarredConversations separately recovers accessible closed starred
-// IMs. Both the per-IM is_open flag and userBoot's top-level is_open list
-// are consulted, because either alone would silently empty the DM list if
-// that response shape varies.
-//
-// MPIMs get the same treatment via the top-level is_open list only:
-// userBoot is asked for return_all_relevant_mpdms=true, so channels[]
-// carries every group DM the user was ever in, and the official client
-// shows just the open ones. See dropClosedMPIMs.
-func bootConversations(res *bootstrap.Result) []slack.Channel {
-	if res == nil {
-		return nil
-	}
-	open := make(map[string]bool, len(res.IsOpen))
-	for _, id := range res.IsOpen {
-		open[id] = true
-	}
-	out := make([]slack.Channel, 0, len(res.Channels)+len(res.IMs))
-	for _, ch := range res.Channels {
-		if ch.IsArchived {
-			continue
-		}
-		if ch.IsMPIM && len(open) > 0 && !open[ch.ID] {
-			continue
-		}
-		out = append(out, slack.Channel{
-			GroupConversation: slack.GroupConversation{
-				Conversation: slack.Conversation{
-					ID:          ch.ID,
-					IsGroup:     ch.IsGroup,
-					IsPrivate:   ch.IsPrivate,
-					IsMpIM:      ch.IsMPIM,
-					IsShared:    ch.IsShared,
-					IsOrgShared: ch.IsOrgShared,
-					IsExtShared: ch.IsExtShared,
-				},
-				Name:    ch.Name,
-				Creator: ch.Creator,
-				Topic:   slack.Topic{Value: ch.Topic.Value},
-				Purpose: slack.Purpose{Value: ch.Purpose.Value},
-			},
-			IsChannel: ch.IsChannel,
-			IsGeneral: ch.IsGeneral,
-			IsMember:  true,
-		})
-	}
-	for _, im := range res.IMs {
-		if im.IsArchived {
-			continue
-		}
-		if !im.IsOpen && !open[im.ID] {
-			continue
-		}
-		out = append(out, bootIMConversation(im))
-	}
-	return out
-}
-
-// bootIMConversation maps userBoot IM metadata into the conversation shape
-// consumed by buildChannelItem. Eligibility (open, starred, archived) belongs
-// to the caller; sharing this mapping keeps ordinary and starred DMs identical.
-func bootIMConversation(im boot.IM) slack.Channel {
-	return slack.Channel{
-		GroupConversation: slack.GroupConversation{
-			Conversation: slack.Conversation{
-				ID:          im.ID,
-				IsIM:        true,
-				User:        im.UserID,
-				IsOrgShared: im.IsOrgShared,
-			},
-			IsArchived: im.IsArchived,
-		},
-		IsMember: true,
-	}
-}
-
-// dropClosedMPIMs removes group DMs (MPIMs) that are not in userBoot's
-// top-level is_open list.
-//
-// users.conversations returns every mpim the user is a member of, and
-// Slack never removes a user from a group DM -- closing one in the
-// official client only takes it out of is_open. So a workspace of any
-// age accumulates hundreds of closed group DMs that the official
-// client never shows, and slk was listing all of them. The sidebar's
-// staleness filter catches most, but not those a custom Slack section
-// claims (sections exempt their members from hiding), which is exactly
-// where a group DM with a departed colleague tends to sit.
-//
-// Only MPIMs are filtered. 1:1 DMs are left to the existing staleness
-// path: the finder relies on closed DMs being present to offer "message
-// this person", and the sidebar already hides the stale ones.
-//
-// An empty isOpen disables the filter. It cannot be told apart from
-// "userBoot did not return the field", and hiding every group DM on
-// that evidence would be a silent regression. A closed MPIM that
-// receives a message is re-added by the mpim_open / message-discovery
-// paths, the same way the official client reopens it.
-func dropClosedMPIMs(channels []slack.Channel, isOpen []string) []slack.Channel {
-	if channels == nil || len(isOpen) == 0 {
-		return channels
-	}
-	open := make(map[string]bool, len(isOpen))
-	for _, id := range isOpen {
-		open[id] = true
-	}
-	out := make([]slack.Channel, 0, len(channels))
-	dropped := 0
-	for _, ch := range channels {
-		if ch.IsMpIM && !open[ch.ID] {
-			dropped++
-			continue
-		}
-		out = append(out, ch)
-	}
-	if dropped > 0 {
-		debuglog.General("dropClosedMPIMs: hid %d closed group DMs (is_open has %d ids)", dropped, len(isOpen))
-	}
-	return out
-}
-
-// hydrateFirstSight inserts cache rows for the conversations and users
+// HydrateFirstSight inserts cache rows for the conversations and users
 // this boot learned about that the cache has never seen.
 //
 // It is needed because bootstrap's revalidation writers —
@@ -475,7 +336,10 @@ func dropClosedMPIMs(channels []slack.Channel, isOpen []string) []slack.Channel 
 // its writes found no rows and the next boot re-requests those records
 // in full. The records themselves are complete either way: userBoot
 // carries every column channels/info would have filled.
-func hydrateFirstSight(db *cache.DB, workspaceID string, res *bootstrap.Result) {
+func HydrateFirstSight(db *cache.DB, workspaceID string, res *bootstrap.Result, logf func(string, ...any)) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
 	// The workspaces row first, and it is not optional: channels.
 	// workspace_id and users.workspace_id are FOREIGN KEYs onto it,
 	// with enforcement on, so every insert below fails without it.
@@ -491,7 +355,7 @@ func hydrateFirstSight(db *cache.DB, workspaceID string, res *bootstrap.Result) 
 			ID:   workspaceID,
 			Name: res.Team.Name,
 		}); err != nil {
-			debuglog.General("bootstrap: hydrating workspace %s: %v", workspaceID, err)
+			logf("bootstrap: hydrating workspace %s: %v", workspaceID, err)
 		}
 	}
 	for _, ch := range res.Channels {
@@ -516,7 +380,7 @@ func hydrateFirstSight(db *cache.DB, workspaceID string, res *bootstrap.Result) 
 			// entry here is one the user belongs to.
 			IsMember: true,
 		}); err != nil {
-			debuglog.General("bootstrap: hydrating channel %s: %v", ch.ID, err)
+			logf("bootstrap: hydrating channel %s: %v", ch.ID, err)
 		}
 	}
 	for _, im := range res.IMs {
@@ -538,7 +402,7 @@ func hydrateFirstSight(db *cache.DB, workspaceID string, res *bootstrap.Result) 
 			Type:        "dm",
 			IsMember:    true,
 		}); err != nil {
-			debuglog.General("bootstrap: hydrating DM %s: %v", im.ID, err)
+			logf("bootstrap: hydrating DM %s: %v", im.ID, err)
 		}
 	}
 	for _, u := range res.Users {
@@ -550,7 +414,7 @@ func hydrateFirstSight(db *cache.DB, workspaceID string, res *bootstrap.Result) 
 			WorkspaceID: workspaceID,
 			HomeTeamID:  u.TeamID,
 			Name:        u.Name,
-			DisplayName: bootUserDisplayName(u),
+			DisplayName: UserDisplayName(u),
 			AvatarURL:   u.Profile.ImageOriginal,
 			// "away" is what every other first-sight write in slk
 			// records: a view result carries no presence, and the
@@ -564,7 +428,7 @@ func hydrateFirstSight(db *cache.DB, workspaceID string, res *bootstrap.Result) 
 			HuddleState:      u.Profile.HuddleState,
 			HuddleExpiration: u.Profile.HuddleStateExpirationTS,
 		}); err != nil {
-			debuglog.General("bootstrap: hydrating user %s: %v", u.ID, err)
+			logf("bootstrap: hydrating user %s: %v", u.ID, err)
 		}
 	}
 }

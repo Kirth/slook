@@ -6,14 +6,32 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/slack/edge"
+	"github.com/gammons/slk/internal/slack/slacktest"
 )
+
+// newTestDB returns an empty cache in a temp dir with workspace T1.
+func newTestDB(t *testing.T) *cache.DB {
+	t.Helper()
+	dir := t.TempDir()
+	db, err := cache.New(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("cache.New: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := db.UpsertWorkspace(cache.Workspace{ID: "T1", Name: "T"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+	return db
+}
 
 // TestUserResolver_BoundsConcurrentRequests is the second half of the
 // cold-cache fix.
@@ -60,7 +78,7 @@ func TestUserResolver_BoundsConcurrentRequests(t *testing.T) {
 
 	db := newTestDB(t)
 	watch := newResolvedWatch(requests, nil)
-	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, nil, nil)
+	r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, nil, nil)
 
 	for i := 0; i < requests; i++ {
 		r.Request(fmt.Sprintf("U%03d", i))
@@ -107,7 +125,7 @@ func TestUserResolver_RequestDoesNotBlockTheCaller(t *testing.T) {
 
 	db := newTestDB(t)
 	watch := newResolvedWatch(requests, nil)
-	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, nil, nil)
+	r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, nil, nil)
 
 	returned := make(chan struct{})
 	go func() {
@@ -339,7 +357,7 @@ func TestUserResolver_EdgeMissFallsBackToPerUser(t *testing.T) {
 	defer srv.Close()
 
 	watch := newResolvedWatch(1, func(m userResolvedMsg) bool { return m.UserID == "U002" })
-	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, batcher, nil)
+	r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, batcher, nil)
 	r.Request("U001")
 	r.Request("U002")
 
@@ -378,7 +396,7 @@ func TestUserResolver_EmptyNameEdgeRecordFallsBackToPerUser(t *testing.T) {
 	watch := newResolvedWatch(1, func(m userResolvedMsg) bool {
 		return m.UserID == "U001" && m.DisplayName == "Alice"
 	})
-	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, batcher, nil)
+	r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, batcher, nil)
 	r.Request("U001")
 	r.Request("U002")
 
@@ -417,7 +435,7 @@ func TestUserResolver_EdgeErrorFallsBackToPerUser(t *testing.T) {
 	defer srv.Close()
 
 	watch := newResolvedWatch(1, func(m userResolvedMsg) bool { return m.UserID == "U001" })
-	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, batcher, nil)
+	r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, batcher, nil)
 	r.Request("U001")
 
 	// No timeout by design: `go test` already imposes one, and a
@@ -446,7 +464,7 @@ func TestUserResolver_DegradedWorkspaceSkipsEdge(t *testing.T) {
 	defer srv.Close()
 
 	watch := newResolvedWatch(1, nil)
-	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, batcher, func() bool { return true })
+	r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, batcher, func() bool { return true })
 	r.Request("U001")
 
 	// No timeout by design: `go test` already imposes one, and a
@@ -560,7 +578,7 @@ func TestUserResolver_FirstSightPerUserDeliversPeerStatus(t *testing.T) {
 
 	db := newTestDB(t)
 	watch := newResolvedWatch(1, nil)
-	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, nil, nil)
+	r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, nil, nil)
 	r.Request("U1")
 	<-watch.done
 
@@ -647,7 +665,7 @@ func TestUserResolver_RecordsNamesInStore(t *testing.T) {
 		defer srv.Close()
 		db := newTestDB(t)
 		watch := newResolvedWatch(1, nil)
-		r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, nil, nil)
+		r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, nil, nil)
 		store := newUserNameStore(nil)
 		r.names = store
 		r.Request("U2")
@@ -664,7 +682,7 @@ func TestUserResolver_RecordsNamesInStore(t *testing.T) {
 		defer srv.Close()
 		db := newTestDB(t)
 		watch := newResolvedWatch(1, nil)
-		r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, nil, nil)
+		r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, nil, nil)
 		store := newUserNameStore(nil)
 		r.names = store
 		r.RequestBot("B1", "")

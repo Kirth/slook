@@ -1,20 +1,13 @@
-package main
+package adapt
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"github.com/slack-go/slack"
-	"net"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
-	"path/filepath"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/gammons/slk/internal/bootstrap"
@@ -22,137 +15,17 @@ import (
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/boot"
 	"github.com/gammons/slk/internal/slack/edge"
-	"github.com/gammons/slk/internal/slackhttp"
+	"github.com/gammons/slk/internal/slack/slacktest"
+	"github.com/slack-go/slack"
 )
-
-// newTestDB returns an empty cache in a temp dir with workspace T1.
-func newTestDB(t *testing.T) *cache.DB {
-	t.Helper()
-	dir := t.TempDir()
-	db, err := cache.New(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("cache.New: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	if err := db.UpsertWorkspace(cache.Workspace{ID: "T1", Name: "T"}); err != nil {
-		t.Fatalf("UpsertWorkspace: %v", err)
-	}
-	return db
-}
-
-// newTestClient returns a real *slackclient.Client whose every request
-// lands on srv.
-//
-// srv must be a TLS server. The client's base URLs are https (the
-// workspace API defaults to https://slack.com/api/, edge.Client is
-// hardcoded to https://edgeapi.slack.com), and neither is settable from
-// outside internal/slack — so the redirection happens at the transport,
-// by replacing the BrowserTransport's Inner with one that dials srv
-// whatever host it was asked for.
-//
-// Replacing Inner and not the whole Transport is the point: the
-// BrowserTransport itself, with its Chrome header set and its telemetry
-// envelope, is exactly what these tests are checking survives the
-// wiring.
-func newTestClient(t *testing.T, srv *httptest.Server) *slackclient.Client {
-	t.Helper()
-	c := slackclient.NewClient("xoxc-test", "d-cookie")
-	bt, ok := c.HTTPClient().Transport.(*slackhttp.BrowserTransport)
-	if !ok {
-		t.Fatalf("client transport is %T; want *slackhttp.BrowserTransport", c.HTTPClient().Transport)
-	}
-	addr := srv.Listener.Addr().String()
-	bt.Inner = &http.Transport{
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, network, addr)
-		},
-		//nolint:gosec // dialing a local httptest server with a self-signed cert
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
-	return c
-}
-
-// recordedRequest is one request the fake Slack captured.
-type recordedRequest struct {
-	path   string
-	form   url.Values
-	query  url.Values
-	header http.Header
-}
-
-// fakeSlack is a TLS httptest server that answers a fixed body per path
-// and records what it was asked.
-type fakeSlack struct {
-	*httptest.Server
-	mu   sync.Mutex
-	reqs []recordedRequest
-}
-
-func newFakeSlack(t *testing.T, bodies map[string]string) *fakeSlack {
-	t.Helper()
-	f := &fakeSlack{}
-	f.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		rec := recordedRequest{
-			path:   r.URL.Path,
-			form:   r.PostForm,
-			query:  r.URL.Query(),
-			header: r.Header.Clone(),
-		}
-		f.mu.Lock()
-		f.reqs = append(f.reqs, rec)
-		f.mu.Unlock()
-
-		body, ok := bodies[r.URL.Path]
-		if !ok {
-			t.Errorf("fake Slack got an unexpected request to %s", r.URL.Path)
-			http.Error(w, `{"ok":false,"error":"unexpected_path"}`, http.StatusNotFound)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(f.Close)
-	return f
-}
-
-func (f *fakeSlack) requestTo(t *testing.T, path string) recordedRequest {
-	t.Helper()
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, r := range f.reqs {
-		if r.path == path {
-			return r
-		}
-	}
-	var paths []string
-	for _, r := range f.reqs {
-		paths = append(paths, r.path)
-	}
-	t.Fatalf("no request to %s; got %v", path, paths)
-	return recordedRequest{}
-}
 
 // ---------------------------------------------------------------------
 // bootAdapter
 // ---------------------------------------------------------------------
 
-const userBootBody = `{
-  "ok": true,
-  "self": {"id":"U1","name":"grant","team_id":"T1"},
-  "team": {"id":"T1","name":"Acme","domain":"acme"},
-  "channels": [
-    {"id":"C1","name":"general","is_channel":true,"updated":1783337533019,"topic":{"value":"talk"}}
-  ],
-  "ims": [{"id":"D1","user":"U2","is_im":true,"is_open":true,"updated":1783337533020}],
-  "is_open": ["C1","D1"],
-  "prefs": {"all_notifications_prefs":"{\"channels\":{\"C1\":{\"muted\":true}}}"},
-  "emoji_cache_ts": "17833375330191740"
-}`
-
 func TestBootAdapter_CallsUserBootAndReturnsParsedResult(t *testing.T) {
-	srv := newFakeSlack(t, map[string]string{"/api/client.userBoot": userBootBody})
-	c := newTestClient(t, srv.Server)
+	srv := slacktest.NewServer(t, map[string]string{"/api/client.userBoot": slacktest.UserBootBody})
+	c := slacktest.NewClient(t, srv.Server)
 
 	res, err := bootAdapter{c}.UserBoot(context.Background())
 	if err != nil {
@@ -170,11 +43,11 @@ func TestBootAdapter_CallsUserBootAndReturnsParsedResult(t *testing.T) {
 
 	// The token has to reach the form body. postForm injects it, and
 	// the adapter is a pass-through precisely so that stays true.
-	req := srv.requestTo(t, "/api/client.userBoot")
-	if got := req.form.Get("token"); got != "xoxc-test" {
+	req := srv.RequestTo(t, "/api/client.userBoot")
+	if got := req.Form.Get("token"); got != "xoxc-test" {
 		t.Errorf("token = %q; want the client's xoxc token", got)
 	}
-	if got := req.form.Get("omit_extras"); got == "" {
+	if got := req.Form.Get("omit_extras"); got == "" {
 		t.Error("omit_extras absent from the body; the adapter is not going through boot.UserBoot")
 	}
 }
@@ -192,8 +65,8 @@ const viewBody = `{
 }`
 
 func TestViewAdapter_SendsTheChannelAndParsesTheResult(t *testing.T) {
-	srv := newFakeSlack(t, map[string]string{"/api/conversations.view": viewBody})
-	c := newTestClient(t, srv.Server)
+	srv := slacktest.NewServer(t, map[string]string{"/api/conversations.view": viewBody})
+	c := slacktest.NewClient(t, srv.Server)
 
 	res, err := viewAdapter{c}.ConversationsView(context.Background(), "C1")
 	if err != nil {
@@ -205,7 +78,7 @@ func TestViewAdapter_SendsTheChannelAndParsesTheResult(t *testing.T) {
 	if len(res.Users) != 1 || res.Users[0].ID != "U2" {
 		t.Errorf("users = %+v; want one for U2", res.Users)
 	}
-	if got := srv.requestTo(t, "/api/conversations.view").form.Get("channel"); got != "C1" {
+	if got := srv.RequestTo(t, "/api/conversations.view").Form.Get("channel"); got != "C1" {
 		t.Errorf("channel param = %q; want C1", got)
 	}
 }
@@ -216,14 +89,14 @@ func TestViewAdapter_SendsTheChannelAndParsesTheResult(t *testing.T) {
 
 const countsBody = `{
   "ok": true,
-  "channels": [{"id":"C1","has_unreads":true,"mention_count":2,"unread_count_display":5,"last_read":"1.0"}],
+  "channels": [{"id":"C1","has_unreads":true,"mention_count":2,"unread_count_display":5,"last_read":"1.0","latest":"3.0"}],
   "ims": [{"id":"D1","has_unreads":true,"last_read":"2.0"}],
   "threads": {"has_unreads":true,"unread_count":3,"mention_count":1}
 }`
 
 func TestCountsAdapter_CarriesUnreadsAndTheThreadRollup(t *testing.T) {
-	srv := newFakeSlack(t, map[string]string{"/api/client.counts": countsBody})
-	c := newTestClient(t, srv.Server)
+	srv := slacktest.NewServer(t, map[string]string{"/api/client.counts": countsBody})
+	c := slacktest.NewClient(t, srv.Server)
 
 	counts, err := countsAdapter{c}.Counts(context.Background())
 	if err != nil {
@@ -238,6 +111,14 @@ func TestCountsAdapter_CarriesUnreadsAndTheThreadRollup(t *testing.T) {
 	}
 	if !byID["C1"] || !byID["D1"] {
 		t.Errorf("unread flags = %+v; want both C1 and D1 unread", byID)
+	}
+	// Latest is what a connect's catch-up compares with the cache's
+	// head; without it the boot's client.counts cannot stand in for the
+	// one a first connect would otherwise make.
+	for _, u := range counts.Unreads {
+		if u.ChannelID == "C1" && u.Latest != "3.0" {
+			t.Errorf("C1 Latest = %q; want 3.0", u.Latest)
+		}
 	}
 	// The threads rollup is the authoritative answer to "does the user
 	// have unread thread activity"; the local cache has no per-thread
@@ -268,8 +149,8 @@ const historyBody = `{
 }`
 
 func TestHistoryAdapter_SendsCachedVersionsAndReturnsTheIncrementalVerdict(t *testing.T) {
-	srv := newFakeSlack(t, map[string]string{"/api/conversations.history": historyBody})
-	c := newTestClient(t, srv.Server)
+	srv := slacktest.NewServer(t, map[string]string{"/api/conversations.history": historyBody})
+	c := slacktest.NewClient(t, srv.Server)
 
 	cached := map[string]string{"1.0": "v1", "2.0": "v2"}
 	hist, err := historyAdapter{c}.HistoryWithVersions(context.Background(), "C1", cached)
@@ -280,15 +161,15 @@ func TestHistoryAdapter_SendsCachedVersionsAndReturnsTheIncrementalVerdict(t *te
 	// The request must carry the caller's map verbatim. Without it the
 	// server has nothing to compare against and re-sends scrollback slk
 	// already holds.
-	req := srv.requestTo(t, "/api/conversations.history")
+	req := srv.RequestTo(t, "/api/conversations.history")
 	var sent map[string]string
-	if err := json.Unmarshal([]byte(req.form.Get("cached_latest_updates")), &sent); err != nil {
-		t.Fatalf("cached_latest_updates = %q: %v", req.form.Get("cached_latest_updates"), err)
+	if err := json.Unmarshal([]byte(req.Form.Get("cached_latest_updates")), &sent); err != nil {
+		t.Fatalf("cached_latest_updates = %q: %v", req.Form.Get("cached_latest_updates"), err)
 	}
 	if !reflect.DeepEqual(sent, cached) {
 		t.Errorf("cached_latest_updates = %+v; want %+v", sent, cached)
 	}
-	if got := req.form.Get("limit"); got != "28" {
+	if got := req.Form.Get("limit"); got != "28" {
 		t.Errorf("limit = %q; want 28, the only page size the official client was observed sending", got)
 	}
 
@@ -479,7 +360,7 @@ func TestBootstrapDeps_PopulatesEveryDependency(t *testing.T) {
 	}
 	defer db.Close()
 
-	deps := newBootstrapDeps(slackclient.NewClient("xoxc-test", "d-cookie"), db, "xoxc-test", "C1", edge.NewHealth())
+	deps := NewDeps(slackclient.NewClient("xoxc-test", "d-cookie"), db, "xoxc-test", "C1", edge.NewHealth(), func(string, ...any) {})
 
 	v := reflect.ValueOf(deps)
 	for i := 0; i < v.NumField(); i++ {
@@ -510,11 +391,11 @@ func TestBootstrapDeps_PopulatesEveryDependency(t *testing.T) {
 // project exists to remove, and it is invisible from inside slk. The
 // only place it IS visible is on the wire, so this test reads the wire.
 func TestBootstrapDeps_RevalidatorUsesTheBrowserShapedHTTPClient(t *testing.T) {
-	srv := newFakeSlack(t, map[string]string{
+	srv := slacktest.NewServer(t, map[string]string{
 		"/api/auth.test":          `{"ok":true,"url":"https://acme.slack.com/","team":"Acme","user":"grant","team_id":"T1","user_id":"U1"}`,
 		"/cache/T1/channels/info": `{"ok":true,"results":[]}`,
 	})
-	c := newTestClient(t, srv.Server)
+	c := slacktest.NewClient(t, srv.Server)
 	if err := c.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -525,7 +406,7 @@ func TestBootstrapDeps_RevalidatorUsesTheBrowserShapedHTTPClient(t *testing.T) {
 	}
 	defer db.Close()
 
-	deps := newBootstrapDeps(c, db, "xoxc-test", "", edge.NewHealth())
+	deps := NewDeps(c, db, "xoxc-test", "", edge.NewHealth(), nil)
 
 	// Structural check FIRST, and it is deliberately not redundant
 	// with the wire assertions below. edge.Client's base URL is
@@ -554,24 +435,24 @@ func TestBootstrapDeps_RevalidatorUsesTheBrowserShapedHTTPClient(t *testing.T) {
 		t.Fatalf("ChannelsInfo: %v", err)
 	}
 
-	req := srv.requestTo(t, "/cache/T1/channels/info")
-	if ua := req.header.Get("User-Agent"); !strings.Contains(ua, "Chrome/") {
+	req := srv.RequestTo(t, "/cache/T1/channels/info")
+	if ua := req.Header.Get("User-Agent"); !strings.Contains(ua, "Chrome/") {
 		t.Errorf("User-Agent = %q; want Chrome's — edge.New was given a plain http.Client, not the BrowserTransport one", ua)
 	}
-	if got := req.header.Get("Sec-Ch-Ua-Platform"); got == "" {
+	if got := req.Header.Get("Sec-Ch-Ua-Platform"); got == "" {
 		t.Error("no Sec-Ch-Ua-Platform; the browser header set is not being applied to edgeapi requests")
 	}
 	// The edgeapi envelope. BrowserTransport adds these only when it
 	// has an Envelope, which only the client's own HTTP client carries.
-	if got := req.query.Get("_x_app_name"); got != "client" {
+	if got := req.Query.Get("_x_app_name"); got != "client" {
 		t.Errorf("_x_app_name = %q; want client — the edgeapi envelope is missing", got)
 	}
-	if got := req.query.Get("fp"); got != "6e" {
+	if got := req.Query.Get("fp"); got != "6e" {
 		t.Errorf("fp = %q; want 6e", got)
 	}
 	// And NOT the workspace set: edgeapi never carries _x_id or
 	// slack_route in any capture.
-	if got := req.query.Get("_x_id"); got != "" {
+	if got := req.Query.Get("_x_id"); got != "" {
 		t.Errorf("_x_id = %q; edgeapi requests must not carry the workspace envelope", got)
 	}
 }
@@ -596,7 +477,7 @@ func TestHydrateFirstSight_InsertsRowsTheCacheHasNeverSeen(t *testing.T) {
 		IMs:   []boot.IM{{ID: "D1", UserID: "U2", IsIM: true}},
 		Users: []boot.User{{ID: "U2", Name: "pat", Profile: boot.UserProfile{DisplayName: "Pat"}}},
 	}
-	hydrateFirstSight(db, "T1", res)
+	HydrateFirstSight(db, "T1", res, nil)
 
 	for _, tc := range []struct{ id, name, chType string }{
 		{"C1", "general", "channel"},
@@ -658,10 +539,10 @@ func TestHydrateFirstSight_LeavesExistingRowsAlone(t *testing.T) {
 		t.Fatalf("UpsertUser: %v", err)
 	}
 
-	hydrateFirstSight(db, "T1", &bootstrap.Result{
+	HydrateFirstSight(db, "T1", &bootstrap.Result{
 		Channels: []boot.Channel{{ID: "C1", Name: "renamed", IsChannel: true}},
 		Users:    []boot.User{{ID: "U2", Name: "pat", Profile: boot.UserProfile{DisplayName: "Pat"}}},
-	})
+	}, nil)
 
 	ch, err := db.GetChannel("C1")
 	if err != nil {
@@ -721,7 +602,7 @@ func TestBootMutedChannels_MergesBothPrefs(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			res := &bootstrap.Result{MutePrefsRaw: tc.muted, LegacyMutedRaw: tc.legacy}
-			got, err := bootMutedChannels{res}.GetMutedChannels(context.Background())
+			got, err := Muted{res}.GetMutedChannels(context.Background())
 			if err != nil {
 				t.Fatalf("GetMutedChannels: %v", err)
 			}
@@ -754,7 +635,7 @@ func TestBootConversations_MapsWhatTheSidebarBuilderReads(t *testing.T) {
 		IsOpen: []string{"D1", "C3"},
 	}
 
-	got := bootConversations(res)
+	got := Conversations(res)
 	if len(got) != 4 {
 		t.Fatalf("got %d conversations; want 4 (3 channels + 1 IM)", len(got))
 	}
@@ -801,7 +682,7 @@ func TestBootConversations_SkipsArchivedAndClosed(t *testing.T) {
 		},
 		IsOpen: []string{"D1"},
 	}
-	got := bootConversations(res)
+	got := Conversations(res)
 	ids := map[string]bool{}
 	for _, c := range got {
 		ids[c.ID] = true
@@ -835,7 +716,7 @@ func TestBootConversations_SkipsClosedMPIMs(t *testing.T) {
 		IsOpen: []string{"G1"},
 	}
 	ids := map[string]bool{}
-	for _, c := range bootConversations(res) {
+	for _, c := range Conversations(res) {
 		ids[c.ID] = true
 	}
 	if !ids["G1"] {
@@ -854,7 +735,7 @@ func TestBootConversations_EmptyIsOpenDisablesMPIMFilter(t *testing.T) {
 	// returning the field at all. This is the fallback path -- the one
 	// that runs precisely when userBoot came back thin -- so hiding
 	// every group DM on that evidence would be a silent regression.
-	// Mirrors dropClosedMPIMs' "no is_open data means no filtering".
+	// Mirrors DropClosedMPIMs' "no is_open data means no filtering".
 	for _, tc := range []struct {
 		name   string
 		isOpen []string
@@ -871,7 +752,7 @@ func TestBootConversations_EmptyIsOpenDisablesMPIMFilter(t *testing.T) {
 				IsOpen: tc.isOpen,
 			}
 			ids := map[string]bool{}
-			for _, c := range bootConversations(res) {
+			for _, c := range Conversations(res) {
 				ids[c.ID] = true
 			}
 			if !ids["G1"] {
@@ -893,7 +774,7 @@ func TestDropClosedMPIMs(t *testing.T) {
 	}
 
 	t.Run("drops MPIMs absent from is_open, keeps everything else", func(t *testing.T) {
-		got := dropClosedMPIMs(chans, []string{"G1", "D1"})
+		got := DropClosedMPIMs(chans, []string{"G1", "D1"}, nil)
 		ids := map[string]bool{}
 		for _, c := range got {
 			ids[c.ID] = true
@@ -907,20 +788,20 @@ func TestDropClosedMPIMs(t *testing.T) {
 		// An empty list is indistinguishable from "userBoot did not
 		// return it"; hiding every group DM on that evidence would be
 		// a silent regression, so the input passes through untouched.
-		if got := dropClosedMPIMs(chans, nil); len(got) != len(chans) {
+		if got := DropClosedMPIMs(chans, nil, nil); len(got) != len(chans) {
 			t.Errorf("got %d channels; want %d unchanged", len(got), len(chans))
 		}
 	})
 
 	t.Run("nil input", func(t *testing.T) {
-		if got := dropClosedMPIMs(nil, []string{"G1"}); got != nil {
+		if got := DropClosedMPIMs(nil, []string{"G1"}, nil); got != nil {
 			t.Errorf("got %v; want nil", got)
 		}
 	})
 }
 
 func TestBootConversations_NilSafe(t *testing.T) {
-	if got := bootConversations(nil); got != nil {
+	if got := Conversations(nil); got != nil {
 		t.Errorf("got %v; want nil", got)
 	}
 }
@@ -938,8 +819,8 @@ func TestBootConversations_NilSafe(t *testing.T) {
 // TestCountsAdapter_CarriesUnreadsAndTheThreadRollup so that a failure
 // names the thing that broke.
 func TestCountsAdapter_CarriesServerMentionCounts(t *testing.T) {
-	srv := newFakeSlack(t, map[string]string{"/api/client.counts": countsBody})
-	c := newTestClient(t, srv.Server)
+	srv := slacktest.NewServer(t, map[string]string{"/api/client.counts": countsBody})
+	c := slacktest.NewClient(t, srv.Server)
 
 	counts, err := countsAdapter{c}.Counts(context.Background())
 	if err != nil {
@@ -964,5 +845,119 @@ func TestCountsAdapter_CarriesServerMentionCounts(t *testing.T) {
 	}
 	if got["D1"] != 0 {
 		t.Errorf("D1 MentionCount = %d, want 0 for an absent mention_count", got["D1"])
+	}
+}
+
+func TestMostRecentlyVisited(t *testing.T) {
+	if got := MostRecentlyVisited(nil); got != "" {
+		t.Errorf("no visits = %q; want \"\" (conversations.view without a channel)", got)
+	}
+	if got := MostRecentlyVisited(map[string]int64{"C1": 10, "C2": 30, "C3": 20}); got != "C2" {
+		t.Errorf("got %q; want C2, the latest visit", got)
+	}
+}
+
+// TestFillFromCounts_FillsTheGapFromCacheThenEdge pins the subset fix:
+// userBoot's channels[] leaves out conversations the user is in (67 of
+// 218 listed on one real workspace), and client.counts names them. The
+// gap is filled from the cache first, then from one channels/info
+// batch, and never by enumerating.
+func TestFillFromCounts_FillsTheGapFromCacheThenEdge(t *testing.T) {
+	srv := slacktest.NewServer(t, map[string]string{
+		"/api/auth.test": `{"ok":true,"url":"https://acme.slack.com/","team":"Acme","user":"grant","team_id":"T1","user_id":"U1"}`,
+		"/cache/T1/channels/info": `{"ok":true,"results":[
+			{"id":"C9","name":"design","is_channel":true,"updated":1783337533019,"topic":{"value":"pixels"}},
+			{"id":"C10","name":"old","is_channel":true,"is_archived":true,"updated":1}
+		],"failed_ids":["C11"]}`,
+	})
+	c := slacktest.NewClient(t, srv.Server)
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	db, err := cache.New(":memory:")
+	if err != nil {
+		t.Fatalf("cache.New: %v", err)
+	}
+	defer db.Close()
+	if err := db.UpsertWorkspace(cache.Workspace{ID: "T1", Name: "Acme"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []cache.Channel{
+		{ID: "C8", WorkspaceID: "T1", Name: "cached", Type: "private", IsMember: true},
+		{ID: "D8", WorkspaceID: "T1", Name: "Pat", Type: "dm", IsMember: true},
+	} {
+		if err := db.UpsertChannel(row); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res := &bootstrap.Result{
+		Channels: []boot.Channel{{ID: "C1", Name: "general", IsChannel: true}},
+		IMs:      []boot.IM{{ID: "D1", UserID: "U2", IsIM: true, IsOpen: true}},
+		Counts: bootstrap.Counts{Unreads: []bootstrap.Unread{
+			{ChannelID: "C1"}, {ChannelID: "D1"}, // listed by userBoot
+			{ChannelID: "C8"},                    // the gap, cached
+			{ChannelID: "D8"},                    // the gap, a cached DM: no peer, left out
+			{ChannelID: "C9"}, {ChannelID: "C9"}, // the gap, edge (repeated: asked once)
+			{ChannelID: "C10"}, // archived: left out
+			{ChannelID: "C11"}, // edge fails it (Grid, another team): left out
+		}},
+	}
+	var logged []string
+	logf := func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }
+
+	got := FillFromCounts(context.Background(), db, edge.New("xoxc-test", "T1", c.HTTPClient()), "T1", res, logf)
+
+	by := map[string]slack.Channel{}
+	for _, ch := range got {
+		by[ch.ID] = ch
+	}
+	if len(got) != 2 || by["C8"].Name != "cached" || !by["C8"].IsPrivate || by["C9"].Name != "design" || !by["C9"].IsChannel {
+		t.Fatalf("filled = %+v; want C8 (cache, private) and C9 (edge)", got)
+	}
+	if by["C9"].Topic.Value != "pixels" || !by["C9"].IsMember {
+		t.Errorf("C9 = %+v; want its topic, and a member (client.counts lists the user's own)", by["C9"])
+	}
+	// One channels/info request, asking only for what the cache did not
+	// hold, each id at 0 ("never seen, send the full record").
+	if n := srv.Count("/cache/T1/channels/info"); n != 1 {
+		t.Fatalf("channels/info requests = %d; want 1", n)
+	}
+	var body struct {
+		Updated map[string]int64 `json:"updated_ids"`
+	}
+	req := srv.RequestTo(t, "/cache/T1/channels/info")
+	if err := json.Unmarshal(req.Body, &body); err != nil {
+		t.Fatalf("channels/info body = %q: %v", req.Body, err)
+	}
+	want := map[string]int64{"C9": 0, "C10": 0, "C11": 0}
+	if !reflect.DeepEqual(body.Updated, want) {
+		t.Errorf("updated_ids = %v; want %v (cache misses only, DMs never)", body.Updated, want)
+	}
+	for _, p := range srv.Paths() {
+		if strings.Contains(p, "users.conversations") || strings.Contains(p, "conversations.list") {
+			t.Errorf("filling the gap enumerated: %s", p)
+		}
+	}
+	// Cached for the next boot.
+	if row, err := db.GetChannel("C9"); err != nil || row.Name != "design" || row.Type != "channel" || !row.IsMember {
+		t.Errorf("C9 cache row = %+v (err %v); want design, channel, member", row, err)
+	}
+	if len(logged) == 0 || !strings.Contains(logged[len(logged)-1], "gap size 5") {
+		t.Errorf("log = %q; want a line with the gap size (5)", logged)
+	}
+}
+
+func TestFillFromCounts_NoGapNoRequest(t *testing.T) {
+	res := &bootstrap.Result{
+		Channels: []boot.Channel{{ID: "C1"}},
+		Counts:   bootstrap.Counts{Unreads: []bootstrap.Unread{{ChannelID: "C1"}}},
+	}
+	// A nil edge client would panic if asked; no gap must not ask.
+	if got := FillFromCounts(context.Background(), nil, nil, "T1", res, nil); got != nil {
+		t.Errorf("got %v; want nothing", got)
+	}
+	if got := FillFromCounts(context.Background(), nil, nil, "T1", nil, nil); got != nil {
+		t.Errorf("nil result: got %v; want nothing", got)
 	}
 }

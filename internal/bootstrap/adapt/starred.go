@@ -1,4 +1,4 @@
-package main
+package adapt
 
 import (
 	"context"
@@ -8,14 +8,14 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// missingStarredConversations returns eligible starred conversations absent
+// MissingStarredConversations returns eligible starred conversations absent
 // from knownIDs, in stars.list order. Boot IM metadata avoids a network request
 // and admits closed 1:1 DMs; resolve is the read-only conversations.info path.
 // Errors are best-effort and cancellation stops further work, retaining any
 // additions already resolved. Nothing is opened remotely or fabricated.
 // Missing MPIMs are deliberately excluded: stars must not undo the ordinary
 // closed-group-DM filter. Regular channels still require joined membership.
-func missingStarredConversations(ctx context.Context, knownIDs, starredIDs []string, ims []boot.IM, resolve func(context.Context, string) (*slack.Channel, error)) []slack.Channel {
+func MissingStarredConversations(ctx context.Context, knownIDs, starredIDs []string, ims []boot.IM, resolve func(context.Context, string) (*slack.Channel, error)) []slack.Channel {
 	seen := make(map[string]bool, len(knownIDs)+len(starredIDs))
 	for _, id := range knownIDs {
 		seen[id] = true
@@ -39,7 +39,7 @@ func missingStarredConversations(ctx context.Context, knownIDs, starredIDs []str
 				continue
 			}
 			if im.UserID != "" {
-				mapped := bootIMConversation(im)
+				mapped := IMConversation(im)
 				ch = &mapped
 			}
 		}

@@ -142,12 +142,16 @@ type Store interface {
 //
 // A restatement of slack.UnreadInfo rather than a reuse of it: see the
 // package comment on import direction. The field set is identical, so
-// the Task 7 adapter's conversion is mechanical.
+// the adapter's conversion (internal/bootstrap/adapt) is mechanical.
 type Unread struct {
 	ChannelID    string
 	MentionCount int
 	HasUnread    bool
 	LastRead     string
+	// Latest is the ts of the conversation's newest message, empty when
+	// Slack leaves it out. A connect's catch-up compares it with what
+	// the cache holds, so one boot client.counts serves both.
+	Latest string
 }
 
 // Threads is client.counts' workspace-wide thread rollup — a
