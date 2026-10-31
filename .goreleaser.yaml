@@ -8,36 +8,12 @@ before:
   hooks:
     - go mod tidy
 
-# Two build entries because of cgo:
-#
-#   * darwin NEEDS CGO_ENABLED=1: golang.design/x/clipboard reads the macOS
-#     pasteboard through Cocoa, which is cgo-only. The CGO_ENABLED=0 cask
-#     binary made clipboard.Init() fail at startup and silently disabled
-#     Ctrl+V smart-paste (issue #156). This requires the release workflow
-#     to run on a macOS runner.
-#   * linux/windows stay CGO_ENABLED=0: static binaries are what make the
-#     deb/rpm/apk packages and the Windows zip portable. Linux Wayland paste
-#     works without cgo (slk shells out to wl-paste); Linux X11 paste needs
-#     cgo + libX11, and dynamically linking it would break musl/Alpine and
-#     minimal containers, so release binaries keep X11 paste disabled.
+# One build, CGO_ENABLED=0 everywhere: static binaries keep the
+# deb/rpm/apk packages and the Windows zip portable. The darwin cgo build
+# that used to sit beside this one existed for golang.design/x/clipboard
+# (macOS paste in the retired TUI, issue #156) and was retired with it. slk is
+# the CLI (workspace setup, export); slk-gio is not packaged here.
 builds:
-  - id: slk-darwin
-    main: ./cmd/slk
-    binary: slk
-    env:
-      - CGO_ENABLED=1
-    goos:
-      - darwin
-    goarch:
-      - amd64
-      - arm64
-    flags:
-      - -trimpath
-    ldflags:
-      - -s -w
-      - -X main.version={{.Version}}
-      - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
   - id: slk
     main: ./cmd/slk
     binary: slk
@@ -45,12 +21,13 @@ builds:
       - CGO_ENABLED=0
     goos:
       - linux
+      - darwin
       - windows
     goarch:
       - amd64
       - arm64
     ignore:
-      # Windows on arm64 is rare and not worth the matrix slot for a TUI
+      # Windows on arm64 is rare and not worth the matrix slot
       - goos: windows
         goarch: arm64
     flags:
@@ -125,8 +102,7 @@ nfpms:
     homepage: https://github.com/gammons/slk
     maintainer: Grant Ammons <grant@grant.dev>
     description: |-
-      A blazingly fast Slack TUI.
-      Keyboard-driven, beautifully themed terminal client for Slack.
+      Slack CLI (workspace setup and export) for slk-gio.
     license: MIT
     formats:
       - deb
@@ -150,7 +126,7 @@ release:
   header: |
     ## slk {{ .Tag }}
 
-    A blazingly fast Slack TUI. Keyboard-driven, beautifully themed, under 20MB.
+    Slack CLI (workspace setup and export) for slk-gio.
   # Two footers: one for pre-releases, one for stable.
   #
   # Everything here is PERMANENT config, so it carries only what is true
@@ -239,7 +215,7 @@ homebrew_casks:
       email: goreleaser@gammons.dev
     commit_msg_template: "slk: brew cask update for {{ .ProjectName }} version {{ .Tag }}"
     homepage: https://github.com/gammons/slk
-    description: A blazingly fast, keyboard-driven Slack TUI
+    description: Slack CLI (workspace setup and export) for slk-gio
     # Helps `brew audit` when the homepage and the download domain differ.
     url:
       verified: github.com/gammons/slk

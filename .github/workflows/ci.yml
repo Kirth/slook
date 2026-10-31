@@ -32,11 +32,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install X11 headers (cgo dep of golang.design/x/clipboard)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libx11-dev
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -56,10 +51,61 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install X11 headers (cgo dep of golang.design/x/clipboard)
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+  # gui/ is its own module (slk-gio). Gio links Wayland, X11, EGL and
+  # Vulkan through cgo; no test opens a window, so it runs headless.
+  gui:
+    name: gui
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Gio's build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libx11-dev
+          sudo apt-get install -y --no-install-recommends gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+          cache-dependency-path: gui/go.sum
+
+      - name: Build
+        working-directory: gui
+        run: go build ./...
+
+      - name: Vet
+        working-directory: gui
+        run: go vet ./...
+
+      - name: Test
+        working-directory: gui
+        run: go test ./... -race
+
+  lint-gui:
+    name: lint gui
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Gio's build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -71,6 +117,7 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: gui
 
   nix:
     name: nix build
