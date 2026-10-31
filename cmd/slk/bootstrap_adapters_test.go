@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -23,6 +24,21 @@ import (
 	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/slackhttp"
 )
+
+// newTestDB returns an empty cache in a temp dir with workspace T1.
+func newTestDB(t *testing.T) *cache.DB {
+	t.Helper()
+	dir := t.TempDir()
+	db, err := cache.New(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("cache.New: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := db.UpsertWorkspace(cache.Workspace{ID: "T1", Name: "T"}); err != nil {
+		t.Fatalf("UpsertWorkspace: %v", err)
+	}
+	return db
+}
 
 // newTestClient returns a real *slackclient.Client whose every request
 // lands on srv.
@@ -667,37 +683,6 @@ func TestHydrateFirstSight_LeavesExistingRowsAlone(t *testing.T) {
 	}
 	if u.AvatarURL != "https://cdn/pat.png" {
 		t.Errorf("avatar_url = %q; want the cached one preserved", u.AvatarURL)
-	}
-}
-
-func TestApplyBootUsers_FillsTheMapsTheSidebarReads(t *testing.T) {
-	wctx := &WorkspaceContext{
-		UserNames:         newUserNameStore(nil),
-		UserNamesByHandle: map[string]string{},
-		AvatarURLs:        &sync.Map{},
-	}
-	applyBootUsers(wctx, &bootstrap.Result{Users: []boot.User{
-		{ID: "U1", Name: "pat", Profile: boot.UserProfile{DisplayName: "Pat", ImageOriginal: "https://cdn/pat.png"}},
-		{ID: "U2", Name: "sam", Profile: boot.UserProfile{RealName: "Sam Real"}},
-		{ID: "U3", Name: "handle-only"},
-		// is_app_user, not is_bot: a Slack app sets the second and a
-		// classic bot the first, and cache.User.IsBot is their union.
-		// Reading only is_bot puts every app DM in the human DM list.
-		{ID: "U4", Name: "appy", IsAppUser: true},
-	}})
-
-	want := map[string]string{"U1": "Pat", "U2": "Sam Real", "U3": "handle-only", "U4": "appy"}
-	if got := wctx.UserNames.Snapshot(); !reflect.DeepEqual(got, want) {
-		t.Errorf("UserNames = %+v; want %+v", got, want)
-	}
-	if got := wctx.UserNamesByHandle["pat"]; got != "Pat" {
-		t.Errorf("UserNamesByHandle[pat] = %q; want Pat", got)
-	}
-	if !wctx.IsBotUser("U4") || wctx.IsBotUser("U1") {
-		t.Errorf("bot classification: U4=%v U1=%v; want only U4", wctx.IsBotUser("U4"), wctx.IsBotUser("U1"))
-	}
-	if v, ok := wctx.AvatarURLs.Load("U1"); !ok || v.(string) != "https://cdn/pat.png" {
-		t.Errorf("AvatarURLs[U1] = %v/%v; want the image_original URL", v, ok)
 	}
 }
 

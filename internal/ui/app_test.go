@@ -23,7 +23,6 @@ import (
 	"github.com/gammons/slk/internal/ui/statusbar"
 	"github.com/gammons/slk/internal/ui/styles"
 	"github.com/gammons/slk/internal/ui/workspace"
-	"golang.design/x/clipboard"
 )
 
 func TestAppFocusCycle(t *testing.T) {
@@ -2000,13 +1999,13 @@ func TestNewMessageMsg_EditedIgnoresOtherChannel(t *testing.T) {
 }
 
 // fakeClipboard returns a clipboard reader that returns canned bytes
-// for FmtImage and FmtText.
-func fakeClipboard(image, text []byte) func(clipboard.Format) []byte {
-	return func(f clipboard.Format) []byte {
+// for ClipboardImage and ClipboardText.
+func fakeClipboard(image, text []byte) func(core.ClipboardFormat) []byte {
+	return func(f core.ClipboardFormat) []byte {
 		switch f {
-		case clipboard.FmtImage:
+		case core.ClipboardImage:
 			return image
-		case clipboard.FmtText:
+		case core.ClipboardText:
 			return text
 		}
 		return nil

@@ -2,7 +2,7 @@
 // flags, picks the workspace and channel, and drives the fetch in
 // export_collect.go into the Markdown writer in internal/export. It
 // connects with the stored workspace credentials and never starts the
-// TUI or the WebSocket.
+// desktop app or the WebSocket.
 
 package main
 
@@ -126,6 +126,10 @@ func exportChannelLabel(ch slack.Channel) string {
 // references. A channel the user has not joined is not in that list,
 // so an unmatched want is tried as a channel ID via conversations.info.
 func resolveExportChannel(ctx context.Context, client *slackclient.Client, want string) (slack.Channel, map[string]string, error) {
+	// GetChannels pages users.conversations, the enumeration the
+	// desktop app's boot avoids (see internal/bootstrap). It stays here
+	// on purpose: an export is one user-initiated command, not a boot
+	// that runs on every launch.
 	channels, err := client.GetChannels(ctx)
 	if err != nil {
 		return slack.Channel{}, nil, err
@@ -191,7 +195,7 @@ func exportChannel(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	context.AfterFunc(ctx, stop)
-	// xoxc tokens expire; refresh from the desktop app as the TUI does
+	// xoxc tokens expire; refresh from the desktop app as slk-gio does
 	// at launch. onboard.RemintTokens keeps the stored token on any failure.
 	tok = onboard.RemintTokens(ctx, []slackclient.Token{tok}, slackdesktop.Cookie, slackdesktop.Tokens, slackclient.MintToken, store.Save)[0]
 	client := slackclient.NewClient(tok.AccessToken, tok.Cookie)

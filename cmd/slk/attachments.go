@@ -4,12 +4,12 @@ import (
 	"strings"
 
 	"github.com/gammons/slk/internal/blockkit"
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/core"
 	"github.com/slack-go/slack"
 )
 
-// extractAttachments converts slack-go File entries into the UI's
-// Attachment representation.
+// extractAttachments converts slack-go File entries into the message
+// item's Attachment representation.
 //
 // URL preference depends on the kind:
 //   - For images we use an unauthenticated thumbnail URL (files.slack.com/...)
@@ -26,11 +26,11 @@ import (
 // title separate from the original filename); otherwise we fall back to
 // the filename. Image mimetypes get the "image" kind so the renderer can
 // show [Image]; everything else gets "file" -> [File].
-func extractAttachments(files []slack.File) []messages.Attachment {
+func extractAttachments(files []slack.File) []core.Attachment {
 	if len(files) == 0 {
 		return nil
 	}
-	out := make([]messages.Attachment, 0, len(files))
+	out := make([]core.Attachment, 0, len(files))
 	for _, f := range files {
 		kind := "file"
 		if strings.HasPrefix(f.Mimetype, "image/") {
@@ -40,13 +40,13 @@ func extractAttachments(files []slack.File) []messages.Attachment {
 		if name == "" {
 			name = f.Name
 		}
-		att := messages.Attachment{Kind: kind, Name: name, URL: pickAttachmentURL(f, kind)}
+		att := core.Attachment{Kind: kind, Name: name, URL: pickAttachmentURL(f, kind)}
 		att.DownloadURL = f.URLPrivate
 		att.Size = int64(f.Size)
 		if kind == "image" {
 			att.FileID = f.ID
 			att.Mime = f.Mimetype
-			att.Thumbs = collectThumbs(f)
+			att.Thumbs = blockkit.FileThumbs(f)
 		}
 		out = append(out, att)
 	}
@@ -64,10 +64,6 @@ func extractBlocks(b slack.Blocks) []blockkit.Block {
 func extractLegacyAttachments(a []slack.Attachment) []blockkit.LegacyAttachment {
 	return blockkit.ParseAttachments(a)
 }
-
-// collectThumbs is blockkit.FileThumbs, kept under its old name for the
-// callers and tests in this package.
-func collectThumbs(f slack.File) []messages.ThumbSpec { return blockkit.FileThumbs(f) }
 
 // pickAttachmentURL chooses the best URL for a slack.File based on its kind.
 // See extractAttachments for the rationale.

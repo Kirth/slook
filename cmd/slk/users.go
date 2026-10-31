@@ -1,12 +1,7 @@
 package main
 
 import (
-	tea "charm.land/bubbletea/v2"
-	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/cache"
-	slackclient "github.com/gammons/slk/internal/slack"
-	"github.com/gammons/slk/internal/slack/edge"
-	"github.com/gammons/slk/internal/ui"
 	"github.com/slack-go/slack"
 )
 
@@ -38,11 +33,9 @@ func lookupUserCached(userID string, userNames *userNameStore, db *cache.DB) (st
 
 // resolveUserCached is lookupUserCached plus memoization: a DB hit is
 // recorded in the store so subsequent lookups skip SQLite. Safe from
-// any goroutine (the store is locked). Recording it is also how the
-// name reaches the UI, if the UI has not seen it: the store reports
-// new names (see userNameStore). Returns ("", false) when the user is
-// unknown — caller is expected to fall back to userID-as-name and
-// enqueue an async lookup via wctx.UserResolver.Request.
+// any goroutine (the store is locked). Returns ("", false) when the
+// user is unknown — the caller falls back to userID-as-name and
+// resolves it some other way.
 func resolveUserCached(userID string, userNames *userNameStore, db *cache.DB) (string, bool) {
 	name, ok := lookupUserCached(userID, userNames, db)
 	if ok {
@@ -51,170 +44,18 @@ func resolveUserCached(userID string, userNames *userNameStore, db *cache.DB) (s
 	return name, ok
 }
 
-// resolveUser ensures we have the display name and avatar for a user.
-// If the user is unknown, fetches their profile from Slack on demand.
-// Returns the resolved display name (or the userID as a fallback) and a
-// boolean indicating whether the user is a Slack app or bot. The bool
-// is best-effort: if the user was already in the userNames cache and
-// the avatar lookup hasn't fired, we don't have a fresh IsBot signal
-// and return false. Callers that care (the unresolved-DM goroutine)
-// only invoke resolveUser for users not yet in the cache, so the
-// fast-path miss is irrelevant for them.
-//
-// Runs on the DM-sweep goroutine. A name fetched from the network is
-// recorded in the store (which reports it to the UI once notifying) and
-// also sent as UserResolvedMsg directly, so the sweep works before the
-// store's notifier is installed.
-func resolveUser(client *slackclient.Client, userID string, userNames *userNameStore, db *cache.DB, avatarCache *avatar.Cache, send func(tea.Msg)) (string, bool) {
-	if name, ok := userNames.Get(userID); ok {
-		// Check if avatar is also cached
-		if avatarCache.Get(userID) == "" {
-			// Have name but no avatar — try to fetch profile for avatar URL
-			if u, err := client.GetUserProfile(userID); err == nil {
-				isBot := u.IsBot || u.IsAppUser
-				isExternal := u.TeamID != "" && u.TeamID != client.TeamID()
-				avatarCache.Preload(userID, u.Profile.Image32)
-				db.UpsertUser(cache.User{
-					ID:          userID,
-					WorkspaceID: client.TeamID(),
-					HomeTeamID:  u.TeamID,
-					Name:        u.Name,
-					DisplayName: name,
-					AvatarURL:   u.Profile.Image32,
-					Presence:    "away",
-					IsBot:       isBot,
-					IsExternal:  isExternal,
-				})
-				// UpsertUser doesn't touch status on an existing row.
-				applyProfileStatus(client.TeamID(), userID, u, db, send)
-				return name, isBot
-			}
-		}
-		return name, false
-	}
-	// Unknown user — fetch profile
-	if u, err := client.GetUserProfile(userID); err == nil {
-		name := u.Profile.DisplayName
-		if name == "" {
-			name = u.RealName
-		}
-		if name == "" {
-			name = u.Name
-		}
-		isBot := u.IsBot || u.IsAppUser
-		isExternal := u.TeamID != "" && u.TeamID != client.TeamID()
-		userNames.Set(userID, name)
-		avatarCache.Preload(userID, u.Profile.Image32)
-		db.UpsertUser(cache.User{
-			ID:          userID,
-			WorkspaceID: client.TeamID(),
-			HomeTeamID:  u.TeamID,
-			Name:        u.Name,
-			DisplayName: name,
-			AvatarURL:   u.Profile.Image32,
-			Presence:    "away",
-			IsBot:       isBot,
-			IsExternal:  isExternal,
-		})
-		applyProfileStatus(client.TeamID(), userID, u, db, send)
-		if send != nil {
-			send(ui.UserResolvedMsg{
-				TeamID:      client.TeamID(),
-				UserID:      userID,
-				DisplayName: name,
-				IsBot:       isBot,
-			})
-		}
-		return name, isBot
-	}
-	return userID, false
-}
-
-// resolveDMNames resolves the display names of unresolved DM
-// counterparties, one edge users/info batch for the whole sweep, with
-// the per-user resolveUser loop as the fallback for ids edge did not
-// return. Batched because the sweep is the dominant cold-boot
-// users.info source: one synchronous GetUserProfile per unresolved DM,
-// measured at ~100 calls on a two-workspace cold boot and 282 in a
-// full Grid session. The mapping to channel ids is why this cannot go
-// through UserResolver.Request: DMNameResolvedMsg renames the sidebar
-// row and re-buckets app DMs, while UserResolvedMsg only patches
-// in-history names.
-func resolveDMNames(wctx *WorkspaceContext, db *cache.DB, avatarCache *avatar.Cache, send func(tea.Msg)) {
-	dmIDs := make([]string, 0, len(wctx.UnresolvedDMs))
-	for _, dm := range wctx.UnresolvedDMs {
-		dmIDs = append(dmIDs, dm.UserID)
-	}
-	byEdge := make(map[string]edge.User)
-	for _, u := range wctx.UserResolver.ResolveNow(dmIDs) {
-		byEdge[u.ID] = u
-	}
-	for _, dm := range wctx.UnresolvedDMs {
-		if u, ok := byEdge[dm.UserID]; ok {
-			name := u.Profile.DisplayName
-			if name == "" {
-				name = u.Profile.RealName
-			}
-			if name == "" {
-				name = u.Name
-			}
-			if name != "" {
-				// edge users/info carries no is_app_user: a Slack app's DM
-				// resolved here may bucket as "dm" rather than "app" until
-				// something else classifies it. No capture shows that
-				// field on this endpoint, so none is invented; the
-				// per-user fallback below classifies the ids edge missed.
-				if u.IsBot {
-					wctx.MarkBotUser(dm.UserID)
-				}
-				if send != nil {
-					send(ui.DMNameResolvedMsg{
-						ChannelID:   dm.ChannelID,
-						DisplayName: name,
-						IsBot:       u.IsBot,
-					})
-				}
-				continue
-			}
-			// An edge record with all three name fields empty is no
-			// resolution at all — and applyEdgeUser has already
-			// upserted its empty-DisplayName row. Fall through to the per-user
-			// path, which re-fetches and repairs the row.
-		}
-		resolved, isBot := resolveUser(wctx.Client, dm.UserID, wctx.UserNames, db, avatarCache, send)
-		if isBot {
-			wctx.MarkBotUser(dm.UserID)
-		}
-		if resolved != dm.UserID {
-			wctx.UserResolver.queueResolvedPeer(dm.UserID)
-			if send != nil {
-				send(ui.DMNameResolvedMsg{
-					ChannelID:   dm.ChannelID,
-					DisplayName: resolved,
-					IsBot:       isBot,
-				})
-			}
-		}
-	}
-}
-
-// messageAuthor resolves the display identity for a fetched message.
-// Human messages carry a `user` ID, resolved (and lazily fetched) the
-// usual way. Bot messages (bot_message) have an empty `user` and only a
-// `bot_id` + `username`; those are keyed on the bot_id, use the message's
-// username for the name, and enqueue a bots.info lookup for the avatar
-// (and a name fallback). The returned userID is what both the cache row
-// and the MessageItem are keyed on so the avatar pipeline can attach.
-func messageAuthor(m slack.Message, userNames *userNameStore, db *cache.DB, router *workspaceRouter) (userID, userName string) {
+// messageAuthor resolves the display identity for a fetched message
+// from local sources only (the name store and the cached users table).
+// Human messages carry a `user` ID; bot messages (bot_message) have an
+// empty `user` and only a `bot_id` + `username`, so those are keyed on
+// the bot_id and use the message's username for the name. An unknown
+// author is named by its ID; the caller resolves those afterwards
+// (resolveExportNames).
+func messageAuthor(m slack.Message, userNames *userNameStore, db *cache.DB) (userID, userName string) {
 	if m.User != "" {
 		name, ok := resolveUserCached(m.User, userNames, db)
 		if !ok {
 			name = m.User
-			if router != nil {
-				if wctx := router.Active(); wctx != nil && wctx.UserResolver != nil {
-					wctx.UserResolver.Request(m.User)
-				}
-			}
 		}
 		return m.User, name
 	}
@@ -225,11 +66,6 @@ func messageAuthor(m slack.Message, userNames *userNameStore, db *cache.DB, rout
 				name = cached
 			} else {
 				name = m.BotID
-			}
-		}
-		if router != nil {
-			if wctx := router.Active(); wctx != nil && wctx.UserResolver != nil {
-				wctx.UserResolver.RequestBot(m.BotID, m.Username)
 			}
 		}
 		return m.BotID, name

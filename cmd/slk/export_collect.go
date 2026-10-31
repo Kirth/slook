@@ -191,7 +191,7 @@ func exportConversations(raw []rawConversation, names *userNameStore, db *cache.
 // times are left blank; export.WriteChannel stamps them in the export
 // timezone.
 func exportMessageItem(m slack.Message, names *userNameStore, db *cache.DB) core.MessageItem {
-	authorID, userName := messageAuthor(m, names, db, nil)
+	authorID, userName := messageAuthor(m, names, db)
 	reactions := make([]core.ReactionItem, 0, len(m.Reactions))
 	for _, r := range m.Reactions {
 		reactions = append(reactions, core.ReactionItem{Emoji: r.Name, Count: r.Count, UserIDs: r.Users})

@@ -334,7 +334,7 @@ func addWorkspaceFromBrowser(tokenStore *slackclient.TokenStore, st onboardingSt
 	fmt.Println()
 	fmt.Println(st.dim.Render("  This session lasts as long as the browser's. When Slack signs it out, run"))
 	fmt.Println(st.dim.Render("  slk --add-workspace --browser again."))
-	fmt.Println(st.dim.Render("  Run ") + st.step.Render("slk") + st.dim.Render(" to start."))
+	fmt.Println(st.dim.Render("  Run ") + st.step.Render("slk-gio") + st.dim.Render(" to start."))
 	fmt.Println()
 	return nil
 }

@@ -1,12 +1,14 @@
 package main
 
+// Kept for Phase 4.3 of the TUI sunset (file upload / paste): reading an
+// image off a Wayland clipboard with wl-paste. The TUI's X11 reader
+// (nativeClipboardRead, over golang.design/x/clipboard) went with the TUI.
+
 import (
 	"bytes"
 	"log"
 	"os"
 	"os/exec"
-
-	"golang.design/x/clipboard"
 
 	"github.com/gammons/slk/internal/core"
 )
@@ -47,15 +49,6 @@ func WaylandClipboardReader() func(core.ClipboardFormat) []byte {
 		}
 		return nil
 	}
-}
-
-// nativeClipboardRead reads the clipboard through golang.design/x/clipboard,
-// which needs clipboard.Init to have succeeded.
-func nativeClipboardRead(format core.ClipboardFormat) []byte {
-	if format == core.ClipboardImage {
-		return clipboard.Read(clipboard.FmtImage)
-	}
-	return clipboard.Read(clipboard.FmtText)
 }
 
 // wlPasteBytes runs `wl-paste --no-newline` (optionally with --type)

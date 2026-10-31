@@ -312,39 +312,6 @@ func bootUserDisplayName(u boot.User) string {
 	return u.Name
 }
 
-// applyBootUsers copies the users conversations.view returned into the
-// in-memory maps the UI reads.
-//
-// These are the authors of the opened channel's messages, which is a
-// small set — not a workspace directory. It is nonetheless the set that
-// matters, because it is exactly the names about to be rendered. Task 8
-// deletes the users.list sweep that fills these maps today; this is
-// what replaces it, alongside the cache seed and on-demand resolveUser.
-//
-// Called on the connectWorkspace goroutine before the UI is told the
-// workspace is ready. UserNames is the locked store and safe from any
-// goroutine; the other two maps are only safe to write here, before
-// the workspace has other readers.
-func applyBootUsers(wctx *WorkspaceContext, res *bootstrap.Result) {
-	for _, u := range res.Users {
-		name := bootUserDisplayName(u)
-		wctx.UserNames.Set(u.ID, name)
-		if u.Name != "" {
-			wctx.UserNamesByHandle[u.Name] = name
-		}
-		// The union of is_bot and is_app_user, as cache.User.IsBot
-		// documents: classic bots set the first, Slack apps the
-		// second, and this flag decides whether a DM lands in the
-		// "Apps" sidebar section.
-		if u.IsBot || u.IsAppUser {
-			wctx.MarkBotUser(u.ID)
-		}
-		if u.Profile.ImageOriginal != "" {
-			wctx.AvatarURLs.Store(u.ID, u.Profile.ImageOriginal)
-		}
-	}
-}
-
 // bootConversations converts what client.userBoot returned into the
 // slack.Channel values the sidebar builder consumes.
 //

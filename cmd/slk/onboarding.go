@@ -128,7 +128,7 @@ func addWorkspace(forceBrowser bool) error {
 
 	fmt.Println()
 	fmt.Println(successStyle.Render(fmt.Sprintf("  %d workspace(s) added!", len(tokens))))
-	fmt.Println(dimStyle.Render("  Run ") + lipgloss.NewStyle().Bold(true).Render("slk") + dimStyle.Render(" to start."))
+	fmt.Println(dimStyle.Render("  Run ") + lipgloss.NewStyle().Bold(true).Render("slk-gio") + dimStyle.Render(" to start."))
 	fmt.Println()
 	return nil
 }

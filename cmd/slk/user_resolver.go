@@ -6,13 +6,11 @@ import (
 	"sync"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/debuglog"
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/edge"
-	"github.com/gammons/slk/internal/ui"
 	"github.com/slack-go/slack"
 )
 
@@ -37,6 +35,66 @@ const userResolverConcurrency = 8
 // one; 200 ms is below what a person perceives as resolution lag.
 const userResolverBatchWindow = 200 * time.Millisecond
 
+// userResolvedMsg, userStatusMsg and userExternalMsg are what the
+// resolver reports through its send callback: a resolved name, a
+// profile's custom status and huddle, and a Slack Connect user. They
+// stand in for the retired TUI's UserResolvedMsg, UserStatusChangeMsg
+// and UserExternalMsg (same fields), so the resolver and its tests keep
+// their shape until Phase 3 of the TUI sunset moves the batching core to
+// internal/slack/resolve.
+type userResolvedMsg struct {
+	TeamID      string
+	UserID      string
+	DisplayName string
+	IsBot       bool
+}
+
+type userStatusMsg struct {
+	TeamID        string
+	UserID        string
+	Emoji         string
+	Text          string
+	Expires       time.Time
+	Huddle        string
+	HuddleExpires time.Time
+}
+
+type userExternalMsg struct {
+	TeamID     string
+	UserID     string
+	IsExternal bool
+}
+
+// statusExpiry turns a Slack expiry (unix seconds, 0 = none) into a
+// time, zero when unset.
+func statusExpiry(unix int64) time.Time {
+	if unix <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(unix, 0)
+}
+
+// applyProfileStatus persists a users.info profile's custom status and
+// huddle state via db.UpdateUserStatus (clears included: UpsertUser keeps
+// an existing row's status), and reports the result as a userStatusMsg.
+func applyProfileStatus(teamID, userID string, u *slackclient.UserProfile, db *cache.DB, send func(any)) {
+	if db != nil {
+		_ = db.UpdateUserStatus(userID, u.Profile.StatusEmoji, u.Profile.StatusText,
+			int64(u.Profile.StatusExpiration), u.Profile.HuddleState, int64(u.Profile.HuddleStateExpirationTS))
+	}
+	if send != nil {
+		send(userStatusMsg{
+			TeamID:        teamID,
+			UserID:        userID,
+			Emoji:         u.Profile.StatusEmoji,
+			Text:          u.Profile.StatusText,
+			Expires:       statusExpiry(int64(u.Profile.StatusExpiration)),
+			Huddle:        u.Profile.HuddleState,
+			HuddleExpires: statusExpiry(int64(u.Profile.HuddleStateExpirationTS)),
+		})
+	}
+}
+
 // userBatcher is the edge.UsersInfo subset the resolver batches
 // misses through. *edge.Client satisfies it structurally; nil means
 // no batching and every miss takes the per-user users.info path.
@@ -57,13 +115,8 @@ type userResolver struct {
 	client   *slackclient.Client
 	db       *cache.DB
 	avatars  *avatar.Cache
-	send     func(tea.Msg)
+	send     func(any)
 	inflight sync.Map // userID -> struct{}
-	// Successful lookups queue peer IDs for the serialized event owner.
-	// Coalesce repeat resolutions without blocking background or synchronous
-	// callers; neither may mutate conversation slices here.
-	resolvedPeers sync.Map // userID -> struct{}
-	resolvedWake  chan struct{}
 	// sem bounds concurrent round trips on the per-user users.info
 	// path (resolveOne). Buffered, so acquiring it happens inside the
 	// request goroutine and Request itself never blocks -- it is
@@ -97,26 +150,25 @@ func newUserResolver(
 	client *slackclient.Client,
 	db *cache.DB,
 	avatars *avatar.Cache,
-	send func(tea.Msg),
+	send func(any),
 	batcher userBatcher,
 	degraded func() bool,
 ) *userResolver {
 	return &userResolver{
-		teamID:       teamID,
-		client:       client,
-		db:           db,
-		avatars:      avatars,
-		send:         send,
-		sem:          make(chan struct{}, userResolverConcurrency),
-		resolvedWake: make(chan struct{}, 1),
-		batcher:      batcher,
-		degraded:     degraded,
-		pending:      map[string]struct{}{},
+		teamID:   teamID,
+		client:   client,
+		db:       db,
+		avatars:  avatars,
+		send:     send,
+		sem:      make(chan struct{}, userResolverConcurrency),
+		batcher:  batcher,
+		degraded: degraded,
+		pending:  map[string]struct{}{},
 	}
 }
 
 // Request enqueues a users.info fetch for userID. Returns immediately.
-// On success, emits a ui.UserResolvedMsg via the resolver's send
+// On success, emits a userResolvedMsg via the resolver's send
 // callback so the App can patch in-history display names live.
 func (r *userResolver) Request(userID string) {
 	if r == nil || userID == "" {
@@ -234,10 +286,9 @@ func (r *userResolver) resolveOneContext(ctx context.Context, userID string) {
 	// switch snapshot even if the UserResolvedMsg below is dropped
 	// because the workspace is not the active one.
 	r.names.Set(userID, name)
-	r.queueResolvedPeer(userID)
 	if r.send != nil {
 		// Status has already been persisted and sent by applyProfileStatus.
-		r.send(ui.UserResolvedMsg{
+		r.send(userResolvedMsg{
 			TeamID:      r.teamID,
 			UserID:      userID,
 			DisplayName: name,
@@ -245,7 +296,7 @@ func (r *userResolver) resolveOneContext(ctx context.Context, userID string) {
 		})
 	}
 	if isExternal && r.send != nil {
-		r.send(ui.UserExternalMsg{TeamID: r.teamID, UserID: userID, IsExternal: true})
+		r.send(userExternalMsg{TeamID: r.teamID, UserID: userID, IsExternal: true})
 	}
 }
 
@@ -476,10 +527,9 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 		Version:          u.Version,
 	})
 	r.names.Set(u.ID, name) // see resolveOne
-	r.queueResolvedPeer(u.ID)
 	if r.send != nil {
 		// Status before UserResolvedMsg, as in resolveOne.
-		r.send(ui.UserStatusChangeMsg{
+		r.send(userStatusMsg{
 			TeamID:        r.teamID,
 			UserID:        u.ID,
 			Emoji:         u.Profile.StatusEmoji,
@@ -488,7 +538,7 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 			Huddle:        u.Profile.HuddleState,
 			HuddleExpires: statusExpiry(u.Profile.HuddleStateExpirationTS),
 		})
-		r.send(ui.UserResolvedMsg{
+		r.send(userResolvedMsg{
 			TeamID:      r.teamID,
 			UserID:      u.ID,
 			DisplayName: name,
@@ -496,7 +546,7 @@ func (r *userResolver) applyEdgeUser(u edge.User) {
 		})
 	}
 	if isExternal && r.send != nil {
-		r.send(ui.UserExternalMsg{TeamID: r.teamID, UserID: u.ID, IsExternal: true})
+		r.send(userExternalMsg{TeamID: r.teamID, UserID: u.ID, IsExternal: true})
 	}
 }
 
@@ -545,7 +595,7 @@ func (r *userResolver) RequestBot(botID, username string) {
 		})
 		r.names.Set(botID, name) // see resolveOne
 		if r.send != nil {
-			r.send(ui.UserResolvedMsg{
+			r.send(userResolvedMsg{
 				TeamID:      r.teamID,
 				UserID:      botID,
 				DisplayName: name,

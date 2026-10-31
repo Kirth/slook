@@ -12,10 +12,7 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/slack/edge"
-	"github.com/gammons/slk/internal/ui"
 )
 
 // TestUserResolver_BoundsConcurrentRequests is the second half of the
@@ -154,22 +151,22 @@ func TestUserResolver_RequestDoesNotBlockTheCaller(t *testing.T) {
 // body and racing t.TempDir's RemoveAll.
 type resolvedWatch struct {
 	mu    sync.Mutex
-	sent  []tea.Msg
-	match func(ui.UserResolvedMsg) bool
+	sent  []any
+	match func(userResolvedMsg) bool
 	want  int
 	n     int
 	done  chan struct{}
 }
 
-func newResolvedWatch(want int, match func(ui.UserResolvedMsg) bool) *resolvedWatch {
+func newResolvedWatch(want int, match func(userResolvedMsg) bool) *resolvedWatch {
 	return &resolvedWatch{match: match, want: want, done: make(chan struct{})}
 }
 
-func (w *resolvedWatch) send(m tea.Msg) {
+func (w *resolvedWatch) send(m any) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.sent = append(w.sent, m)
-	u, ok := m.(ui.UserResolvedMsg)
+	u, ok := m.(userResolvedMsg)
 	if !ok || (w.match != nil && !w.match(u)) {
 		return
 	}
@@ -181,10 +178,10 @@ func (w *resolvedWatch) send(m tea.Msg) {
 
 // messages returns every message sent so far. Call it only after
 // receiving from done, which is the ordering barrier.
-func (w *resolvedWatch) messages() []tea.Msg {
+func (w *resolvedWatch) messages() []any {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return append([]tea.Msg(nil), w.sent...)
+	return append([]any(nil), w.sent...)
 }
 
 // fakeBatcher implements userBatcher and records each batch it was
@@ -296,7 +293,7 @@ func TestUserResolver_BatchesMissesThroughEdge(t *testing.T) {
 	// One UserResolvedMsg per resolved user, same as the per-user path.
 	resolved := 0
 	for _, m := range watch.messages() {
-		if _, ok := m.(ui.UserResolvedMsg); ok {
+		if _, ok := m.(userResolvedMsg); ok {
 			resolved++
 		}
 	}
@@ -341,7 +338,7 @@ func TestUserResolver_EdgeMissFallsBackToPerUser(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	watch := newResolvedWatch(1, func(m ui.UserResolvedMsg) bool { return m.UserID == "U002" })
+	watch := newResolvedWatch(1, func(m userResolvedMsg) bool { return m.UserID == "U002" })
 	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, batcher, nil)
 	r.Request("U001")
 	r.Request("U002")
@@ -378,7 +375,7 @@ func TestUserResolver_EmptyNameEdgeRecordFallsBackToPerUser(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	watch := newResolvedWatch(1, func(m ui.UserResolvedMsg) bool {
+	watch := newResolvedWatch(1, func(m userResolvedMsg) bool {
 		return m.UserID == "U001" && m.DisplayName == "Alice"
 	})
 	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, batcher, nil)
@@ -404,7 +401,7 @@ func TestUserResolver_EmptyNameEdgeRecordFallsBackToPerUser(t *testing.T) {
 		t.Errorf("U002 cached as %+v (err=%v); the good record in the same batch must still apply", u2, err)
 	}
 	for _, m := range watch.messages() {
-		if msg, ok := m.(ui.UserResolvedMsg); ok && msg.DisplayName == "" {
+		if msg, ok := m.(userResolvedMsg); ok && msg.DisplayName == "" {
 			t.Errorf("an empty-name UserResolvedMsg was sent for %s; that blanks a rendered in-history name", msg.UserID)
 		}
 	}
@@ -419,7 +416,7 @@ func TestUserResolver_EdgeErrorFallsBackToPerUser(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	watch := newResolvedWatch(1, func(m ui.UserResolvedMsg) bool { return m.UserID == "U001" })
+	watch := newResolvedWatch(1, func(m userResolvedMsg) bool { return m.UserID == "U001" })
 	r := newUserResolver("T1", newTestClient(t, srv), db, nil, watch.send, batcher, nil)
 	r.Request("U001")
 
@@ -554,141 +551,6 @@ func TestUserResolver_ResolveNowSkipsEmptyInput(t *testing.T) {
 	}
 }
 
-func TestResolveDMNames(t *testing.T) {
-	// The sweep maps resolutions to CHANNEL ids: DMNameResolvedMsg
-	// renames the sidebar row and re-buckets app DMs, which
-	// UserResolvedMsg (history patching) cannot do.
-	db := newTestDB(t)
-	batcher := &fakeBatcher{res: []edge.User{
-		edgeUserRecord("U_ALICE", "alice", "Alice A", "", "T1", 1, false),
-		edgeUserRecord("U_APP", "someapp", "Some App", "", "T1", 1, true),
-	}}
-	wctx := &WorkspaceContext{
-		TeamID:       "T1",
-		UserNames:    newUserNameStore(nil),
-		UserResolver: newUserResolver("T1", nil, db, nil, nil, batcher, nil),
-		UnresolvedDMs: []UnresolvedDM{
-			{ChannelID: "D_ALICE", UserID: "U_ALICE"},
-			{ChannelID: "D_APP", UserID: "U_APP"},
-		},
-	}
-	var mu sync.Mutex
-	var sent []tea.Msg
-	resolveDMNames(wctx, db, nil, func(m tea.Msg) {
-		mu.Lock()
-		sent = append(sent, m)
-		mu.Unlock()
-	})
-
-	mu.Lock()
-	defer mu.Unlock()
-	var alice, app *ui.DMNameResolvedMsg
-	for _, m := range sent {
-		if dm, ok := m.(ui.DMNameResolvedMsg); ok {
-			switch dm.ChannelID {
-			case "D_ALICE":
-				d := dm
-				alice = &d
-			case "D_APP":
-				d := dm
-				app = &d
-			}
-		}
-	}
-	if alice == nil || alice.DisplayName != "Alice A" {
-		t.Errorf("D_ALICE got %+v; want a DMNameResolvedMsg naming Alice A", alice)
-	}
-	if app == nil || app.DisplayName != "Some App" || !app.IsBot {
-		t.Errorf("D_APP got %+v; want a DMNameResolvedMsg naming Some App with IsBot true — that flag re-buckets the row into the Apps section", app)
-	}
-	if !wctx.IsBotUser("U_APP") {
-		t.Error("U_APP was not recorded as a bot peer")
-	}
-	if n := len(batcher.calls()); n != 1 {
-		t.Errorf("the sweep made %d edge calls; want 1 for any number of DMs", n)
-	}
-}
-
-// TestResolveDMNames_FallbackPersistsStatusAndEmitsMessage: a DM peer
-// edge does not resolve falls back to resolveUser's GetUserProfile
-// call, which persists the fetched status/huddle and emits
-// UserStatusChangeMsg.
-func TestResolveDMNames_FallbackPersistsStatusAndEmitsMessage(t *testing.T) {
-	srv := newFakeSlack(t, map[string]string{
-		"/api/auth.test":  `{"ok":true,"url":"","team":"T1","user":"self","team_id":"T1","user_id":"USELF"}`,
-		"/api/users.info": `{"ok":true,"user":{"id":"U_BOB","name":"bob","team_id":"T1","profile":{"display_name":"Bob","status_emoji":":palm_tree:","status_text":"Vacation","status_expiration":1700003600,"huddle_state":"in_a_huddle","huddle_state_expiration_ts":1700000900}}}`,
-	})
-	client := newTestClient(t, srv.Server)
-	if err := client.Connect(context.Background()); err != nil {
-		t.Fatalf("Connect: %v", err)
-	}
-
-	db := newTestDB(t)
-	if err := db.UpsertWorkspace(cache.Workspace{ID: "T1", Name: "T1"}); err != nil {
-		t.Fatal(err)
-	}
-	batcher := &fakeBatcher{} // edge resolves nobody -> resolveDMNames falls back per-user
-	wctx := &WorkspaceContext{
-		TeamID:       "T1",
-		Client:       client,
-		UserNames:    newUserNameStore(nil),
-		UserResolver: newUserResolver("T1", nil, db, nil, nil, batcher, nil),
-		UnresolvedDMs: []UnresolvedDM{
-			{ChannelID: "D_BOB", UserID: "U_BOB"},
-		},
-	}
-	var mu sync.Mutex
-	var sent []tea.Msg
-	resolveDMNames(wctx, db, nil, func(m tea.Msg) {
-		mu.Lock()
-		sent = append(sent, m)
-		mu.Unlock()
-	})
-
-	u, err := db.GetUser("U_BOB")
-	if err != nil {
-		t.Fatalf("U_BOB not cached by the fallback: %v", err)
-	}
-	if u.StatusEmoji != ":palm_tree:" || u.StatusText != "Vacation" || u.StatusExpiration != 1700003600 ||
-		u.HuddleState != "in_a_huddle" || u.HuddleExpiration != 1700000900 {
-		t.Fatalf("fallback did not persist status/huddle: %+v", u)
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	var status *ui.UserStatusChangeMsg
-	for _, m := range sent {
-		if s, ok := m.(ui.UserStatusChangeMsg); ok && s.UserID == "U_BOB" {
-			c := s
-			status = &c
-		}
-	}
-	if status == nil {
-		t.Fatal("resolveDMNames fallback did not emit UserStatusChangeMsg for U_BOB")
-	}
-	if status.TeamID != "T1" || status.Emoji != ":palm_tree:" || status.Text != "Vacation" || status.Huddle != "in_a_huddle" {
-		t.Errorf("emitted status = %+v", status)
-	}
-
-	// The UI holds a snapshot of the name store, not the store, so a
-	// name the fallback fetches only reaches rendered history through
-	// UserResolvedMsg. Before 2026-10-02 the UI shared the map and saw
-	// the (racy) write instead.
-	var resolved *ui.UserResolvedMsg
-	for _, m := range sent {
-		if r, ok := m.(ui.UserResolvedMsg); ok && r.UserID == "U_BOB" {
-			c := r
-			resolved = &c
-		}
-	}
-	if resolved == nil || resolved.TeamID != "T1" || resolved.DisplayName != "Bob" {
-		t.Errorf("UserResolvedMsg for U_BOB = %+v; want TeamID T1, DisplayName Bob", resolved)
-	}
-	if name, ok := wctx.UserNames.Get("U_BOB"); !ok || name != "Bob" {
-		t.Errorf("name store U_BOB = (%q, %v); want (\"Bob\", true)", name, ok)
-	}
-}
-
 func TestUserResolver_FirstSightPerUserDeliversPeerStatus(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -711,7 +573,7 @@ func TestUserResolver_FirstSightPerUserDeliversPeerStatus(t *testing.T) {
 		t.Fatalf("cached first-sight status = %+v", u)
 	}
 	for _, raw := range watch.messages() {
-		if msg, ok := raw.(ui.UserStatusChangeMsg); ok && msg.UserID == "U1" {
+		if msg, ok := raw.(userStatusMsg); ok && msg.UserID == "U1" {
 			if msg.TeamID != "T1" || msg.Emoji != ":calendar:" || msg.Huddle != "in_a_huddle" {
 				t.Fatalf("first-sight status message = %+v", msg)
 			}
@@ -744,7 +606,7 @@ func TestUserResolver_FirstSightEdgeDeliversPeerStatus(t *testing.T) {
 		t.Fatalf("cached edge first-sight status = %+v", cached)
 	}
 	for _, raw := range watch.messages() {
-		if msg, ok := raw.(ui.UserStatusChangeMsg); ok && msg.UserID == "U1" {
+		if msg, ok := raw.(userStatusMsg); ok && msg.UserID == "U1" {
 			if msg.TeamID != "T1" || msg.Emoji != ":palm_tree:" || msg.Huddle != "in_a_huddle" {
 				t.Fatalf("edge first-sight status message = %+v", msg)
 			}

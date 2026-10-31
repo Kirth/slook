@@ -22,7 +22,6 @@ import (
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
-	"golang.design/x/clipboard"
 
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/core/blocks"
@@ -170,16 +169,10 @@ func (a *App) setDesktopForTest(change func(d *core.DesktopServiceFuncs)) {
 	a.SetDesktopService(core.NewDesktopService(w.desktop))
 }
 
-// setClipboardReaderForTest keeps the x/clipboard-shaped fakes tests
-// were written with.
-func (a *App) setClipboardReaderForTest(fn func(format clipboard.Format) []byte) {
+// setClipboardReaderForTest fakes the desktop service's clipboard read.
+func (a *App) setClipboardReaderForTest(fn func(format core.ClipboardFormat) []byte) {
 	a.setDesktopForTest(func(d *core.DesktopServiceFuncs) {
-		d.ReadClipboard = func(f core.ClipboardFormat) []byte {
-			if f == core.ClipboardImage {
-				return fn(clipboard.FmtImage)
-			}
-			return fn(clipboard.FmtText)
-		}
+		d.ReadClipboard = fn
 	})
 }
 

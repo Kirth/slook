@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"golang.design/x/clipboard"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/ui/compose"
 	"github.com/gammons/slk/internal/ui/mentionpicker"
 	"github.com/gammons/slk/internal/ui/messages"
@@ -574,8 +574,8 @@ func TestInsertModeKeys(t *testing.T) {
 			setup: func(t *testing.T, a *App) {
 				typeInto(t, &a.compose, "draft ")
 				a.clipboardAvailable = true
-				a.setClipboardReaderForTest(func(f clipboard.Format) []byte {
-					if f == clipboard.FmtText {
+				a.setClipboardReaderForTest(func(f core.ClipboardFormat) []byte {
+					if f == core.ClipboardText {
 						return []byte("pasted")
 					}
 					return nil
@@ -600,8 +600,8 @@ func TestInsertModeKeys(t *testing.T) {
 				typeInto(t, &a.threadCompose, "reply ")
 				typeInto(t, &a.compose, "draft ")
 				a.clipboardAvailable = true
-				a.setClipboardReaderForTest(func(f clipboard.Format) []byte {
-					if f == clipboard.FmtText {
+				a.setClipboardReaderForTest(func(f core.ClipboardFormat) []byte {
+					if f == core.ClipboardText {
 						return []byte("pasted")
 					}
 					return nil

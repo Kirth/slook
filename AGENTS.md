@@ -33,8 +33,10 @@ libraries. White-box (`package ui`, not `package ui_test`) by convention.
 ## Architecture in one screen
 
 ```
-cmd/slk/                composition root: wiring, workspace connection,
-                        WebSocket event handling, message fetch/cache pipeline
+cmd/slk/                the `slk` CLI: --add-workspace, --remove-workspace,
+                        export, diagnostics. The TUI's composition root was
+                        removed on 2026-10-31; a few engine files stay until
+                        the TUI sunset's Phases 3/4 move them
 internal/core/          the ports (service interfaces) the TUI calls, and the
                         values the TUI and cmd/slk exchange through them
 internal/ui/            bubbletea App: reducers, mode key handlers, view regions
@@ -85,10 +87,9 @@ that no longer exists. Do not trust it.** Current structural documentation:
   `internal/ui/mode_handlers.go`. One `mode_*.go` file per mode.
 - **SQLite is a cache.** Slack remains authoritative.
 - **A map shared across goroutines is never written.** Every map the UI holds
-  is either built for it (a copy, like `userNameStore.SnapshotForUI()` or the
+  is either built for it (a copy, like `userNameStore.Snapshot()` or the
   per-message `ExternalUsers` set) or published once and never mutated
-  again (`WorkspaceContext.CustomEmoji` / `UserGroups`, swapped whole via
-  `atomic.Pointer`). A copy handed to the UI is the UI's from then on: the
+  again (swapped whole via `atomic.Pointer`). A copy handed to the UI is the UI's from then on: the
   sender must not keep reading it (the UI writes it). The same goes for maps
   captured by a `tea.Cmd` (`saveThreadToFile` clones them). A plain map
   written while another goroutine reads it is a `fatal error: concurrent map
@@ -140,18 +141,18 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Sleep out a slack-go rate-limit error (ctx-aware) | `slackclient.WaitOutRateLimit` |
 | Page through all channel history in a ts range / a thread's replies in a ts range | `(*slackclient.Client).WalkHistory`, `GetRepliesBetween` |
 | Press a legacy attachment button (`chat.attachmentAction`, payload byte-identical to the web client's) | `(*slackclient.Client).AttachmentAction(ctx, AttachmentActionRequest)`, with `service_id` = the posting app's bot ID |
-| Press a legacy attachment button from the UI | `core.InteractionService.PressAttachmentAction` (App field `a.interactions`); wired in `cmd/slk` via `pressAttachmentAction` to the active workspace's `Client.AttachmentAction` |
+| Press a legacy attachment button from the UI | `core.InteractionService.PressAttachmentAction` (App field `a.interactions`); `cmd/slk/pressAttachmentAction` (`interactions.go`) adapts a `Client.AttachmentAction`. Nothing wires the TUI since its composition root was removed (2026-10-31) |
 | Run a slash command (`chat.command`, request shape copied from the web client; arguments as rich text via `mrkdwn.Convert`) | `(*slackclient.Client).RunCommand(ctx, CommandRequest)`; a refusal (`unknown_command`, …) is `*slackclient.CommandRejectedError` |
 | Is composer text a slash command, its name/args, and could it still become one (for a completion popup)? Word a command's failure | `slashcmd.Parse(text)`, `slashcmd.IsNamePrefix(text)`, `slashcmd.FailureText(name, err)` (`internal/slashcmd`); the TUI's `parseSlashCommand` / `commandFailureText` wrap them |
 | Every conversation's read state and newest-message ts in one request (`client.counts`) | `(*slackclient.Client).GetUnreadCountsContext(ctx)` (or `GetUnreadCounts()`); `UnreadInfo.Latest` is the newest message's ts |
 | List the workspace's slash commands (name, usage, description, app, alias) for a picker | `(*slackclient.Client).AppCommands(ctx)` (`client.appCommands`, as the web client calls it) |
-| Run a slash command from the UI | `core.CommandService.Run` (App field `a.commandSvc`); wired in `cmd/slk` via `runCommand` to the `Client.RunCommand` of the workspace the command was typed in (`teamID`, looked up with `router.ByID`, not the active one). Slack's refusal arrives as `*core.CommandError{Code}` |
+| Run a slash command from the UI | `core.CommandService.Run` (App field `a.commandSvc`); nothing wires it since the TUI composition root was removed (2026-10-31). Slack's refusal arrives as `*core.CommandError{Code}` |
 | A web-client `client_token` (`web-<unix ms>`) for any request that sends one | `newClientToken()` (`internal/slack`); the only generator |
 | Emoji shortcode → glyph | `emoji.Sprint`, `emoji.CodeMap`, `emoji.StripSkinTone` |
 | Does Block Kit already render the message body? | `blockkit.RendersBody(blocks)` (`internal/blockkit`), `messages.BlocksCarryBody(msg)` |
 | Parse Block Kit blocks / legacy attachments into `core/blocks` values; mrkdwn back from a rich_text block; a message's body source (the rich_text reconstruction, else `Text`) | `internal/blockkit`: `Parse`, `ParseAttachments`, `RichTextToMrkdwn`, `MessageText(msg)` (parse-only; the TUI's `internal/ui/messages/blockkit` delegates to it and keeps only the renderer, `messages.MessageTextSource` wraps `MessageText`) |
 | Current DND state from a Slack API result | `slack.DNDStateFromStatus` |
-| Persist a full Web API profile's custom status and huddle (including clears) | `cmd/slk/applyProfileStatus(teamID, userID, profile, db, send)` after `UpsertUser`, before any resolved-user notice or row repair; `UpsertUser` alone deliberately preserves status on conflict |
+| Persist a full Web API profile's custom status and huddle (including clears) | `cmd/slk/applyProfileStatus(teamID, userID, profile, db, send)` (`user_resolver.go`, kept for Phase 3 of the TUI sunset) after `UpsertUser`; `UpsertUser` alone deliberately preserves status on conflict |
 | Drop cached thread replies a complete `conversations.replies` response no longer contains (missed deletes, Slackbot ephemerals) | `(*cache.DB).PruneThreadReplies(channelID, threadTS, returnedTS, fetchStartUnix)`; soft-deletes, never touches the parent or rows cached after the fetch began |
 | Keep the message cache in step with Slack from any frontend: one history page (head, older, catch-up), a whole thread, a WebSocket frame, a reaction; the opt-in slow backfill | `internal/msgsync`: `Syncer{DB, Source, WorkspaceID}` with `Open`, `Older`, `CatchUp`, `Thread`, `ApplyEvent`, `ApplyReaction`, `Ingest`, `Backfill(ctx, Config)`; `Changed{Upserted, Deleted}` is what a view redraws. Fetches use `HistoryWithVersions` (official shape, 28/page). Nothing fetches unasked except `Backfill`, explained on `Config` (sign-out history: `docs/superpowers/specs/2026-07-30-enterprise-grid-bootstrap-design.md`; slk-gio runs it from startup, 90 days unless `[cache] backfill` says otherwise via `config.CacheConfig.BackfillOnStart` / `config.ParseBackfill`, paced and skipping `backfill_ignore`), and the bounded catch-up on connect, whose choice is `msgsync.Stale` (followed, changed, not ignored, capped) |
 | Which ranges of a channel the cache holds completely (so a reader can tell "cached" from "some rows") | `message_spans`: `(*cache.DB).Spans`, `AddSpan` (merges overlapping), `ExtendLiveSpan`, `ClearLiveSpans`, `Covers` (`internal/cache/spans.go`); the bounds a page covers are `msgsync.Ingest`'s rule, documented there |
@@ -171,32 +172,30 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Should the search backfill skip a conversation? (`[cache] backfill_ignore`, names or globs) | `config.CacheConfig.IgnoresBackfill(name)`; the GUI hands it to `(*backend.Slack).SetBackfillIgnore` |
 | A WebSocket message frame whole (the decoded `slack.Message`, its raw JSON, and for `message_changed` the inner message with `reply_count`/`thread_ts`/`edited`) | implement `slackclient.MessageEventHandler` (`OnMessageEvent(MessageEvent)`) on your `EventHandler`; the dispatcher type-asserts it and then skips `OnMessage`/`OnMessageDeleted`. Ephemerals still go to `OnEphemeralMessage` |
 | Peer custom status, DND and huddle rendering | `ui/peerstatus` (`Status`, glyph/expiry/summary methods); `messages.AuthorStatusSuffix` for author headers |
-| Workspace app/bot classification, from any goroutine | `WorkspaceContext.IsBotUser` / `MarkBotUser`; private synchronized set, never directly read/write a plain bot-ID map |
 | Usergroup map helpers; a usergroup's mention handle (its own, or its name slugified), and the ID → handle map for a `usergroups.list` result | `usergroups.Copy`, `usergroups.Equal`, `usergroups.Display`; `usergroups.Handle(g)`, `usergroups.Handles(groups)` (`internal/usergroups/handles.go`) |
 | Does message text mention one of the user's usergroups (`<!subteam^S…>`, bare or labelled)? | `mention.InGroups(text, groupIDs)`; `mention.InText` deliberately leaves usergroups out |
 | The workspace's usergroups with their members (to know the user's own) | `(*slackclient.Client).GetUserGroupsWithMembers(ctx)` (`include_users`, one request); `GetUserGroups` without members. A usergroup created or changed reaches a handler that implements the optional `slackclient.SubteamEventHandler` (`OnSubteamChanged`) |
 | Usergroups in the cache | `(*cache.DB).ReplaceUserGroups(workspaceID, groups)`, `ListUserGroups(workspaceID)` |
 | Usergroups in the Gio frontend: names for mentions, the user's own, the hover card, completion | `backend.Backend.UserGroups` (no request; loaded from the cache at startup, refreshed per connect and on subteam events), event `backend.UserGroupsChanged{Mine}`, `backend.GroupProfile`; `hub.isMyGroup`, `richView.myGroup`; `chat.MatchPeople` takes the groups; `notifications.Center.SetGroups` |
-| A workspace's user ID → display name, from any goroutine in `cmd/slk` | `wctx.UserNames` (`*userNameStore`: `Get`/`Set`, `MentionedNames(text)` for one message; `lookupUserCached` / `resolveUserCached` add the SQLite fallback). Just `Set`: hand the UI the map from `SnapshotForUI()` and pass only its version to `NotifyFrom`, which makes every later new or changed name reach the UI as `UserResolvedMsg`. Never keep or read the map you handed over |
+| A user ID → display name cache, from any goroutine in `cmd/slk` (`slk export`'s) | `*userNameStore` (`cmd/slk/usernames.go`: `Get`/`Set`/`Snapshot`, a copy); `lookupUserCached` / `resolveUserCached` (`users.go`) add the SQLite fallback. Never hand out the map itself |
 | User IDs mentioned in message text | `slackfmt.MentionedUserIDs(text)` |
 | Channel IDs mentioned in message text (`<#C…\|name>`), or each with its label | `slackfmt.MentionedChannelIDs(text)`; `slackfmt.MentionedChannels(text)` returns `ChannelMention{ID, Label}` |
 | Wake the serialized WebSocket event owner for local work | Implement `slackclient.PendingEventHandler` (`PendingEvents() <-chan struct{}`, `OnPendingEvents()`). The dispatcher selects the wake-up channel even on an idle socket and serializes the drain with Slack callbacks; nil disables it, and the channel must never close |
-| Apply a deferred DM profile to conversation snapshots | `userResolver.queueResolvedPeer(userID)` after caching a resolved profile; `rtmEventHandler.OnPendingEvents()` drains relevant DM peers on the serialized event owner even on an idle socket. `rtmEventHandler.repairDMPeer(userID)` is the shared cache-to-row repair used by that drain and reconnect reconciliation. `rememberConversation` mirrors notifier metadata; `publishConversation` updates only the active UI |
 | Context-bounded synchronous peer resolution at reconnect | `userResolver.ResolveNowContext(ctx, ids)` batches first; `resolveOneContext(ctx, userID)` is the fallback. Both share cache/name/workspace-scoped notifications, never mutate workspace slices |
 | userBoot IM → conversation metadata | `cmd/slk/bootIMConversation`; callers decide whether an ordinary open IM or a closed starred IM is eligible |
-| Starred conversation membership / recover missing sidebar rows | `SectionStore.StarredConversationIDs()` (locked defensive copy); `cmd/slk/missingStarredConversations` (read-only metadata hydration), then the existing `buildChannelItem` / `addConversation` paths |
+| Starred conversation membership / recover missing sidebar rows | `SectionStore.StarredConversationIDs()` (locked defensive copy); `cmd/slk/missingStarredConversations` (read-only metadata hydration; kept for Phase 3 of the TUI sunset) |
 | Workspace-relative cached external-user flags | `cache.DB.ExternalUsers(workspaceID)` returns a caller-owned map, derived from `User.HomeTeamID`; the legacy boolean is only a fallback within the row's original workspace |
-| A WebSocket message's author ID and its UI `MessageItem` (bot-ID fallback, display-name resolution, file/block/attachment conversion) | `(*rtmEventHandler).messageAuthor`, `(*rtmEventHandler).messageItemFromEvent` (`cmd/slk/rtm_handler.go`); shared by `OnMessage` and `OnEphemeralMessage` |
+| A fetched message's author ID and name from local sources (bot-ID fallback) | `cmd/slk/messageAuthor` (`users.go`), for `slk export` |
 | Legacy attachment action ids slack-go drops | `slackclient.EphemeralMessage.ActionIDs` (decoded from the raw frame), applied with `blocks.ApplyActionIDs(atts, ids)` (`internal/core/blocks`) |
 | Slack original-avatar URL → sized CDN URL (e.g. 72px) | `avatar.SizedURL(orig, px)`; returns non-Slack-original URLs unchanged |
 | Download a Slack file (or any URL) to a path of your choosing, once: no-op if it is already there, atomic rename, Slack auth per workspace | `(*filedl.Downloader).Fetch(ctx, url, path)`; `filedl.SafeName(title)` for the file name. `Download` is the TUI's save-to-folder with `-2` suffixes |
-| Copy text to the clipboard | `App.clipboardWrite` / `SetClipboardWriter`; `cmd/slk/newClipboardWriter` selects local macOS `pbcopy` or terminal OSC 52 |
+| Copy text to the clipboard | `App.clipboardWrite` / `SetClipboardWriter` (TUI; nothing wires it since 2026-10-31) |
 | slk's XDG directories (config, data with tokens and cache.db, cache with images) | `paths.Config()`, `paths.Data()`, `paths.Cache()` (`internal/paths`); `cmd/slk/paths.go`'s `xdg*` names wrap them |
 | Edit config.toml in place: the process-wide write lock, an atomic replace (temp file + rename, mode kept), a TOML basic string, a comment-safe line | `config.LockWrites()` (`defer config.LockWrites()()` across the whole read-modify-write), `config.WriteAtomic(path, data)`, `config.TOMLString(s)`, `config.SanitizeComment(s)` (`internal/config/write.go`) |
 | Sign a workspace in without a terminal or window: desktop-app workspaces to offer (browser sessions not pre-selected), the tokens to save for the chosen ones, saving one (token + `[workspaces.<slug>]` block, never a second block for a team), a slackdesktop error as advice | `internal/onboard`: `DesktopChoices`, `BuildWorkspaceTokens`, `SaveWorkspace` (`SaveResult`), `UniqueSlug` / `ExistingSlugs` / `AppendWorkspaceConfigBlock`, `DesktopErrorMessage`. The huh/lipgloss prompts are `cmd/slk/onboarding*.go` |
-| Refresh stored tokens from the Slack desktop app's live session at startup (desktop tokens first, mint as the fallback; browser-session tokens left alone; failures keep the stored token) | `onboard.Remint(ctx, store, slackclient.MintToken)`; the injectable core is `onboard.RemintTokens`. `slk-gio` calls `Remint` at startup (`remintStored`, `gui/cmd/slk-gio/main.go`); `slk export` and the TUI call `RemintTokens` |
-| Open a URL or file with the desktop's default handler | `launch.Open(target)` (`internal/launch`); `cmd/slk/launchOS` wraps it |
-| A `slack.File`'s thumbnails as `core.ThumbSpec`s, smallest first | `blockkit.FileThumbs(f)` (`internal/blockkit/files.go`); `cmd/slk/collectThumbs` wraps it |
+| Refresh stored tokens from the Slack desktop app's live session at startup (desktop tokens first, mint as the fallback; browser-session tokens left alone; failures keep the stored token) | `onboard.Remint(ctx, store, slackclient.MintToken)`; the injectable core is `onboard.RemintTokens`. `slk-gio` calls `Remint` at startup (`remintStored`, `gui/cmd/slk-gio/main.go`); `slk export` calls `RemintTokens` |
+| Open a URL or file with the desktop's default handler | `launch.Open(target)` (`internal/launch`) |
+| A `slack.File`'s thumbnails as `core.ThumbSpec`s, smallest first | `blockkit.FileThumbs(f)` (`internal/blockkit/files.go`) |
 | Disk-cache key for one user's avatar at one URL (shared by both frontends) | `avatar.FetchKey(userID, url)` |
 | A message's display form for a non-terminal frontend (blocks of styled spans from rich_text, mrkdwn, Block Kit, attachments, files) | `gui/rich`: `Body`, `FromRichText`, `FromMrkdwn`, `FromBlocks`, `FromAttachments`, `FromFiles` |
 | A thread for the Gio frontend: read it (cache first, then one `conversations.replies` fetch arriving as a `HistoryUpdated` with `ThreadTS` set), reply (optionally broadcast), mark it read | `backend.Backend.Thread`, `SendReply`, `MarkThreadRead` (`gui/backend`); `RunCommand` takes a thread ts |
@@ -247,7 +246,6 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Sidebar selection across item/filter reorders | Capture `sidebar.Model.currentCursorKey()` **before** mutation, then `rebuildNavWithCursor`; `rebuildNavPreserveCursor` is only safe while old nav indices still identify the same items |
 | Modal geometry / row hit-testing | `chrome.Boxed`, `chrome.Clickable` (list rows; declared in `internal/bubbles/chrome`, asserted by each dialog package) and `pointClickable` (a single glyph, e.g. the profile dialog's 📋; `internal/ui/reducer_modal_click.go`) |
 | Channel/DM destination picker for forwarding | `channelfinder.Model.OpenForForwarding()` (joined conversations only); `Open()` restores the normal switcher |
-| Refresh a workspace finder entry without losing visit recency | `rtmEventHandler.upsertFinderItem(item)` on the serialized event owner; returns the stored item and a changed flag, preserves existing `LastVisited`, seeds a new row from `LastVisitedByChannel` |
 | Render a thread from cache on open, before the fetch lands | `cachedThreadRepliesCmd(threads, chID, threadTS)` (`internal/ui/app.go`); yields a `FromCache` `ThreadRepliesLoadedMsg`, which renders but never marks the thread read — only the fetched result does |
 | Bind a composer to the conversation its draft belongs to | `(*compose.Model).SetDraftContext(teamID, channelID, threadTS)` — an empty channel detaches (saves the prior conversation's draft, clears the visible input). `SetActiveChannel` sets only mention context; it does not move draft storage |
 | Put text into a conversation's draft without overwriting anything newer (visible composer or stored draft) | `(*compose.Model).OfferDraft(teamID, channelID, threadTS, text)`; false when that conversation already has text or attachments. Used to give back a slash command that did not run (via `offerTypedBack`) and for `/msg`'s pre-fill |
@@ -352,11 +350,10 @@ them as templates:
   renderer); their differences are `entrylist` options and `RenderOptions`
   fields, each documented where it is declared. Do not add a pane-specific
   copy of either.
-- **`convertAndCacheHistory` / `fetchChannelMessages` / `fetchThreadReplies`** in
-  `cmd/slk/history.go` and `rtmEventHandler.OnMessage`'s cache writes are the
-  TUI's message writers; their shared replacement is `internal/msgsync`, which
-  the Gio frontend uses. Do not add a fourth writer: route new code through
-  `msgsync`, and move the TUI onto it when it is next touched.
+- **The message cache has one writer, `internal/msgsync`.** The TUI's own
+  writers (`cmd/slk/history.go`, `rtmEventHandler.OnMessage`) were removed
+  with its composition root on 2026-10-31. Do not add another: route new
+  code through `msgsync`.
 
 ## Conventions
 

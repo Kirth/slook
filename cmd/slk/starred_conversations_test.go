@@ -7,11 +7,7 @@ import (
 	"testing"
 
 	"github.com/gammons/slk/internal/bootstrap"
-	"github.com/gammons/slk/internal/config"
-	"github.com/gammons/slk/internal/service"
-	slk "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/boot"
-	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
 )
 
@@ -120,48 +116,5 @@ func TestMissingStarredConversations_ContinuesAfterFailure(t *testing.T) {
 		})
 	if !reflect.DeepEqual(calls, []string{"missing", "C1", "D1"}) || len(got) != 2 || got[0].ID != "C1" || got[1].User != "U1" {
 		t.Fatalf("calls=%v, added=%+v", calls, got)
-	}
-}
-
-func TestBuildChannelItem_StarredDM(t *testing.T) {
-	store := service.NewSectionStore()
-	if err := store.Bootstrap(context.Background(), &fakeSectionsClient{sections: []slk.SidebarSection{{ID: "ST", Type: "stars", ChannelIDs: []string{"D1"}}}}); err != nil {
-		t.Fatal(err)
-	}
-	wctx := &WorkspaceContext{SectionStore: store, UserNames: newUserNameStore(map[string]string{"U1": "Alice"})}
-	ch := slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "D1", IsIM: true, User: "U1"}}}
-	item, finder := buildChannelItem(ch, wctx, config.Config{}, "T1")
-	if item.Section != "ST" || item.Type != "dm" || item.DMUserID != "U1" || item.Name != "Alice" {
-		t.Fatalf("item = %+v", item)
-	}
-	if finder.ID != "D1" || finder.Name != "Alice" || finder.Type != "dm" || !finder.Joined {
-		t.Fatalf("finder = %+v", finder)
-	}
-}
-
-func TestReconcileStarredConversations_ReconnectInactive(t *testing.T) {
-	store := service.NewSectionStore()
-	if err := store.Bootstrap(context.Background(), &fakeSectionsClient{sections: []slk.SidebarSection{{ID: "ST", Type: "stars", ChannelIDs: []string{"D1"}}}}); err != nil {
-		t.Fatal(err)
-	}
-	wctx := &WorkspaceContext{SectionStore: store, UserNames: newUserNameStore(map[string]string{"U1": "Alice"}), Channels: []sidebar.ChannelItem{{ID: "C1"}}}
-	sender := &captureSender{}
-	h := &rtmEventHandler{wsCtx: wctx, workspaceID: "T1", program: sender, isActive: func() bool { return false }, channelNames: map[string]string{}, channelTypes: map[string]string{}}
-	calls := 0
-	h.resolveConversation = func(context.Context, string) (*slack.Channel, error) {
-		calls++
-		return &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "D1", IsIM: true, User: "U1"}}}, nil
-	}
-	h.reconcileStarredConversations(context.Background())
-	h.reconcileStarredConversations(context.Background())
-	h.refreshSectionsForActive()
-	if calls != 1 || len(wctx.Channels) != 2 || len(wctx.FinderItems) != 1 {
-		t.Fatalf("calls=%d channels=%+v finder=%+v", calls, wctx.Channels, wctx.FinderItems)
-	}
-	if wctx.Channels[1].Section != "ST" || wctx.Channels[1].Name != "Alice" || h.channelTypes["D1"] != "dm" {
-		t.Fatalf("DM = %+v", wctx.Channels[1])
-	}
-	if len(sender.sent) != 0 {
-		t.Fatalf("inactive workspace sent UI messages: %+v", sender.sent)
 	}
 }

@@ -20,7 +20,6 @@ require (
 	github.com/slack-go/slack v0.23.0
 	github.com/syndtr/goleveldb v1.0.0
 	github.com/yuin/goldmark v1.7.13
-	golang.design/x/clipboard v0.7.1
 	golang.org/x/crypto v0.54.0
 	golang.org/x/image v0.39.0
 	golang.org/x/sync v0.22.0
@@ -63,8 +62,6 @@ require (
 	github.com/soniakeys/quant v1.0.0 // indirect
 	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476 // indirect
-	golang.org/x/mobile v0.0.0-20250606033058-a2a15c67f36f // indirect
 	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect

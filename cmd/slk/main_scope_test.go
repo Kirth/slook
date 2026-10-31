@@ -11,25 +11,24 @@ import (
 
 // main.go is the entrypoint, not a junk drawer. Every other declaration in
 // package main belongs in a file named for its topic — see the files this
-// package already has: markread.go, presence.go, sections.go and the rest.
+// package already has: dump.go, export_command.go, onboarding.go and the rest.
 //
 // Adding an entry here is a design decision, not a formality. Say why the
 // declaration cannot live in a topical file. "It was convenient" is not a
 // reason; moving a declaration between files in one package is a one-line
 // change that the compiler cannot get wrong.
 //
-// Phase 1 of the architecture refactor emptied this file down to the seven
-// names below. It had grown from 4,842 lines to 5,421 in the four months
+// Phase 1 of the architecture refactor emptied this file down to seven
+// names; retiring the TUI (2026-10-31) removed run() and its HTTP client,
+// leaving the five below. It had grown from 4,842 lines to 5,421 in the four months
 // before that, which is why the rule is enforced rather than documented.
 // See docs/superpowers/specs/2026-09-22-phase1-main-go-splits-design.md.
 var mainGoAllowed = map[string]string{
-	"version":            "build stamp, set via -ldflags",
-	"commit":             "build stamp, set via -ldflags",
-	"date":               "build stamp, set via -ldflags",
-	"main":               "process entrypoint",
-	"printHelp":          "usage text for main",
-	"newImageHTTPClient": "constructed by run; single caller",
-	"run":                "composition root — Phase 2 decomposes this",
+	"version":   "build stamp, set via -ldflags",
+	"commit":    "build stamp, set via -ldflags",
+	"date":      "build stamp, set via -ldflags",
+	"main":      "process entrypoint",
+	"printHelp": "usage text for main",
 }
 
 func TestMainGoHoldsOnlyTheEntrypoint(t *testing.T) {
@@ -60,8 +59,8 @@ func TestMainGoHoldsOnlyTheEntrypoint(t *testing.T) {
 			len(offenders), strings.Join(offenders, "\n  "))
 	}
 
-	// A stale allow-list is as misleading as a missing one. When Phase 2
-	// extracts run(), its entry must be deleted rather than left behind.
+	// A stale allow-list is as misleading as a missing one: when a name
+	// leaves main.go, its entry must be deleted rather than left behind.
 	var stale []string
 	for name := range mainGoAllowed {
 		if !seen[name] {
