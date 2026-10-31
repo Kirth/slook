@@ -937,3 +937,172 @@ Same isolation as 4.4–4.5: binary built to the scratchpad, `Xvfb :97` (`nix-sh
 - `chat.ForwardedLink` exists but no window uses it yet (the TUI opened the original on Enter); a click on the link itself now opens it in-app.
 - Enterprise Grid permalinks may carry a different host than `TeamSubdomain()` (e.g. an org subdomain); such links still open in the browser.
 - The two observations under "Manual" (jump target under the header after `moveHere`; a delayed self-owned clipboard paste) are outside these sub-phases and unchanged by them.
+
+## Phase 5 — Delete the TUI; build, CI, release; GUI boundary test
+
+### Before 5.1: full `-race`, both modules, at `1347b723`
+
+- root: `nix-shell gui/shell.nix --run 'go test ./... -race -count=1'` → 82 packages `ok`, no other line but "no test files", exit 0.
+- gui: `cd gui && nix-shell shell.nix --run 'go test ./... -race -count=1'` → 11 packages `ok`, exit 0.
+
+### 5.1 — `ui: retire the bubbletea TUI`
+
+- Commit: `44e6f30a`
+- `git rm -r internal/ui internal/bubbles internal/demo internal/editor docs/assets/demo internal/wake` (`internal/ui/boundary_test.go` copied to the scratchpad first).
+- `internal/core` pruned (each checked with grep over `cmd/`, `gui/`, `internal/` outside the deleted trees): deleted `ports.go` (all 18 interfaces: the Reaction, Interaction, Command, Thread, Activity, Message, Channel, Search, File, Desktop, Editor, Presence, Settings, Unread, Profile, Workspace and Avatar services and `ImageFetcher`; plus `ClipboardFormat`/`ClipboardText`/`ClipboardImage`), `adapters.go` (every `New*Service`, `*ServiceFuncs` and adapter, and the func types `ChannelFetchFunc` … `ChannelLookupFunc`), `core.go` (`Msg`, `Cmd`), and from `types.go`: `ForwardResult`, `ChannelFinderItem`, `EmojiEntry`, `PresenceAction` (+ constants), `ThemeScope` (+ constants), `UserProfile`, `RateLimitedError`. Kept (used outside): `MessageItem`, `Attachment`, `ThumbSpec`, `ReactionItem`, `PendingAttachment`, `ReadState`, `ThreadSummary`, `ActivityItem`, `ActivityMessage`, `ActivityMsgKey`, `CommandError`, `Theme`; package doc moved into `types.go`. Tests deleted with the adapters: `command_adapter_test.go`, `interaction_adapter_test.go`, `message_forward_test.go`, `profile_test.go`; `TestCommandErrorMessageIsTheCode` kept, in new `types_test.go`.
+- `(*slackclient.Client).GetUnreadCounts` (context-free) deleted; its doc moved onto `GetUnreadCountsContext`; four test calls in `client_test.go` now `GetUnreadCountsContext(context.Background())`.
+- Root `go mod tidy`: `github.com/muesli/reflow` dropped; `charm.land/bubbles/v2` direct → `// indirect`; go.sum lost reflow, `go-runewidth v0.0.12/go.mod`, `rivo/uniseg v0.1.0/v0.2.0 /go.mod`. gui `go mod tidy -diff`: no change.
+- Checks: both modules build/vet/gofmt clean; root `go test ./... -race` green (all `ok`).
+
+Orphan sweep (importers outside the package's own directory, the deleted trees excluded; non-test count in brackets):
+
+| package | importers | gui | cmd | action |
+|---|---|---|---|---|
+| `internal/wake` | 0 | 0 | 0 | deleted (TUI suspend detector) |
+| `internal/slack/membership` | 0 | 0 | 0 | Phase 6 backlog |
+| `internal/version` | 0 | 0 | 0 | Phase 6 backlog (`ModalFooter`, the TUI help modal's line) |
+| `internal/ids` | 7 (4) | 0 | 0 | kept; only `internal/slackurl` outside tests now that the ports are gone — backlog |
+| `internal/slack/slacktest` | 11 (0) | 8 | 0 | kept (test fixture by design) |
+| every other `internal/*` | ≥ 1 non-test | | | kept |
+
+`internal/image`'s terminal renderers (sixel, sixelframe, preview; kitty/half-block still reached via `internal/avatar` and `internal/emoji`) are terminal-only code for the backlog. Everything the plan guessed might be orphaned (`launch`, `typing`, `threadsubs`, `searchq`, `mention`, `notify`, `slashcmd`) has gui importers.
+
+### 5.2 — `gui: enforce that the GUI never reaches the retired TUI`
+
+- Commit: `c07d4b5e`
+- `gui/boundary_test.go`, package `gui_test` at the gui module root. A test-only directory compiles under `go test .`, `go build ./...` and `go vet ./...`; no `doc.go` needed. Walks every non-test `.go` file (skips `testdata`, non-`.go` files), `parser.ImportsOnly`, fails on a direct import of `internal/ui`, `internal/bubbles`, `internal/demo`, `internal/editor` (or beneath), `charm.land/`, `github.com/charmbracelet/`; fails if it walked no files. `TestBoundaryBannedMatchesTreesNotNeighbours` pins the prefix rule (`internal/usergroups`, `internal/editorconfig` not banned). Checked to fail with a throwaway `gui/zztmp/x.go` importing `internal/ui/messages` and `lipgloss` (removed).
+
+### 5.3 — `build: drop the TUI from make, flake, CI and goreleaser; build and test gui in CI`
+
+- Commit: `47a68bcc`
+- `Makefile`: `demo-gifs` removed; `run: gui` then `./bin/slk-gio`; `test`/`lint` also `cd gui && …`; `.PHONY` updated.
+- `flake.nix`: description "Slack CLI and Gio desktop client"; `buildInputs = [pkgs.libX11]`, `libwebsockets-fixed`, `ttyd-fixed`, `vhs-sixel` and the dev shell's `packages` removed (dev shell keeps `inputsFrom = [ slk ]`); `vendorHash = "sha256-kcaddhrDhI9TfADvtmjmMxdlyGXifxyItjImFWp4lyI="` (from `nix build .#slk.goModules`'s `got:` with a placeholder hash); `excludedPackages = [ "gui" ]` (deviation 3).
+- `ci.yml`: both `libx11-dev` steps removed; jobs `gui` (apt list as planned, setup-go `cache-dependency-path: gui/go.sum`, build/vet/`test -race` each with `working-directory: gui`) and `lint-gui` (golangci-lint-action `working-directory: gui`, same apt step). Parsed with `yq`: jobs test, lint, gui, lint-gui, nix.
+- `.goreleaser.yaml`: one build `id: slk`, `CGO_ENABLED=0`, goos linux/darwin/windows, amd64/arm64 (windows/arm64 ignored as before), `main: ./cmd/slk`, `binary: slk`; header, nfpm description and cask description → "Slack CLI (workspace setup and export) for slk-gio". `release.yml` untouched (still `macos-latest`).
+
+### Verify (Phase 5) — run at `47a68bcc`
+
+`golangci-lint` is on neither PATH nor in `gui/shell.nix`; those two `&& golangci-lint run` were left off (lint runs in CI's `lint` / `lint-gui`). `-count=1` added to the test lines.
+
+```
+$ git ls-files internal/ui internal/bubbles internal/demo internal/editor docs/assets/demo | wc -l
+0
+$ grep -rln 'internal/ui\|internal/bubbles\|internal/demo\|internal/editor' --include='*.go' . gui | wc -l
+2
+$ grep -rl 'charm.land\|charmbracelet' --include='*.go' . | grep -v _test | sort
+cmd/slk/onboarding_browser.go
+cmd/slk/onboarding.go
+cmd/slk/remove_workspace.go
+internal/emoji/width.go
+internal/image/preview.go
+$ grep -c 'bubbletea' go.mod
+1
+6:	charm.land/bubbletea/v2 v2.0.6
+$ grep -c 'bubbletea' gui/go.mod
+0
+$ command -v golangci-lint; nix-shell gui/shell.nix --run 'command -v golangci-lint'
+exit=1
+$ nix-shell gui/shell.nix --run 'go build ./... && go vet ./... && go test ./... -race && gofmt -l .'
+ok  	github.com/gammons/slk/cmd/slk	1.264s
+ok  	github.com/gammons/slk/internal/attach	1.036s
+ok  	github.com/gammons/slk/internal/avatar	1.152s
+ok  	github.com/gammons/slk/internal/blockkit	1.055s
+ok  	github.com/gammons/slk/internal/bootstrap	1.042s
+ok  	github.com/gammons/slk/internal/bootstrap/adapt	2.256s
+ok  	github.com/gammons/slk/internal/cache	29.550s
+ok  	github.com/gammons/slk/internal/clipboard	1.011s
+ok  	github.com/gammons/slk/internal/config	4.701s
+ok  	github.com/gammons/slk/internal/config/versionts	1.062s
+ok  	github.com/gammons/slk/internal/core	1.011s
+ok  	github.com/gammons/slk/internal/core/blocks	1.012s
+ok  	github.com/gammons/slk/internal/datefmt	1.012s
+ok  	github.com/gammons/slk/internal/debuglog	1.019s
+ok  	github.com/gammons/slk/internal/emoji	1.044s
+ok  	github.com/gammons/slk/internal/export	1.039s
+ok  	github.com/gammons/slk/internal/filedl	1.020s
+ok  	github.com/gammons/slk/internal/filepick	1.010s
+?   	github.com/gammons/slk/internal/ids	[no test files]
+ok  	github.com/gammons/slk/internal/image	3.858s
+?   	github.com/gammons/slk/internal/launch	[no test files]
+ok  	github.com/gammons/slk/internal/mention	1.014s
+ok  	github.com/gammons/slk/internal/msgsync	7.602s
+ok  	github.com/gammons/slk/internal/notify	1.076s
+ok  	github.com/gammons/slk/internal/onboard	1.025s
+?   	github.com/gammons/slk/internal/paths	[no test files]
+ok  	github.com/gammons/slk/internal/searchq	1.013s
+ok  	github.com/gammons/slk/internal/service	1.994s
+ok  	github.com/gammons/slk/internal/slack	1.402s
+ok  	github.com/gammons/slk/internal/slack/boot	1.101s
+ok  	github.com/gammons/slk/internal/slack/edge	1.178s
+ok  	github.com/gammons/slk/internal/slack/membership	4.099s
+ok  	github.com/gammons/slk/internal/slack/mrkdwn	1.030s
+ok  	github.com/gammons/slk/internal/slack/resolve	5.412s
+?   	github.com/gammons/slk/internal/slack/slacktest	[no test files]
+ok  	github.com/gammons/slk/internal/slackdesktop	1.075s
+ok  	github.com/gammons/slk/internal/slackfmt	1.042s
+ok  	github.com/gammons/slk/internal/slackhttp	1.245s
+ok  	github.com/gammons/slk/internal/slackurl	1.012s
+ok  	github.com/gammons/slk/internal/slashcmd	1.013s
+ok  	github.com/gammons/slk/internal/text	1.019s
+ok  	github.com/gammons/slk/internal/theme	1.014s
+ok  	github.com/gammons/slk/internal/threadsubs	1.015s
+ok  	github.com/gammons/slk/internal/typing	1.014s
+ok  	github.com/gammons/slk/internal/usergroups	1.012s
+ok  	github.com/gammons/slk/internal/version	1.013s
+exit=0
+$ nix-shell gui/shell.nix --run 'cd gui && go build ./... && go vet ./... && go test ./... -race && gofmt -l .'
+ok  	github.com/gammons/slk/gui	1.019s
+ok  	github.com/gammons/slk/gui/backend	5.355s
+ok  	github.com/gammons/slk/gui/chat	1.019s
+ok  	github.com/gammons/slk/gui/cmd/slk-gio	10.446s
+?   	github.com/gammons/slk/gui/internal/richtext	[no test files]
+?   	github.com/gammons/slk/gui/internal/styledtext	[no test files]
+ok  	github.com/gammons/slk/gui/motion	1.012s
+ok  	github.com/gammons/slk/gui/notifications	1.029s
+ok  	github.com/gammons/slk/gui/palette	1.011s
+ok  	github.com/gammons/slk/gui/rich	1.020s
+ok  	github.com/gammons/slk/gui/search	1.019s
+ok  	github.com/gammons/slk/gui/selection	1.010s
+ok  	github.com/gammons/slk/gui/sidebar	1.019s
+ok  	github.com/gammons/slk/gui/textedit	1.011s
+exit=0
+$ cd gui && nix-shell shell.nix --run 'go test . -run Boundary -v'
+=== RUN   TestBoundaryGUINeverImportsTheRetiredTUI
+--- PASS: TestBoundaryGUINeverImportsTheRetiredTUI (0.00s)
+=== RUN   TestBoundaryBannedMatchesTreesNotNeighbours
+--- PASS: TestBoundaryBannedMatchesTreesNotNeighbours (0.00s)
+PASS
+ok  	github.com/gammons/slk/gui	0.004s
+exit=0
+$ grep -n 'demo-gifs\|vhs\|libX11' Makefile flake.nix .github/workflows/ci.yml | wc -l
+0
+$ grep -n 'working-directory: gui' .github/workflows/ci.yml | wc -l
+4
+$ nix build .#slk --print-build-logs
+exit=0
+slk
+```
+
+The `nix build` printed no log lines because the derivation was already built by the run just before (same inputs), which built `./cmd/slk` and ran the root tests in the sandbox (46 "Building subPackage" lines, exit 0); `result/bin` holds `slk`.
+
+Against the plan's expected values:
+- `grep -rln 'internal/ui…' … | wc -l` is 2, not 0: both lines are `gui/boundary_test.go` (listed once via `.` and once via `gui`), which has to name the banned paths. No other `.go` file mentions them.
+- `grep -c bubbletea go.mod` is 1 but **direct**, not `// indirect`: `internal/image/sixelframe_integration_test.go` runs a bubbletea program around `SixelFrameStore` (a test of TUI-only code in a package that stays). gui/go.mod: 0.
+- The charm/charmbracelet list is exactly the five expected files.
+
+### Deviations (Phase 5)
+
+1. `charm.land/bubbletea/v2` stays a direct requirement (`internal/image/sixelframe_integration_test.go`); `github.com/mattn/go-sixel` stays (`internal/image/sixel.go`); only `muesli/reflow` dropped and `charm.land/bubbles/v2` went indirect. Removing `internal/image`'s terminal renderers (with that test) would drop both; left to the Phase 6 backlog per the "delete only `internal/wake`" rule.
+2. Comments in kept packages that pointed into the deleted trees (`internal/theme/themes.go`, `internal/image/{sixel,preview,preview_test}.go`, `internal/ids/ids.go`, `internal/blockkit/rendersbody{,_test}.go`, `internal/core/blocks/blocks.go`, `internal/mention/mention{,_test}.go`) now say "the retired TUI's …" (or name `gui/rich`), so the Verify grep finds no path into the deleted trees. Comments only.
+3. `flake.nix` gained `excludedPackages = [ "gui" ]`: `buildGoModule` finds packages with `find`, so it tried `go install ./gui` from the root module ("main module does not contain package github.com/gammons/slk/gui"). It would have failed the same way on `./gui/backend` before this phase (the flake's full build was not run since gui/ was added; Phase 2 only built `.#slk.goModules`); the new test file at `gui/` made it the first hit.
+4. AGENTS.md (5.1): only the "Resolve a command's channel argument" row and the `(or GetUnreadCounts())` mention were removed, since their symbols are gone; every other row naming `internal/ui`, `internal/bubbles` or the deleted `core` ports is left for Phase 6's rewrite.
+5. The plan's 5.1 says report the orphan sweep and delete nothing; per this run's instructions `internal/wake` (no importer) was deleted, and the `core` ports and `GetUnreadCounts` pruned in the same commit.
+6. `TestCoreDoesNotImportTUIOrDirectIO` lived in the deleted `internal/ui/boundary_test.go` and went with it; `internal/core` now has no boundary test (it has no imports beyond `internal/core/blocks`).
+7. `release.yml` still runs on `macos-latest`, and its comment (darwin cgo for the clipboard) is now stale; not changed, as instructed.
+
+### Follow-ups (Phase 5)
+
+- Phase 6 backlog (orphans): `internal/slack/membership`, `internal/version`, `internal/ids` (one non-test importer), `internal/image`'s terminal renderers and `sixelframe_integration_test.go` (would make bubbletea indirect and drop go-sixel); `internal/emoji/width.go` / `internal/image/preview.go` lipgloss uses (O1).
+- `release.yml` can move to `ubuntu-latest` and drop its cgo comment.
+- `.goreleaser.yaml`'s pre-release footer still says "run it with `SLK_DEBUG=1 slk`" and points at the request tally; the CLI does not run a session. Phase 6 wording.
+- `MinutesUntilTomorrowMorning`'s TUI copy went with `internal/ui/presencemenu`; the gui copy is now the only one.
