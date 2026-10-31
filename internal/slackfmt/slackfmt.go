@@ -23,7 +23,6 @@ var (
 	// Labeled forms normalize to "@label"; bare forms resolve through the
 	// caller's workspace-scoped usergroup map.
 	subteamMentionRe = regexp.MustCompile(`<!subteam\^([A-Z0-9]+)(?:\|([^>]+))?>`)
-	broadcastRe      = regexp.MustCompile(`<!(here|channel|everyone)>`)
 	// Match both http(s) URLs and mailto: addresses; Slack auto-linkifies
 	// typed emails into <mailto:X|X>. Bare-link substitution keeps the URL
 	// as-is for http(s) but strips the mailto: prefix so the text reads as
@@ -93,7 +92,7 @@ func StripMarkupWithUserGroups(text string, userNames, userGroups map[string]str
 		groups := subteamMentionRe.FindStringSubmatch(match)
 		return usergroups.Display(userGroups, groups[1], groups[2])
 	})
-	text = broadcastRe.ReplaceAllString(text, "@$1")
+	text = specialMentionRe.ReplaceAllString(text, "@$1")
 	text = userMentionRe.ReplaceAllStringFunc(text, func(match string) string {
 		userID := userMentionRe.FindStringSubmatch(match)[1]
 		if name, ok := userNames[userID]; ok {
@@ -106,4 +105,17 @@ func StripMarkupWithUserGroups(text string, userNames, userGroups map[string]str
 	text = strings.ReplaceAll(text, "~", "")
 	text = strings.ReplaceAll(text, "`", "")
 	return text
+}
+
+// ChannelGlyph returns the prefix glyph for a channel type: "◆" for
+// "private", "●" for "dm" and "group_dm", "#" otherwise.
+func ChannelGlyph(chType string) string {
+	switch chType {
+	case "private":
+		return "◆" // ◆
+	case "dm", "group_dm":
+		return "●" // ●
+	default:
+		return "#"
+	}
 }

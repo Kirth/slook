@@ -109,7 +109,9 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Plain-text line segmentation (grapheme-correct) | `entrylist.PlainLines`, `entrylist.DisplayWidth`, `entrylist.SliceColumns` (`bubbles/entrylist`; `messages.PlainLines`/`DisplayWidthOfPlain`/`SliceColumns` delegate for existing callers) |
 | Display width of a string (emoji-aware) | `emoji.Width(s)` |
 | Case/accent-insensitive fold for matching | `text.Fold(s)` |
-| Slack mrkdwn → plain text | `messages.FlattenMrkdwn`, `messages.FlattenMrkdwnWithUserGroups` |
+| Slack mrkdwn → plain text | `slackfmt.FlattenMrkdwn`, `slackfmt.FlattenMrkdwnWithUserGroups` (`internal/slackfmt/flatten.go`; `messages.FlattenMrkdwn*` delegate for existing callers); the lossier notification form is `slackfmt.StripMarkup` |
+| Slack mrkdwn → CommonMark (the Markdown export) | `slackfmt.MrkdwnToCommonMark`, `slackfmt.MrkdwnToCommonMarkWithUserGroups` (`internal/slackfmt/commonmark.go`; `messages.SlackMrkdwnToCommonMark*` delegate) |
+| Expand `<!date^…>` tokens in text | `slackfmt.ExpandDateTokens(text)` (`internal/slackfmt/datetoken.go`; FORMAT in local time, FALLBACK only when the token is unusable) |
 | Search-term highlighting (ANSI/OSC-safe) | `messages.HighlightSearchTerms`, `messages.SearchHighlightSGR` |
 | Re-assert a background (or background+foreground) after every SGR reset, so nested lipgloss renders don't drop it | `bubbles/ansi.ReapplyAfterResets(text, style)` — the one implementation; `messages.ReapplyBgAfterResets` delegates to it for existing callers. The theme's sequences come from `messages.BgANSI()` / `messages.FgANSI()` |
 | Extract links from message text | `messages.ExtractLinks` |
@@ -120,11 +122,11 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Turn a `RenderedMessage` into list rows: fill, invisible/tinted left border, the long-timestamp selected variant, the plain-text mirror (the part of building an `entrylist.Entry` both panes share) | `messages.WrapRows(msg, rendered, width, messages.NewWrapStyles(focused))` returning `WrappedRows` (`Lines`, `Selected`, `Plain`, `ShortSrc`); the panes add ID/Ref/hits and (channel pane) the spacer rows. `WrapStyles.SelectedVariant` builds the short-timestamp variant for `EntryPayload.SelectedLines`. The thread parent row is not wrapped this way: it is re-rendered every frame |
 | Apply a reaction add/remove event idempotently; the reaction-pill cursor | `messages.ApplyReaction`, `messages.ReactionNav` |
 | A content pane's per-entry payload next to its `entrylist.Entry` (short-timestamp selected variant, kitty flushes, sixel rows), and the rows to draw for the cursor entry | `messages.EntryPayload`, `(*EntryPayload).SelectedLines`; the emoji-image context both panes take is `messages.EmojiContext` |
-| Date label from a Slack ts | `messages.DateFromTS`, `messages.FormatDateSeparator`, `messages.FormatShortDate` (compact form for a message header: "Today", "Jan 2") |
+| Date label from a Slack ts | `messages.DateFromTS`, `datefmt.DateSeparator` (`internal/datefmt`; test clock `datefmt.SetNow`; `messages.FormatDateSeparator` delegates, `messages.SetNowFunc` sets both clocks), `messages.FormatShortDate` (compact form for a message header: "Today", "Jan 2") |
 | Date-qualified timestamp for the selected message header | `messages.LongTimestamp(ts, short)`, `messages.SelectedHeader(rendered, header, ts, short, maxWidth)`; any other header timestamp swap that must fit the width budget: `messages.ReplaceHeaderTimestamp(rendered, header, short, replacement, maxWidth)` |
-| Clock layout `<!date` tokens render `{time}`/`{time_secs}` with | `messages.SetDateTokenTimeLayout(layout)` — seeded once at startup from `appearance.timestamp_format` (`cmd/slk/main.go`); empty keeps the default `"3:04 PM"`. Package-level (like theme state) so every render path agrees |
+| Clock layout `<!date` tokens render `{time}`/`{time_secs}` with | `slackfmt.SetDateTokenTimeLayout(layout)` (`messages.SetDateTokenTimeLayout` delegates) — seeded once at startup from `appearance.timestamp_format` (`cmd/slk/main.go`); empty keeps the default `"3:04 PM"`. Package-level (like theme state) so every render path agrees |
 | mpdm channel name → human name | `slackfmt.FormatMPDMName` |
-| Channel-type glyph (`#` / `◆` / `●`) | `messages.ChannelGlyph(chType)` |
+| Channel-type glyph (`#` / `◆` / `●`) | `slackfmt.ChannelGlyph(chType)` (`messages.ChannelGlyph` delegates) |
 | Marker row for a message only the current user can see | `messages.EphemeralLabel()` — drawn above the author line in both panes |
 | A message's pressable legacy buttons (selects excluded) | `messages.ButtonActions(msg)`, `messages.HasButtonActions(msg)` |
 | The hint under an interactive message ("b to respond" for an ephemeral with buttons, else "open in Slack") | `messages.InteractiveHint(msg)`; both panes |

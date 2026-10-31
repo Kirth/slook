@@ -9,12 +9,13 @@ package export
 import (
 	"errors"
 	"fmt"
+	"github.com/gammons/slk/internal/blockkit"
+	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/slackfmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-
-	"github.com/gammons/slk/internal/ui/messages"
 )
 
 const (
@@ -35,8 +36,8 @@ var ErrOutputNotEmpty = errors.New("output directory is not empty")
 // Conversation is one top-level channel message and the replies to it
 // that fall inside the export window.
 type Conversation struct {
-	Parent  messages.MessageItem
-	Replies []messages.MessageItem
+	Parent  core.MessageItem
+	Replies []core.MessageItem
 	// ParentIsContext is true when Parent predates the window and is
 	// kept only to give its in-window Replies context.
 	ParentIsContext bool
@@ -215,7 +216,7 @@ func compareConversations(a, b Conversation) int {
 // time set from its TS in the window's timezone.
 func stampConversation(conv Conversation, w Window) Conversation {
 	conv.Parent = stampMessage(conv.Parent, w)
-	replies := make([]messages.MessageItem, len(conv.Replies))
+	replies := make([]core.MessageItem, len(conv.Replies))
 	for i, r := range conv.Replies {
 		replies[i] = stampMessage(r, w)
 	}
@@ -225,7 +226,7 @@ func stampConversation(conv Conversation, w Window) Conversation {
 
 // stampMessage sets msg's DateStr and Timestamp from its TS. A TS that
 // does not parse leaves both blank rather than inventing a time.
-func stampMessage(msg messages.MessageItem, w Window) messages.MessageItem {
+func stampMessage(msg core.MessageItem, w Window) core.MessageItem {
 	msg.DateStr, msg.Timestamp = "", ""
 	if t, ok := TimeFromTS(msg.TS); ok {
 		t = t.In(w.Location)
@@ -343,8 +344,8 @@ func indexEntry(conv Conversation, filename string, userNames, channelNames map[
 
 // snippet returns the first non-blank line of msg's body as plain
 // text, shortened to snippetRunes.
-func snippet(msg messages.MessageItem, userNames, channelNames map[string]string) string {
-	flat := messages.FlattenMrkdwn(messages.MessageTextSource(msg), nameMap(userNames).lookup, nameMap(channelNames).lookup)
+func snippet(msg core.MessageItem, userNames, channelNames map[string]string) string {
+	flat := slackfmt.FlattenMrkdwn(blockkit.MessageText(msg), nameMap(userNames).lookup, nameMap(channelNames).lookup)
 	for line := range strings.SplitSeq(flat, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {

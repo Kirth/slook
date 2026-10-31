@@ -17,7 +17,7 @@ import (
 
 	"github.com/gammons/slk/gui/backend"
 	"github.com/gammons/slk/gui/sidebar"
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/slackfmt"
 )
 
 // switcherRows is how many conversations the switcher lists.
@@ -215,7 +215,7 @@ func switcherConv(gtx C, th *material.Theme, view *richView, c backend.Conversat
 			if c.Kind == backend.KindDM {
 				return view.avatar(gtx, c.ID, c.AvatarURL, c.Name, unit.Dp(20))
 			}
-			g := bodyLabel(th, messages.ChannelGlyph(string(c.Kind)))
+			g := bodyLabel(th, slackfmt.ChannelGlyph(string(c.Kind)))
 			g.Color = colMuted
 			return g.Layout(gtx)
 		}),

@@ -21,7 +21,7 @@ import (
 	"github.com/gammons/slk/gui/backend"
 	"github.com/gammons/slk/gui/chat"
 	"github.com/gammons/slk/gui/motion"
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/datefmt"
 )
 
 // msgView draws a list of messages and keeps what that needs between
@@ -418,7 +418,7 @@ func (v *msgView) message(gtx C, m backend.Message, prev *backend.Message) D {
 	if newDay {
 		rows = append(rows, layout.Rigid(func(gtx C) D {
 			return layout.Inset{Top: dateTop, Bottom: dateBottom}.Layout(gtx, func(gtx C) D {
-				return ruledCaption(gtx, v.th, messages.FormatDateSeparator(m.Time.Format("2006-01-02")))
+				return ruledCaption(gtx, v.th, datefmt.DateSeparator(m.Time.Format("2006-01-02")))
 			})
 		}))
 	}

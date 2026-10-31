@@ -1,14 +1,13 @@
 package export
 
 import (
+	"github.com/gammons/slk/internal/core"
 	"strings"
 	"testing"
-
-	"github.com/gammons/slk/internal/ui/messages"
 )
 
 func TestThreadToMarkdown_ParentOnly(t *testing.T) {
-	parent := messages.MessageItem{UserName: "alice", DateStr: "2026-05-18", Timestamp: "3:04 PM", Text: "hello world"}
+	parent := core.MessageItem{UserName: "alice", DateStr: "2026-05-18", Timestamp: "3:04 PM", Text: "hello world"}
 	got := ThreadToMarkdown(parent, nil, nil, nil)
 	if !strings.Contains(got, "**alice** — 2026-05-18 3:04 PM") {
 		t.Errorf("missing header, got:\n%s", got)
@@ -19,8 +18,8 @@ func TestThreadToMarkdown_ParentOnly(t *testing.T) {
 }
 
 func TestThreadToMarkdown_ParentAndReplies(t *testing.T) {
-	parent := messages.MessageItem{UserName: "alice", DateStr: "2026-05-18", Timestamp: "3:04 PM", Text: "question?"}
-	replies := []messages.MessageItem{
+	parent := core.MessageItem{UserName: "alice", DateStr: "2026-05-18", Timestamp: "3:04 PM", Text: "question?"}
+	replies := []core.MessageItem{
 		{UserName: "bob", DateStr: "2026-05-18", Timestamp: "3:05 PM", Text: "answer!"},
 	}
 	got := ThreadToMarkdown(parent, replies, nil, nil)
@@ -30,9 +29,9 @@ func TestThreadToMarkdown_ParentAndReplies(t *testing.T) {
 }
 
 func TestThreadToMarkdown_Attachments(t *testing.T) {
-	parent := messages.MessageItem{
+	parent := core.MessageItem{
 		UserName: "alice", DateStr: "2026-05-18", Timestamp: "3:04 PM", Text: "see attached",
-		Attachments: []messages.Attachment{
+		Attachments: []core.Attachment{
 			{Kind: "image", Name: "screenshot.png", URL: "https://files.slack.com/img.png"},
 			{Kind: "file", URL: "https://files.slack.com/doc.pdf"},
 		},
@@ -47,9 +46,9 @@ func TestThreadToMarkdown_Attachments(t *testing.T) {
 }
 
 func TestThreadToMarkdown_Reactions(t *testing.T) {
-	parent := messages.MessageItem{
+	parent := core.MessageItem{
 		UserName: "alice", DateStr: "2026-05-18", Timestamp: "3:04 PM", Text: "great idea",
-		Reactions: []messages.ReactionItem{
+		Reactions: []core.ReactionItem{
 			{Emoji: "thumbsup", Count: 3},
 		},
 	}
@@ -60,7 +59,7 @@ func TestThreadToMarkdown_Reactions(t *testing.T) {
 }
 
 func TestThreadToMarkdown_BoldConverted(t *testing.T) {
-	parent := messages.MessageItem{UserName: "alice", DateStr: "2026-05-18", Timestamp: "3:04 PM", Text: "*important*"}
+	parent := core.MessageItem{UserName: "alice", DateStr: "2026-05-18", Timestamp: "3:04 PM", Text: "*important*"}
 	got := ThreadToMarkdown(parent, nil, nil, nil)
 	if !strings.Contains(got, "**important**") {
 		t.Errorf("bold not converted, got:\n%s", got)

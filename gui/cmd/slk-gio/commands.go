@@ -13,8 +13,8 @@ import (
 
 	"github.com/gammons/slk/gui/backend"
 	"github.com/gammons/slk/gui/chat"
+	"github.com/gammons/slk/internal/slackfmt"
 	"github.com/gammons/slk/internal/text"
-	"github.com/gammons/slk/internal/ui/messages"
 )
 
 // popupRows is how many commands or completions the popup lists at once.
@@ -179,7 +179,7 @@ func choiceRow(gtx C, th *material.Theme, rv *richView, c chat.Choice) D {
 				case c.Emoji != "" && rv != nil:
 					return rv.emoji(gtx, c.Emoji, unit.Dp(18))
 				case c.Kind != "":
-					g := bodyLabel(th, messages.ChannelGlyph(string(c.Kind)))
+					g := bodyLabel(th, slackfmt.ChannelGlyph(string(c.Kind)))
 					g.Color = colMuted
 					return g.Layout(gtx)
 				}

@@ -1,6 +1,6 @@
 // Package export converts slk message data into portable file formats.
 // It has no UI dependencies (no lipgloss, no bubbletea) and operates
-// entirely on the messages.MessageItem data model.
+// entirely on the core.MessageItem data model.
 package export
 
 import (
@@ -9,14 +9,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/gammons/slk/internal/blockkit"
+	"github.com/gammons/slk/internal/core"
 	emojiutil "github.com/gammons/slk/internal/emoji"
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/slackfmt"
 )
 
 // ThreadToMarkdown converts a parent message and its replies into a
 // CommonMark markdown string. userNames and channelNames resolve
 // @mentions and #channel references in message bodies.
-func ThreadToMarkdown(parent messages.MessageItem, replies []messages.MessageItem, userNames, channelNames map[string]string) string {
+func ThreadToMarkdown(parent core.MessageItem, replies []core.MessageItem, userNames, channelNames map[string]string) string {
 	var b strings.Builder
 	b.WriteString(formatMessage(parent, userNames, channelNames))
 	for _, r := range replies {
@@ -25,7 +27,7 @@ func ThreadToMarkdown(parent messages.MessageItem, replies []messages.MessageIte
 	return strings.TrimRight(b.String(), "\n") + "\n"
 }
 
-func formatMessage(msg messages.MessageItem, userNames, channelNames map[string]string) string {
+func formatMessage(msg core.MessageItem, userNames, channelNames map[string]string) string {
 	var b strings.Builder
 
 	b.WriteString("**" + msg.UserName + "**")
@@ -33,7 +35,7 @@ func formatMessage(msg messages.MessageItem, userNames, channelNames map[string]
 	b.WriteString(msg.DateStr + " " + msg.Timestamp)
 	b.WriteByte('\n')
 
-	body := messages.SlackMrkdwnToCommonMark(messages.MessageTextSource(msg), userNames, channelNames)
+	body := slackfmt.MrkdwnToCommonMark(blockkit.MessageText(msg), userNames, channelNames)
 	b.WriteString(body)
 	b.WriteByte('\n')
 

@@ -1,4 +1,4 @@
-package messages
+package slackfmt
 
 import (
 	"testing"
@@ -58,5 +58,17 @@ func TestFlattenMrkdwnNilResolvers(t *testing.T) {
 	got := FlattenMrkdwn("<@U1> <#C1>", nil, nil)
 	if got != "@U1 #C1" {
 		t.Errorf("got %q, want %q", got, "@U1 #C1")
+	}
+}
+
+func TestFlattenUsergroupBareResolved(t *testing.T) {
+	out := FlattenMrkdwnWithUserGroups(
+		"ping <!subteam^S0AB12CD3> please",
+		nil,
+		nil,
+		map[string]string{"S0AB12CD3": "backend"},
+	)
+	if out != "ping @backend please" {
+		t.Errorf("FlattenMrkdwnWithUserGroups = %q; want %q", out, "ping @backend please")
 	}
 }

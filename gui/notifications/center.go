@@ -15,7 +15,7 @@ import (
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/mention"
 	"github.com/gammons/slk/internal/notify"
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/slackfmt"
 )
 
 // Note is one notification: what it says, and where clicking it leads.
@@ -168,7 +168,7 @@ func Title(m backend.Message, conv backend.Conversation) string {
 	case k == backend.KindGroupDM:
 		t += " in " + conv.Name
 	default:
-		t += " in " + messages.ChannelGlyph(string(k)) + conv.Name
+		t += " in " + slackfmt.ChannelGlyph(string(k)) + conv.Name
 	}
 	if m.ThreadTS != "" && m.ThreadTS != m.TS {
 		t += " (thread)"

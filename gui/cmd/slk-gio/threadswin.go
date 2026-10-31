@@ -18,7 +18,7 @@ import (
 
 	"github.com/gammons/slk/gui/backend"
 	"github.com/gammons/slk/gui/chat"
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/slackfmt"
 )
 
 // threadsWindow lists the threads the user follows, newest activity
@@ -181,7 +181,7 @@ func (t *threadsWindow) row(gtx C, s backend.ThreadSummary) D {
 					layout.Flexed(1, func(gtx C) D {
 						return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 							layout.Rigid(func(gtx C) D {
-								lbl := captionLabel(t.th, messages.ChannelGlyph(string(s.Kind))+" "+s.Channel)
+								lbl := captionLabel(t.th, slackfmt.ChannelGlyph(string(s.Kind))+" "+s.Channel)
 								lbl.Color = colMuted
 								lbl.MaxLines = 1
 								return lbl.Layout(gtx)

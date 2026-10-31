@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/export"
 	slackclient "github.com/gammons/slk/internal/slack"
-	"github.com/gammons/slk/internal/ui/messages"
 	"github.com/slack-go/slack"
 )
 
@@ -348,8 +348,8 @@ func slackUser(display, realName, handle string) *slackclient.UserProfile {
 
 func TestResolveExportNames_AuthorsAndMentions(t *testing.T) {
 	convs := []export.Conversation{{
-		Parent: messages.MessageItem{UserID: "U1", UserName: "U1", Text: "ping <@U2> and <@U1>"},
-		Replies: []messages.MessageItem{
+		Parent: core.MessageItem{UserID: "U1", UserName: "U1", Text: "ping <@U2> and <@U1>"},
+		Replies: []core.MessageItem{
 			{UserID: "U3", UserName: "carol", Text: "cc <@U404>"},
 			{UserID: "B1", UserName: "deploybot", Text: "done"},
 		},
@@ -385,7 +385,7 @@ func TestResolveExportNames_AuthorsAndMentions(t *testing.T) {
 }
 
 func TestResolveExportNames_RetriesAfterRateLimit(t *testing.T) {
-	convs := []export.Conversation{{Parent: messages.MessageItem{UserID: "U1", UserName: "U1"}}}
+	convs := []export.Conversation{{Parent: core.MessageItem{UserID: "U1", UserName: "U1"}}}
 	names := newUserNameStore(nil)
 	profiles := &fakeProfiles{
 		users: map[string]*slackclient.UserProfile{"U1": slackUser("alice", "", "")},
@@ -403,7 +403,7 @@ func TestResolveExportNames_RetriesAfterRateLimit(t *testing.T) {
 func TestResolveExportNames_CancelledDuringRateLimitWait(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	convs := []export.Conversation{{Parent: messages.MessageItem{UserID: "U1", UserName: "U1"}}}
+	convs := []export.Conversation{{Parent: core.MessageItem{UserID: "U1", UserName: "U1"}}}
 	profiles := &fakeProfiles{errs: map[string][]error{"U1": {&slack.RateLimitedError{RetryAfter: time.Hour}}}}
 
 	var warn bytes.Buffer
@@ -418,8 +418,8 @@ func TestResolveExportNames_CancelledDuringRateLimitWait(t *testing.T) {
 
 func TestResolveExportNames_WarnsAndKeepsIDWhenLookupFails(t *testing.T) {
 	convs := []export.Conversation{{
-		Parent:  messages.MessageItem{UserID: "U1", UserName: "U1", Text: "hi"},
-		Replies: []messages.MessageItem{{UserID: "U2", UserName: "U2", Text: "hello"}},
+		Parent:  core.MessageItem{UserID: "U1", UserName: "U1", Text: "hi"},
+		Replies: []core.MessageItem{{UserID: "U2", UserName: "U2", Text: "hello"}},
 	}}
 	names := newUserNameStore(nil)
 	profiles := &fakeProfiles{

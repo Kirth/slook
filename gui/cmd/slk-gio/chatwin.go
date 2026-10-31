@@ -20,7 +20,7 @@ import (
 	"github.com/gammons/slk/gui/backend"
 	"github.com/gammons/slk/gui/chat"
 	"github.com/gammons/slk/internal/emoji"
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/slackfmt"
 )
 
 // Message layout: the avatar column and the gap to the text, and the
@@ -235,7 +235,7 @@ func newChatWindow(h *hub, conv backend.Conversation, connected bool) *chatWindo
 }
 
 func (c *chatWindow) title() string {
-	return messages.ChannelGlyph(string(c.conv.Kind)) + " " + c.conv.Name
+	return slackfmt.ChannelGlyph(string(c.conv.Kind)) + " " + c.conv.Name
 }
 
 // hint is the composer's placeholder: "Message #general", or the
@@ -675,7 +675,7 @@ func (c *chatWindow) historyEdge(gtx C) D {
 	case c.pager.Loading:
 		text = "Loading older messages…"
 	case c.pager.AtStart:
-		text = "This is the beginning of " + messages.ChannelGlyph(string(c.conv.Kind)) + c.conv.Name
+		text = "This is the beginning of " + slackfmt.ChannelGlyph(string(c.conv.Kind)) + c.conv.Name
 		if c.conv.Kind == backend.KindDM || c.conv.Kind == backend.KindGroupDM {
 			text = "This is the beginning of your conversation with " + c.conv.Name
 		}

@@ -1,17 +1,16 @@
-// internal/ui/messages/dateseparator_test.go
-package messages
+package datefmt
 
 import (
-	"strconv"
 	"testing"
 	"time"
 )
 
-// FormatDateSeparator must agree with DateFromTS, which derives its date
-// string from the local day. Running the pair under a zone east of UTC
-// used to label yesterday's messages "Today", because the parsed date
-// (UTC midnight) was subtracted from a local midnight.
-func TestFormatDateSeparatorAcrossTimezones(t *testing.T) {
+// DateSeparator must agree with a date string derived from the local
+// day (what the frontends' DateFromTS helpers produce). Running the
+// pair under a zone east of UTC used to label yesterday's messages
+// "Today", because the parsed date (UTC midnight) was subtracted from a
+// local midnight.
+func TestDateSeparatorAcrossTimezones(t *testing.T) {
 	zones := []string{"UTC", "Europe/Kyiv", "Europe/Berlin", "Asia/Tokyo", "America/New_York", "Pacific/Kiritimati"}
 	for _, name := range zones {
 		t.Run(name, func(t *testing.T) {
@@ -41,7 +40,7 @@ func TestFormatDateSeparatorAcrossTimezones(t *testing.T) {
 				// Mid-day so the timestamp is unambiguously on its day.
 				ts := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, loc).
 					AddDate(0, 0, tc.offsetDays)
-				got := FormatDateSeparator(DateFromTS(formatSlackTS(ts)))
+				got := DateSeparator(localDay(ts))
 				if got != tc.want {
 					t.Errorf("offset %d days: got %q, want %q", tc.offsetDays, got, tc.want)
 				}
@@ -50,6 +49,8 @@ func TestFormatDateSeparatorAcrossTimezones(t *testing.T) {
 	}
 }
 
-func formatSlackTS(t time.Time) string {
-	return strconv.FormatInt(t.Unix(), 10) + ".000000"
+// localDay is the local-day date string of t's instant, as a Slack ts
+// read back through time.Unix yields it.
+func localDay(t time.Time) string {
+	return time.Unix(t.Unix(), 0).Format("2006-01-02")
 }

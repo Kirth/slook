@@ -507,20 +507,6 @@ func (m *Model) SetChannelType(chType string) {
 	m.channelType = chType
 }
 
-// ChannelGlyph returns the prefix glyph for a channel type: "◆" for
-// "private", "●" for "dm" and "group_dm", "#" otherwise. Used by the
-// messages-pane header and the thread breadcrumb.
-func ChannelGlyph(chType string) string {
-	switch chType {
-	case "private":
-		return "\u25c6" // ◆
-	case "dm", "group_dm":
-		return "\u25cf" // ●
-	default:
-		return "#"
-	}
-}
-
 // SetSearchTerms sets (or clears, with nil) the folded terms whose
 // word-prefix occurrences get highlighted in message text. Invalidates
 // the render cache.
@@ -2099,7 +2085,8 @@ func DateFromTS(ts string) string {
 	return t.Format("2006-01-02")
 }
 
-// nowFunc is the clock FormatDateSeparator reads. Production leaves it
+// nowFunc is the clock FormatShortDate and LongTimestamp read (datefmt
+// holds FormatDateSeparator's; SetNowFunc sets both). Production leaves it
 // as time.Now; tests override it via SetNowFunc so that day-divider
 // labels ("Today", "Yesterday", weekday names) are deterministic.
 //
@@ -2118,15 +2105,6 @@ func DateFromTS(ts string) string {
 // caller, would need this to become an atomic.Value or a struct field.
 var nowFunc = time.Now
 
-// SetNowFunc injects a clock for tests. Pass nil to revert to time.Now.
-func SetNowFunc(fn func() time.Time) {
-	if fn == nil {
-		nowFunc = time.Now
-		return
-	}
-	nowFunc = fn
-}
-
 // FormatShortDate turns a "2006-01-02" date string into a compact
 // label for a message header: "Today", "Yesterday", a weekday within
 // the last week, "Jan 2" earlier this year, or "Jan 2, 2006" before
@@ -2144,37 +2122,6 @@ func FormatShortDate(dateStr string) string {
 		return d.Format("Jan 2")
 	}
 	return d.Format("Jan 2, 2006")
-}
-
-// FormatDateSeparator turns a "2006-01-02" date string into the
-// human-readable label used in day-divider rows ("Today", "Yesterday",
-// a weekday name within the last week, or a fully-qualified date).
-// Exported so the thread pane renders identical labels to the channel
-// pane.
-func FormatDateSeparator(dateStr string) string {
-	d, err := time.Parse("2006-01-02", dateStr)
-	if err != nil {
-		return dateStr
-	}
-	// Compare calendar days, not elapsed time: both endpoints are anchored
-	// to UTC midnight so the delta is always a whole number of days.
-	now := nowFunc()
-	// time.Parse already yields UTC midnight; restating it is defensive, not
-	// load-bearing.
-	dDay := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC)
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	days := int(today.Sub(dDay).Hours() / 24)
-
-	switch {
-	case days <= 0:
-		return "Today"
-	case days == 1:
-		return "Yesterday"
-	case days < 7:
-		return d.Format("Monday")
-	default:
-		return d.Format("Monday, January 2, 2006")
-	}
 }
 
 // summarizeMessageItems collapses a slice into a compact

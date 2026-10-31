@@ -2,18 +2,17 @@ package export
 
 import (
 	"fmt"
+	"github.com/gammons/slk/internal/core"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
-
-	"github.com/gammons/slk/internal/ui/messages"
 )
 
 // SaveThread writes the thread as Markdown into ExportDir and returns
 // the new file's path. The name is built from channelName and the time.
-func SaveThread(parent messages.MessageItem, replies []messages.MessageItem, userNames, channelNames map[string]string, channelName string) (string, error) {
+func SaveThread(parent core.MessageItem, replies []core.MessageItem, userNames, channelNames map[string]string, channelName string) (string, error) {
 	content := ThreadToMarkdown(parent, replies, userNames, channelNames)
 
 	dir, err := ExportDir()

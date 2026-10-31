@@ -2,14 +2,13 @@ package export
 
 import (
 	"errors"
+	"github.com/gammons/slk/internal/core"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/gammons/slk/internal/ui/messages"
 )
 
 const testTZ = "America/New_York"
@@ -25,18 +24,18 @@ func testChannel(t *testing.T) Channel {
 		Window:    mustWindow(t, "2026-04-01", "2026-07-01", testTZ, 14),
 		Conversations: []Conversation{
 			{
-				Parent: messages.MessageItem{TS: tsAt(t, testTZ, "2026-04-02 14:00:00"), UserID: "U2", UserName: "bob", Text: "who owns <#C9|deploys>?", ReplyCount: 2},
-				Replies: []messages.MessageItem{
+				Parent: core.MessageItem{TS: tsAt(t, testTZ, "2026-04-02 14:00:00"), UserID: "U2", UserName: "bob", Text: "who owns <#C9|deploys>?", ReplyCount: 2},
+				Replies: []core.MessageItem{
 					{TS: tsAt(t, testTZ, "2026-04-02 14:05:00"), UserID: "U1", UserName: "alice", Text: "<@U3> does"},
 					{TS: tsAt(t, testTZ, "2026-04-03 09:00:00"), UserID: "U3", UserName: "carol", Text: "confirmed"},
 				},
 			},
 			{
-				Parent: messages.MessageItem{TS: tsAt(t, testTZ, "2026-04-01 09:30:15"), UserID: "U1", UserName: "alice", Text: "standalone *note*"},
+				Parent: core.MessageItem{TS: tsAt(t, testTZ, "2026-04-01 09:30:15"), UserID: "U1", UserName: "alice", Text: "standalone *note*"},
 			},
 			{
-				Parent:          messages.MessageItem{TS: tsAt(t, testTZ, "2025-11-20 08:00:00"), UserID: "U3", UserName: "carol", Text: "old question", ReplyCount: 5},
-				Replies:         []messages.MessageItem{{TS: tsAt(t, testTZ, "2026-05-01 10:00:00"), UserID: "U2", UserName: "bob", Text: "late answer"}},
+				Parent:          core.MessageItem{TS: tsAt(t, testTZ, "2025-11-20 08:00:00"), UserID: "U3", UserName: "carol", Text: "old question", ReplyCount: 5},
+				Replies:         []core.MessageItem{{TS: tsAt(t, testTZ, "2026-05-01 10:00:00"), UserID: "U2", UserName: "bob", Text: "late answer"}},
 				ParentIsContext: true,
 			},
 		},
@@ -125,8 +124,8 @@ func TestWriteChannel_FailedWriteLeavesDirEmptyForRetry(t *testing.T) {
 		Name:   "general",
 		Window: mustWindow(t, "2026-04-01", "2026-04-02", testTZ, 0),
 		Conversations: []Conversation{
-			{Parent: messages.MessageItem{TS: tsAt(t, testTZ, "2026-04-01 09:00:00"), UserName: "alice", Text: "fine"}},
-			{Parent: messages.MessageItem{TS: bad, UserName: "bob", Text: "unwritable"}},
+			{Parent: core.MessageItem{TS: tsAt(t, testTZ, "2026-04-01 09:00:00"), UserName: "alice", Text: "fine"}},
+			{Parent: core.MessageItem{TS: bad, UserName: "bob", Text: "unwritable"}},
 		},
 	}
 	root := t.TempDir()
@@ -259,7 +258,7 @@ func TestWriteChannel_TimesFollowTheWindowTimezone(t *testing.T) {
 		Name:   "general",
 		Window: mustWindow(t, "2026-04-01", "2026-04-02", "Asia/Tokyo", 0),
 		// 23:30 on Mar 31 in New York is 12:30 on Apr 1 in Tokyo.
-		Conversations: []Conversation{{Parent: messages.MessageItem{TS: tsAt(t, testTZ, "2026-03-31 23:30:00"), UserName: "alice", Text: "hi", DateStr: "stale", Timestamp: "stale"}}},
+		Conversations: []Conversation{{Parent: core.MessageItem{TS: tsAt(t, testTZ, "2026-03-31 23:30:00"), UserName: "alice", Text: "hi", DateStr: "stale", Timestamp: "stale"}}},
 	}
 	dir := filepath.Join(t.TempDir(), "out")
 	if _, err := WriteChannel(prepareOutput(t, dir), ch, nil, nil); err != nil {
@@ -280,8 +279,8 @@ func TestWriteChannel_SameSecondParentsGetDistinctFiles(t *testing.T) {
 		Name:   "general",
 		Window: mustWindow(t, "2026-04-01", "2026-04-02", testTZ, 0),
 		Conversations: []Conversation{
-			{Parent: messages.MessageItem{TS: base + "000200", UserName: "bob", Text: "second"}},
-			{Parent: messages.MessageItem{TS: base + "000100", UserName: "alice", Text: "first"}},
+			{Parent: core.MessageItem{TS: base + "000200", UserName: "bob", Text: "second"}},
+			{Parent: core.MessageItem{TS: base + "000100", UserName: "alice", Text: "first"}},
 		},
 	}
 	dir := filepath.Join(t.TempDir(), "out")
@@ -300,8 +299,8 @@ func TestWriteChannel_UnparseableTimestampsGetDistinctFiles(t *testing.T) {
 		Name:   "general",
 		Window: mustWindow(t, "2026-04-01", "2026-04-02", testTZ, 0),
 		Conversations: []Conversation{
-			{Parent: messages.MessageItem{TS: "", UserName: "a", Text: "FIRST"}},
-			{Parent: messages.MessageItem{TS: "garbage", UserName: "b", Text: "SECOND"}},
+			{Parent: core.MessageItem{TS: "", UserName: "a", Text: "FIRST"}},
+			{Parent: core.MessageItem{TS: "garbage", UserName: "b", Text: "SECOND"}},
 		},
 	}
 	dir := filepath.Join(t.TempDir(), "out")
@@ -491,13 +490,13 @@ func TestDefaultChannelDir(t *testing.T) {
 func TestSnippet(t *testing.T) {
 	cases := []struct {
 		name string
-		msg  messages.MessageItem
+		msg  core.MessageItem
 		want string
 	}{
-		{"first non-blank line", messages.MessageItem{Text: "\n\n  hello  \nworld"}, "hello"},
-		{"entities flattened", messages.MessageItem{Text: "<https://example.com|docs> &amp; <@U1>"}, "docs & @alice"},
-		{"no text", messages.MessageItem{}, "(no text)"},
-		{"truncated by runes", messages.MessageItem{Text: strings.Repeat("é", 100)}, strings.Repeat("é", 80) + "..."},
+		{"first non-blank line", core.MessageItem{Text: "\n\n  hello  \nworld"}, "hello"},
+		{"entities flattened", core.MessageItem{Text: "<https://example.com|docs> &amp; <@U1>"}, "docs & @alice"},
+		{"no text", core.MessageItem{}, "(no text)"},
+		{"truncated by runes", core.MessageItem{Text: strings.Repeat("é", 100)}, strings.Repeat("é", 80) + "..."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -509,7 +508,7 @@ func TestSnippet(t *testing.T) {
 }
 
 func TestIndexEntry_EscapesLinkLabel(t *testing.T) {
-	conv := Conversation{Parent: messages.MessageItem{UserName: "alice", Timestamp: "09:00", Text: `[WIP] fix a\b`}}
+	conv := Conversation{Parent: core.MessageItem{UserName: "alice", Timestamp: "09:00", Text: `[WIP] fix a\b`}}
 	got := indexEntry(conv, "f.md", nil, nil)
 	if want := `- [09:00 alice: \[WIP\] fix a\\b](f.md)` + "\n"; got != want {
 		t.Errorf("entry = %q, want %q", got, want)

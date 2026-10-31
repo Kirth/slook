@@ -13,10 +13,12 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/gammons/slk/internal/blockkit"
 	"github.com/gammons/slk/internal/cache"
+	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/export"
 	slackclient "github.com/gammons/slk/internal/slack"
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/slackfmt"
 	"github.com/slack-go/slack"
 )
 
@@ -188,13 +190,13 @@ func exportConversations(raw []rawConversation, names *userNameStore, db *cache.
 // exportMessageItem converts one Slack message for export. Display
 // times are left blank; export.WriteChannel stamps them in the export
 // timezone.
-func exportMessageItem(m slack.Message, names *userNameStore, db *cache.DB) messages.MessageItem {
+func exportMessageItem(m slack.Message, names *userNameStore, db *cache.DB) core.MessageItem {
 	authorID, userName := messageAuthor(m, names, db, nil)
-	reactions := make([]messages.ReactionItem, 0, len(m.Reactions))
+	reactions := make([]core.ReactionItem, 0, len(m.Reactions))
 	for _, r := range m.Reactions {
-		reactions = append(reactions, messages.ReactionItem{Emoji: r.Name, Count: r.Count, UserIDs: r.Users})
+		reactions = append(reactions, core.ReactionItem{Emoji: r.Name, Count: r.Count, UserIDs: r.Users})
 	}
-	return messages.MessageItem{
+	return core.MessageItem{
 		TS:                m.Timestamp,
 		UserID:            authorID,
 		UserName:          userName,
@@ -229,11 +231,11 @@ func (r *mentionRecorder) record(id string) (string, bool) {
 func unresolvedUserIDs(convs []export.Conversation, names *userNameStore) []string {
 	rec := &mentionRecorder{ids: make(map[string]bool)}
 	for _, conv := range convs {
-		for _, msg := range append([]messages.MessageItem{conv.Parent}, conv.Replies...) {
+		for _, msg := range append([]core.MessageItem{conv.Parent}, conv.Replies...) {
 			if msg.UserID != "" && msg.UserName == msg.UserID {
 				rec.ids[msg.UserID] = true
 			}
-			messages.FlattenMrkdwn(messages.MessageTextSource(msg), rec.record, nil)
+			slackfmt.FlattenMrkdwn(blockkit.MessageText(msg), rec.record, nil)
 		}
 	}
 	var ids []string
@@ -310,7 +312,7 @@ func profileDisplayName(u *slackclient.UserProfile) string {
 
 // applyAuthorName replaces a raw-ID author name with its resolved
 // name when names has one.
-func applyAuthorName(msg messages.MessageItem, names *userNameStore) messages.MessageItem {
+func applyAuthorName(msg core.MessageItem, names *userNameStore) core.MessageItem {
 	if msg.UserName == msg.UserID {
 		if name, _ := names.Get(msg.UserID); name != "" {
 			msg.UserName = name

@@ -73,30 +73,6 @@ func TestRenderUsergroupMentionLabelWithoutAt(t *testing.T) {
 	}
 }
 
-func TestCommonMarkUsergroupMention(t *testing.T) {
-	out := SlackMrkdwnToCommonMarkWithUserGroups(
-		"ping <!subteam^S0AB12CD3> and <!subteam^S9|@qa>",
-		nil,
-		nil,
-		map[string]string{"S0AB12CD3": "backend"},
-	)
-	if out != "ping @backend and @qa" {
-		t.Errorf("SlackMrkdwnToCommonMarkWithUserGroups = %q; want %q", out, "ping @backend and @qa")
-	}
-}
-
-func TestFlattenUsergroupBareResolved(t *testing.T) {
-	out := FlattenMrkdwnWithUserGroups(
-		"ping <!subteam^S0AB12CD3> please",
-		nil,
-		nil,
-		map[string]string{"S0AB12CD3": "backend"},
-	)
-	if out != "ping @backend please" {
-		t.Errorf("FlattenMrkdwnWithUserGroups = %q; want %q", out, "ping @backend please")
-	}
-}
-
 // App.SetUserGroups fires on every workspace switch, so an unchanged
 // map must not bust the render cache.
 func TestSetUserGroupsSkipsCacheBustWhenUnchanged(t *testing.T) {

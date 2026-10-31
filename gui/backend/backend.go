@@ -18,7 +18,7 @@ import (
 	imgpkg "github.com/gammons/slk/internal/image"
 )
 
-// Kind is a conversation's type, spelled as messages.ChannelGlyph
+// Kind is a conversation's type, spelled as slackfmt.ChannelGlyph
 // expects it.
 type Kind string
 

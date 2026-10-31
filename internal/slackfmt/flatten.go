@@ -1,4 +1,4 @@
-package messages
+package slackfmt
 
 import (
 	"regexp"
@@ -8,31 +8,17 @@ import (
 )
 
 // Regexes for the entity forms FlattenMrkdwn handles beyond the shared
-// ones in render.go. They live here (not render.go's var block) because
-// the styled renderer never needed them: Slack normally emits bare
-// <@UID> mentions, but search.messages snippets can carry the labeled
-// form, and <!here>-style broadcasts appear in snippets as raw tokens.
+// ones in slackfmt.go: Slack normally emits bare <@UID> mentions, but
+// search.messages snippets can carry the labeled form, and
+// <!here>-style broadcasts appear with an optional |label.
 var (
 	userMentionWithLabelRe = regexp.MustCompile(`<@([A-Z0-9]+)\|([^>]+)>`)
 	specialMentionRe       = regexp.MustCompile(`<!(here|channel|everyone)(?:\|[^>]*)?>`)
-	// Usergroup mentions: <!subteam^SID|@label> or bare <!subteam^SID>.
-	// Group 1 is the ID; group 2 is the optional label (conventionally
-	// already "@"-prefixed on the wire, but not guaranteed).
-	usergroupMentionRe = regexp.MustCompile(`<!subteam\^([A-Z0-9]+)(?:\|([^>]+))?>`)
 )
 
-// usergroupDisplay returns the "@handle" display text for a subteam
-// token. The embedded label wins when present; bare tokens resolve
-// through the provided workspace-scoped usergroup map; unresolvable IDs
-// fall back to a generic "@group" rather than leaking the raw
-// <!subteam^S...> wire form.
-func usergroupDisplay(groups map[string]string, id, label string) string {
-	return usergroups.Display(groups, id, label)
-}
-
 // FlattenMrkdwn converts Slack mrkdwn entity tokens into plain text for
-// single-style contexts (e.g. search-result snippets) where the styled
-// renderer in render.go would be overkill:
+// single-style contexts (e.g. search-result snippets, exports) where a
+// styled renderer would be overkill:
 //
 //	<@U1|label>      -> @label
 //	<@U1>            -> @name via resolveUser, or @U1 when unknown
@@ -56,7 +42,7 @@ func FlattenMrkdwnWithUserGroups(text string, resolveUser, resolveChannel func(i
 	// Date tokens first: their payload never contains other entity
 	// forms, and handling them up front keeps specialMentionRe from
 	// having to exclude `<!date...>`.
-	text = dateTokenRe.ReplaceAllStringFunc(text, renderDateToken)
+	text = ExpandDateTokens(text)
 
 	text = linkWithLabelRe.ReplaceAllStringFunc(text, func(match string) string {
 		return linkWithLabelRe.FindStringSubmatch(match)[2]
@@ -81,8 +67,8 @@ func FlattenMrkdwnWithUserGroups(text string, resolveUser, resolveChannel func(i
 		return "@" + id
 	})
 
-	text = channelMentionRe.ReplaceAllStringFunc(text, func(match string) string {
-		groups := channelMentionRe.FindStringSubmatch(match)
+	text = channelRefRe.ReplaceAllStringFunc(text, func(match string) string {
+		groups := channelRefRe.FindStringSubmatch(match)
 		id, name := groups[1], groups[2]
 		if name == "" && resolveChannel != nil {
 			if resolved, ok := resolveChannel(id); ok && resolved != "" {
@@ -99,13 +85,13 @@ func FlattenMrkdwnWithUserGroups(text string, resolveUser, resolveChannel func(i
 		return "@" + specialMentionRe.FindStringSubmatch(match)[1]
 	})
 
-	text = usergroupMentionRe.ReplaceAllStringFunc(text, func(match string) string {
-		groups := usergroupMentionRe.FindStringSubmatch(match)
-		return usergroupDisplay(userGroups, groups[1], groups[2])
+	text = subteamMentionRe.ReplaceAllStringFunc(text, func(match string) string {
+		groups := subteamMentionRe.FindStringSubmatch(match)
+		return usergroups.Display(userGroups, groups[1], groups[2])
 	})
 
 	// Wire-format escapes, decoded last so they can't be reinterpreted
-	// as entity delimiters (same ordering rule as render.go).
+	// as entity delimiters (same ordering rule as the styled renderers).
 	text = strings.ReplaceAll(text, "&lt;", "<")
 	text = strings.ReplaceAll(text, "&gt;", ">")
 	text = strings.ReplaceAll(text, "&amp;", "&")

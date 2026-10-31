@@ -69,3 +69,21 @@ func TestMentionedUserIDs(t *testing.T) {
 		t.Errorf("MentionedUserIDs(none) = %v; want empty", got)
 	}
 }
+
+func TestChannelGlyph(t *testing.T) {
+	cases := []struct {
+		chType    string
+		wantGlyph string
+	}{
+		{"channel", "#"},
+		{"", "#"}, // unspecified defaults to #
+		{"private", "◆"},
+		{"dm", "●"},
+		{"group_dm", "●"},
+	}
+	for _, tc := range cases {
+		if got := ChannelGlyph(tc.chType); got != tc.wantGlyph {
+			t.Errorf("ChannelGlyph(%q) = %q, want %q", tc.chType, got, tc.wantGlyph)
+		}
+	}
+}

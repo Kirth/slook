@@ -1,4 +1,4 @@
-package messages
+package slackfmt
 
 import (
 	"fmt"
@@ -22,6 +22,20 @@ import (
 // string, so rendering the FALLBACK (slk's previous behavior) drops the
 // times entirely.
 
+// dateTokenRe matches Slack date tokens: <!date^TIMESTAMP^FORMAT|FALLBACK>
+// (Slack's canonical wire form is |FALLBACK|LINK; some senders use a
+// caret-form ^LINK instead). Common in bot/unfurl content (Linear, Jira,
+// GitHub, calendar apps). Group 1 is the body between <!date^ and >;
+// renderDateToken expands the FORMAT string in the local timezone,
+// falling back to FALLBACK on malformed input.
+var dateTokenRe = regexp.MustCompile(`<!date\^([^>]*)>`)
+
+// ExpandDateTokens replaces every <!date^…> token in text with its
+// rendering (see renderDateToken).
+func ExpandDateTokens(text string) string {
+	return dateTokenRe.ReplaceAllStringFunc(text, renderDateToken)
+}
+
 // slackDateFormatRe matches Slack's mrkdwn date tokens. Longer forms
 // come first so {date_num} / {date_short} are never clipped to
 // {date}, and {time_secs} to {time}.
@@ -41,11 +55,10 @@ var slackDateTokens = map[string]string{
 // render with. It mirrors the appearance.timestamp_format config
 // setting, seeded once at startup by SetDateTokenTimeLayout, so clock
 // renderings from <!date tokens match the clock renderings of slk's
-// own message stamps. Package-level rather than threaded through
-// RenderSlackMarkdownOpts because every render path (messages pane,
-// thread pane, blockkit blocks, activity/threads previews, search
-// snippets) must agree, and the styles package already holds theme
-// state the same way. The default matches timestamp_format's default.
+// own message stamps. Package-level rather than threaded through each
+// renderer's options because every render path (both frontends' message
+// views, Block Kit blocks, previews, search snippets, exports) must
+// agree. The default matches timestamp_format's default.
 var dateTokenTimeLayout = "3:04 PM"
 
 // SetDateTokenTimeLayout overrides the {time} clock layout. Empty

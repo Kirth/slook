@@ -27,7 +27,7 @@ import (
 	"github.com/gammons/slk/gui/rich"
 	"github.com/gammons/slk/gui/search"
 	"github.com/gammons/slk/internal/searchq"
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/slackfmt"
 )
 
 // searchDebounce is how long typing pauses before a search runs.
@@ -912,7 +912,7 @@ func (s *searchWindow) coverageRow(gtx C, c backend.Coverage) D {
 			layout.Flexed(1, func(gtx C) D {
 				name := bodyLabel(s.th, strings.TrimPrefix(c.Name, "#"))
 				if c.Kind == backend.KindChannel || c.Kind == backend.KindPrivate {
-					name.Text = messages.ChannelGlyph(string(c.Kind)) + " " + name.Text
+					name.Text = slackfmt.ChannelGlyph(string(c.Kind)) + " " + name.Text
 				}
 				name.MaxLines = 1
 				if c.Messages == 0 {

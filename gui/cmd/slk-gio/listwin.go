@@ -25,7 +25,7 @@ import (
 	"github.com/gammons/slk/gui/rich"
 	"github.com/gammons/slk/gui/sidebar"
 	"github.com/gammons/slk/internal/emoji"
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/slackfmt"
 )
 
 // listWindow is the conversation list: a filter, then the conversations
@@ -570,7 +570,7 @@ func (l *listWindow) row(gtx C, c backend.Conversation, quiet bool) D {
 								}, l.presence[c.PeerID], colBg)
 							})
 						}
-						g := bodyLabel(l.th, messages.ChannelGlyph(string(c.Kind)))
+						g := bodyLabel(l.th, slackfmt.ChannelGlyph(string(c.Kind)))
 						g.Color = colMuted
 						return g.Layout(gtx)
 					}),

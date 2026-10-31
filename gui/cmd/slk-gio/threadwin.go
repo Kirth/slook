@@ -22,7 +22,7 @@ import (
 
 	"github.com/gammons/slk/gui/backend"
 	"github.com/gammons/slk/gui/chat"
-	"github.com/gammons/slk/internal/ui/messages"
+	"github.com/gammons/slk/internal/slackfmt"
 )
 
 var (
@@ -134,7 +134,7 @@ func newThreadWindow(h *hub, conv backend.Conversation, ts string, connected boo
 	}
 	t.list.Axis = layout.Vertical
 	t.w.Option(
-		app.Title("Thread in "+messages.ChannelGlyph(string(conv.Kind))+" "+conv.Name+" — "+h.be.Workspace()),
+		app.Title("Thread in "+slackfmt.ChannelGlyph(string(conv.Kind))+" "+conv.Name+" — "+h.be.Workspace()),
 		app.Size(unit.Dp(520), unit.Dp(680)),
 		app.Decorated(false), // the header bar is ours
 	)
@@ -193,14 +193,14 @@ func (t *threadWindow) castLabel() string {
 	case backend.KindDM, backend.KindGroupDM:
 		return "Also send as direct message"
 	}
-	return "Also send to " + messages.ChannelGlyph(string(t.conv.Kind)) + t.conv.Name
+	return "Also send to " + slackfmt.ChannelGlyph(string(t.conv.Kind)) + t.conv.Name
 }
 
 func (t *threadWindow) headerSpec() headerSpec {
 	spec := headerSpec{
 		Seamless: true, // the parent card continues the bar
 		Title:    "Thread",
-		Subtitle: messages.ChannelGlyph(string(t.conv.Kind)) + " " + t.conv.Name,
+		Subtitle: slackfmt.ChannelGlyph(string(t.conv.Kind)) + " " + t.conv.Name,
 		Leading:  func(gtx C) D { return tile(gtx, t.th, leadingSize, tint(colAccent), iconThread, "") },
 		Actions: []headerAction{{icon: iconChannel, onClick: func() {
 			t.h.openChatAt(t.conv, t.key.ts)
