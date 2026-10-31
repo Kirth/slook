@@ -552,3 +552,104 @@ Built to the scratchpad (`go build -o <scratch>/bin/slk-gio`, not `make gui`: th
 - `internal/core.ChannelService.SearchRemote` and the AGENTS.md row "Resolve a command's channel argument" describe the TUI path; both go with Phase 5.
 - The picker lists only people slk has seen (`Backend.People`, no request); edgeapi `users/search` (`edge.UsersSearch`) could find the rest with the same `RemoteSearch` debounce.
 - `/msg`'s text dropped when the DM already has a draft is not given back to the composer it was typed in (the TUI's `offerTypedBack`).
+
+## Phase 4.3 — File upload / paste
+
+### Commit 1 — `clipboard, attach, filepick: desktop clipboard, attachments and a file chooser without a toolkit`
+
+- Commit: `aab7c562`
+- `internal/clipboard`: `ReadImage() ([]byte, bool)`, `ReadText() string`. Wayland (`WAYLAND_DISPLAY` set, `wl-paste` installed): `wl-paste --no-newline --type image/png` / `--type text`; X11 (`DISPLAY`, `xclip`): `xclip -selection clipboard [-t image/png] -o`; neither → nothing. 3 s timeout per read; an image must start with the PNG signature. Environment (`getenv`, `lookPath`, `run`) swappable for tests.
+- `internal/attach`: `MaxSize` (10 MB), `ResolvePath` (the TUI's `resolveFilePath`, plus `file://` URLs), `HumanSize`, `FromPath` (`ErrNotAFile` = treat as text, `ErrEmpty`), `FromImage(png, now)` → `slk-paste-2006-01-02-15-04-05.png`.
+- `internal/filepick`: `Choose(ctx)` — zenity `--file-selection --multiple --separator=\n`, else kdialog `--getopenfilename --multiple --separate-output`, else yad `--file --multiple`; exit 1 (and yad's 252) = cancelled = no files, no error; `ErrNoChooser` "no file chooser found (install zenity)".
+- `cmd/slk/clipboard_wayland.go` deleted (no caller in the CLI).
+- AGENTS.md: three rows (clipboard, attach, filepick) and the "Copy text to the clipboard" row points at the reader.
+
+### Commit 2 — `gui: attach and upload files from the clipboard, a path or a file chooser`
+
+- Commit: `528fe2ec`
+- Backend: `Upload(ctx, channelID, threadTS, files []core.PendingAttachment, caption, progress func(done, total int)) error` after `SendReply`. `gui/backend/upload.go`: files one at a time, `progress(i+1, n)` as each starts, 60 s per file, bytes or `os.Open(Path)` (size re-read from the open file), caption on the last only, error `uploading %s (%d/%d): %w`, then `go s.fetchThread` / `go s.catchUp` (only with a cache). Not optimistic. Test `TestUpload_SendsEachFileWithTheCaptionOnTheLast` (slacktest: `files.getUploadURLExternal` ×2, the PUT, `files.completeUploadExternal` ×2, `initial_comment` only on the second; a missing path names the file and its place).
+- Fake (`fake_upload.go`): one "You" message (reply in a thread) with the caption's mrkdwn + `rich.Image` (`fake://<name>`, 640×400) for `image/*` or `rich.File`, progress per file, `MessagePosted`. `TestFakeUploadPostsFilesWithCaption`.
+- `gui/chat/attach.go`: `Attachments` (`Add` with "Image|File too large (12.3 MB > 10 MB limit)" and `-2`/`-3` names, `Remove`, `Empty`, `Total`), `UploadNote`.
+- GUI (`gui/cmd/slk-gio/attach.go`, hooks in `compose.go`): Ctrl+V key filter before readline and the editor → off the UI goroutine `clipboard.ReadImage` → `attach.FromImage`, else `attach.ResolvePath(clipboard.ReadText())` → `FromPath`, else `pasteText` → next frame `clipboard.ReadCmd{Tag: &composer}` so the editor pastes the text itself. Paperclip `iconButton` (`iconAttach`, `icons.EditorAttachFile`) → `filepick.Choose`. Chips (name, size, ×) above the editor via `wrapRow`; while uploading the editor is read-only, chips muted without ×, hint "Uploading…", the note line shows `UploadNote`, Enter does nothing. Enter with files → `submitFiles` (caption = trimmed text in wire form; a slash command is not run). Success clears files + text; failure keeps both, "Not sent: …". `chatState`/`threadState` carry `uploadState` (files, uploading, note); the composer's `deliver` is `hub.toChat` / new `hub.toThread`, so progress and the end of an upload in flight reach the replacement window.
+- README: paragraph after the composer-completion section; "Sending files" bullet → "**Dropping files** onto a window does nothing: Gio has no drag-and-drop from the desktop." AGENTS.md: one Gio row.
+
+### Verify (4.3) — run at `528fe2ec` (`-count=1 -v` added)
+
+```
+$ cd gui && go test -count=1 -v ./backend -run 'TestFakeUpload|TestUpload_' | grep -E "^(--- |ok|FAIL)"
+--- PASS: TestFakeUploadPostsFilesWithCaption (0.00s)
+--- PASS: TestUpload_SendsEachFileWithTheCaptionOnTheLast (0.02s)
+ok  	github.com/gammons/slk/gui/backend	0.021s
+$ go test -count=1 -v ./chat -run 'TestAttachments|TestUploadNote' | grep -E "^(--- |ok|FAIL)"
+--- PASS: TestAttachmentsRefuseLargeFiles (0.00s)
+--- PASS: TestAttachmentsRenameDuplicates (0.00s)
+--- PASS: TestUploadNote (0.00s)
+ok  	github.com/gammons/slk/gui/chat	0.005s
+$ go test -count=1 -v ./cmd/slk-gio -run 'TestComposer' | grep -E "^(--- |ok|FAIL)"
+--- PASS: TestComposerUploadsAttachedFilesWithTheCaption (0.00s)
+--- PASS: TestComposerKeepsFilesAndCaptionWhenTheUploadFails (0.00s)
+--- PASS: TestComposerRefusesLargeFilesAndCarriesFilesOnMove (0.00s)
+ok  	github.com/gammons/slk/gui/cmd/slk-gio	0.008s
+$ go build ./... && go vet ./... && gofmt -l . && go test -count=1 ./... -race
+ok  	github.com/gammons/slk/gui/backend	4.474s
+ok  	github.com/gammons/slk/gui/chat	1.023s
+ok  	github.com/gammons/slk/gui/cmd/slk-gio	9.704s
+ok  	github.com/gammons/slk/gui/motion	1.011s
+ok  	github.com/gammons/slk/gui/notifications	1.029s
+ok  	github.com/gammons/slk/gui/palette	1.012s
+ok  	github.com/gammons/slk/gui/rich	1.017s
+ok  	github.com/gammons/slk/gui/search	1.017s
+ok  	github.com/gammons/slk/gui/selection	1.014s
+ok  	github.com/gammons/slk/gui/sidebar	1.014s
+ok  	github.com/gammons/slk/gui/textedit	1.013s
+exit=0
+$ cd .. && go test -count=1 -v ./internal/attach ./internal/clipboard ./internal/filepick | grep -E "^(--- |ok|FAIL)"
+--- PASS: TestResolvePath (0.00s)
+--- PASS: TestHumanSize (0.00s)
+--- PASS: TestFromPath (0.00s)
+--- PASS: TestFromImage (0.00s)
+ok  	github.com/gammons/slk/internal/attach	0.003s
+--- PASS: TestReadImageOnWayland (0.00s)
+--- PASS: TestReadImageOnX11 (0.00s)
+--- PASS: TestReadImageWithTextOnly (0.00s)
+--- PASS: TestReadImageRefusesWhatIsNotAPNG (0.00s)
+--- PASS: TestReadWithoutATool (0.00s)
+--- PASS: TestReadText (0.00s)
+ok  	github.com/gammons/slk/internal/clipboard	0.001s
+--- PASS: TestChooseReadsOnePathPerLine (0.00s)
+--- PASS: TestChooseFallsBackToKdialogThenYad (0.00s)
+--- PASS: TestChooseCancelledIsNothing (0.00s)
+--- PASS: TestChooseFailure (0.00s)
+--- PASS: TestChooseWithoutAChooser (0.00s)
+ok  	github.com/gammons/slk/internal/filepick	0.002s
+```
+
+Root module at `528fe2ec`: `go build ./... && go vet ./... && gofmt -l .` clean; `go test -count=1 ./...` every package `ok`. At `aab7c562` both modules were also build/vet/gofmt-clean and `cd gui && go test ./... -race` all `ok`.
+
+### Manual (`-fake`), performed
+
+Run in a private X server so neither the user's clipboard nor screen was touched: `Xvfb :97` (from `nix-shell -p xvfb`), the binary built to the scratchpad, launched as `<scratch>/slk-gio -fake -fake-every 0` with `WAYLAND_DISPLAY` unset, `DISPLAY=:97`, zenity (`nix-shell -p zenity`) on `PATH`, and for the chooser `GDK_DEBUG=no-portals` plus a dead `DBUS_SESSION_BUS_ADDRESS` (see deviation 6). Driven with `xdotool` (key, type, and clicks — on `:97` they do not move the user's pointer), frames with `ffmpeg -f x11grab -i :97`, clipboard set with `xclip -display :97`. Stopped with `pkill -f "^<scratch>/slk-gio -fake"`; the user's `slk-gio` (pid 450995) was untouched.
+
+- Image paste: `xclip -selection clipboard -t image/png -i shot.png`, Ctrl+V in #general → chip "slk-paste-2026-10-31-12-31-57.png 48 KB ×", hint "Add a message, or press Enter to send the files".
+- Path paste: clipboard = `<scratch>/some.pdf` (300 000 bytes), Ctrl+V → second chip "some.pdf 292 KB" (before the HumanSize change, deviation 4). Plain text on the clipboard, Ctrl+V → "hello from the clipboard" in the composer, no chip.
+- Send: Ctrl+A, `photos`, Enter → "You: photos" with the picture and a "some.pdf 293 KB application/pdf" chip; composer emptied. The fake uploads instantly, so "Uploading 1/2…" was not on any captured frame at 30 fps; it is covered by `TestComposerUploadsAttachedFilesWithTheCaption` (notes "Uploading 1/2…", "Uploading 2/2…").
+- Chooser: paperclip → zenity "Attach files"; a typed name GTK autocompleted to `some.pdfpdf` → note "Not a file: …/some.pdfpdf"; picking a.png and ac.png (Ctrl+click) → two chips.
+- `moveHere`: clicking #general in the list again replaces the window; the new window shows both chips. × on ac.png removes it; Enter with no text → "You" message with the picture only.
+- Thread: opened a thread in #general, Ctrl+V an image, typed "thread pic", Enter → reply "thread pic" with the picture, "2 replies".
+- Limit: path of a 12 900 000-byte file, Ctrl+V → "File too large (12.3 MB > 10 MB limit)", no chip.
+
+### Deviations (4.3)
+
+1. Ctrl+V is taken from the editor (a Gio key filter consumes the event; the plan assumed the editor still pastes the same press). When the clipboard holds neither an image nor an existing file's path, the composer asks Gio for the text (`clipboard.ReadCmd{Tag: &composer}`) next frame, so the editor pastes it as before. A path to a file is attached and not also pasted (the TUI's rule).
+2. The clipboard and path checks run off the UI goroutine (each is a process); results come back as `attachPicked` / `pasteText` items.
+3. `attach.ResolvePath` also accepts `file://` URLs (a file manager's copy), %-unescaped. `FromPath` leaves the size limit to `chat.Attachments.Add`, so one message ("Image|File too large (…)") covers both sources.
+4. `attach.HumanSize` (commit 2) took the GUI's existing `humanSize` rules ("812 B", rounded KB, "" for unknown) and `richview.go`'s copy was deleted; the TUI's version said "<1 KB" and truncated KB, which disagreed with the message file chips by 1 KB.
+5. AGENTS.md rows for the three `internal/` packages went into commit 1 (AGENTS.md: a helper's row goes in its own commit); the Gio row in commit 2.
+6. A first chooser attempt ran zenity with the session bus reachable; GTK4's file dialog then goes through xdg-desktop-portal, which draws on the user's real desktop, not on `:97`. Three such dialogs (two probes, one from slk-gio) may have appeared on the user's screen for a few seconds each before they were killed. Rerun with `GDK_DEBUG=no-portals` and no session bus kept it on `:97`. In real use the portal dialog is what is wanted.
+7. Extra tests not in the plan: `TestUpload_SendsEachFileWithTheCaptionOnTheLast` (Slack side, slacktest), `TestComposer*` (headless composer: upload flow, failure keeps files, size refusal, `uploadState` across `moveHere`), the `internal/clipboard` tests (`ReadImage`/`ReadText` behind the injectable runner, as asked for the image step).
+
+### Follow-ups (4.3)
+
+- A failure part-way through a multi-file upload keeps every file; a retry re-sends the ones that went. `Upload` could report how many were posted so the composer drops those chips.
+- macOS has no clipboard image reader (`pngpaste` would be the tool); `internal/clipboard` finds nothing there.
+- `wiki/Installation.md`'s clipboard section still describes the TUI (Phase 6).
