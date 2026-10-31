@@ -7,8 +7,8 @@ package blockkit
 // Empty blocks likewise preserve the fallback rather than blanking the
 // message.
 //
-// Keep this switch aligned with the TUI renderer's appendBlock
-// (internal/ui/messages/blockkit/render.go).
+// It was kept aligned with the retired TUI renderer's appendBlock;
+// gui/rich draws the same block kinds.
 func RendersBody(blocks []Block) bool {
 	for _, b := range blocks {
 		switch v := b.(type) {

@@ -1019,7 +1019,7 @@ func TestGetUnreadCounts_UsesAPIBaseURL(t *testing.T) {
 		cookie:     "d-cookie",
 		apiBaseURL: srv.URL + "/api/",
 	}
-	if _, _, err := c.GetUnreadCounts(); err != nil {
+	if _, _, err := c.GetUnreadCountsContext(context.Background()); err != nil {
 		t.Fatalf("GetUnreadCounts: %v", err)
 	}
 	if gotPath != "/api/client.counts" {
@@ -1176,7 +1176,7 @@ func TestHandRolledEndpoints_FormBodyTokenNoBearer(t *testing.T) {
 			name:     "GetUnreadCounts",
 			respBody: `{"ok":true,"channels":[],"mpims":[],"ims":[],"threads":{"has_unreads":false}}`,
 			call: func(t *testing.T, c *Client) {
-				if _, _, err := c.GetUnreadCounts(); err != nil {
+				if _, _, err := c.GetUnreadCountsContext(context.Background()); err != nil {
 					t.Fatalf("GetUnreadCounts: %v", err)
 				}
 			},
@@ -3237,7 +3237,7 @@ func TestHandRolledEndpoints_RouteThroughSharedClient(t *testing.T) {
 			name:     "GetUnreadCounts",
 			respBody: `{"ok":true,"channels":[],"mpims":[],"ims":[],"threads":{"has_unreads":false}}`,
 			call: func(t *testing.T, c *Client) {
-				if _, _, err := c.GetUnreadCounts(); err != nil {
+				if _, _, err := c.GetUnreadCountsContext(context.Background()); err != nil {
 					t.Fatalf("GetUnreadCounts: %v", err)
 				}
 			},
@@ -3428,7 +3428,7 @@ func TestGetUnreadCounts_ParsesMentionCounts(t *testing.T) {
 	defer srv.Close()
 	c := newTestClient(srv)
 
-	unreads, _, err := c.GetUnreadCounts()
+	unreads, _, err := c.GetUnreadCountsContext(context.Background())
 	if err != nil {
 		t.Fatalf("GetUnreadCounts: %v", err)
 	}

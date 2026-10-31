@@ -1,5 +1,3 @@
-// internal/ui/messages/blockkit/rendersbody_test.go
-//
 // RendersBody decides whether msg.Text is redundant. It must agree with
 // the appendBlock switch: a block kind that draws content counts, one
 // that draws nothing (or only a placeholder) does not.

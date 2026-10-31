@@ -3,7 +3,6 @@ module github.com/gammons/slk
 go 1.26.1
 
 require (
-	charm.land/bubbles/v2 v2.1.0
 	charm.land/bubbletea/v2 v2.0.6
 	charm.land/huh/v2 v2.0.3
 	charm.land/lipgloss/v2 v2.0.3
@@ -14,7 +13,6 @@ require (
 	github.com/godbus/dbus/v5 v5.1.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-sixel v0.0.9
-	github.com/muesli/reflow v0.3.0
 	github.com/pelletier/go-toml/v2 v2.3.0
 	github.com/rivo/uniseg v0.4.7
 	github.com/slack-go/slack v0.23.0
@@ -31,6 +29,7 @@ require (
 )
 
 require (
+	charm.land/bubbles/v2 v2.1.0 // indirect
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/catppuccin/go v0.3.0 // indirect

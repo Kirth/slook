@@ -1,8 +1,7 @@
 // Package theme holds the colour tables every frontend reads: the
 // built-in themes, the user's custom themes (TOML files), lookup by name,
-// and the deterministic per-user colours. It draws nothing; the TUI's
-// internal/ui/styles turns these into lipgloss styles and the Gio
-// frontend's gui/palette into its palette.
+// and the deterministic per-user colours. It draws nothing; the Gio
+// frontend's gui/palette turns these into its palette.
 package theme
 
 import (

@@ -1,7 +1,7 @@
 // Package ids declares named string types for the domain
 // identifiers that flow across slk's module boundaries.
 //
-// Phase 7 of the SOLID refactor of internal/ui/app.go. The
+// Phase 7 of the SOLID refactor of the retired TUI's app.go. The
 // motivation is the bug class where two "just a string"
 // identifiers swap positions in a function signature -- e.g.
 // passing a teamID where a channelID is expected, or a threadTS
@@ -14,7 +14,7 @@
 // kickoff): these types are used at the seams we built in
 // Phases 2-6 -- the Phase 3 service interfaces (ReactionService,
 // MessageService, ThreadService, ChannelService) and the
-// XxxFunc callback types in internal/ui/callbacks.go that flow
+// XxxFunc callback types in the TUI's callbacks.go that flow
 // closures into the service adapters. Internal-to-package
 // string fields on App and inside the cache / slack / cmd/slk
 // packages stay as `string`. Conversions happen at the boundary:

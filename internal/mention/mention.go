@@ -18,7 +18,7 @@ import "strings"
 // not match a selfUserID of "U123".
 //
 // Pipe-labeled variants (<@Uxxxx|name>, <!here|@here>) are NOT matched.
-// internal/ui/messages/flatten.go:11-14 records where those forms are actually
+// The retired TUI's messages/flatten.go recorded where those forms are actually
 // seen: message events normally carry the bare <@UID>, and it is
 // search.messages snippets that can carry the labeled one. InText's callers
 // are the notify path and the WebSocket message path, neither of which reads

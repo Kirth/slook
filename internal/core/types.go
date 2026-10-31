@@ -1,25 +1,16 @@
+// Package core holds message values shared by the Slack client, the
+// cache, the export and the GUI. It began as the TUI's ports; the TUI and
+// its service interfaces were removed, and these values are what remained
+// in use.
+//
+// core declares values only; it does no I/O itself.
 package core
 
 import (
-	"fmt"
-	"time"
-
 	"github.com/gammons/slk/internal/core/blocks"
-	"github.com/gammons/slk/internal/ids"
 )
 
-// The values that cross between the engine and the TUI. Most began life
-// in a TUI package, which still exposes them under their old names as
-// aliases.
-
-// ForwardResult identifies the message Slack posted in the destination.
-// Text is the source permalink; preview attachments arrive via WebSocket.
-type ForwardResult struct {
-	TS   ids.MessageTS
-	Text string
-}
-
-// MessageItem is one message as the TUI displays it.
+// MessageItem is one message in the form the export and the GUI read.
 type MessageItem struct {
 	TS          string
 	UserName    string
@@ -95,33 +86,6 @@ type ReactionItem struct {
 	UserIDs    []string // user IDs who reacted with this emoji
 }
 
-// ChannelFinderItem represents a searchable channel/DM entry.
-type ChannelFinderItem struct {
-	ID       string
-	Name     string
-	Type     string // channel, dm, group_dm, private, threads
-	Presence string // for DMs: active, away
-	Joined   bool   // true if the user is already a member; false for browseable public channels
-	// LastVisited is the unix timestamp (seconds) of the user's most
-	// recent visit to this channel; 0 means never visited. Drives the
-	// recency-based sort used by filter(): empty-query order is by
-	// LastVisited DESC, and on a query LastVisited breaks ties within
-	// a match tier.
-	LastVisited int64
-	// Synthetic marks non-channel destinations (e.g. "Threads") that
-	// the finder pins above real channels under empty-query and that
-	// callers route differently (e.g. activating a view rather than
-	// opening a channel). These items are preserved across SetItems
-	// and SetBrowseable mutations so the finder always offers them.
-	Synthetic bool
-}
-
-// EmojiEntry represents an emoji with its name and Unicode character.
-type EmojiEntry struct {
-	Name    string // e.g. "thumbsup"
-	Unicode string // e.g. "\U0001f44d"
-}
-
 // PendingAttachment is a file (or in-memory image) waiting to be
 // uploaded with the next send. Bytes and Path are mutually exclusive:
 // Bytes is set for clipboard-pasted images; Path is set for
@@ -133,27 +97,6 @@ type PendingAttachment struct {
 	Mime     string
 	Size     int64
 }
-
-// PresenceAction is the high-level operation the user picked in the
-// presence menu.
-type PresenceAction int
-
-const (
-	PresenceSetActive PresenceAction = iota
-	PresenceSetAway
-	PresenceSnooze       // SnoozeMinutes is set
-	PresenceCustomSnooze // opens the custom-snooze input; never reaches the engine
-	PresenceEndDND
-)
-
-// ThemeScope identifies whether a theme selection should be saved to
-// the active workspace or to the global default.
-type ThemeScope int
-
-const (
-	ThemeScopeGlobal ThemeScope = iota
-	ThemeScopeWorkspace
-)
 
 // ReadState captures the per-channel read-state values that drive the
 // unread dot, the mention badge, and the "new messages" line. It is the
@@ -219,34 +162,6 @@ type ActivityMessage struct {
 // the activity view so both sides agree on the lookup key.
 func ActivityMsgKey(channelID, ts string) string {
 	return channelID + "\x00" + ts
-}
-
-// UserProfile is a Slack user's profile, as fetched by ProfileService.
-// Handle, RealName and DisplayName are the identity fields that come
-// back from the fetch (users.info); the UI caches only display names it
-// already has locally.
-type UserProfile struct {
-	UserID, TeamID, Handle, RealName, DisplayName string
-	Title, Pronouns, Email, Phone                 string
-	TZ                                            string // IANA name; "" = unknown
-	TZAbbrev                                      string // "PDT"; "" when none or numeric
-	TZOffset                                      int    // seconds east of UTC
-	IsBot, Deleted                                bool
-	// HuddleChannelID is the conversation the user's huddle is in,
-	// from users.info's huddle_state_channel_id. Empty when they are
-	// not in a huddle or Slack did not send it; the huddle state
-	// itself decides whether a link may be offered, never this field.
-	HuddleChannelID string
-}
-
-// RateLimitedError is how adapters report Slack rate limiting, so the
-// UI never imports slack-go.
-type RateLimitedError struct {
-	RetryAfter time.Duration
-}
-
-func (e *RateLimitedError) Error() string {
-	return fmt.Sprintf("rate limited, retry after %s", e.RetryAfter)
 }
 
 // CommandError is how adapters report Slack refusing a slash command

@@ -1,6 +1,6 @@
 // Package blocks holds the parsed Slack Block Kit and legacy attachment
 // data carried on a message. The engine builds these from Slack payloads
-// and the TUI renders them (internal/ui/messages/blockkit).
+// and gui/rich renders them.
 package blocks
 
 import "github.com/slack-go/slack"

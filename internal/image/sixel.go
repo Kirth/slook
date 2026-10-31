@@ -78,8 +78,8 @@ func NewSixelRenderer() *SixelRenderer {
 // Render emits a Render whose Lines reserve the image's cell footprint
 // with plain spaces, exactly like a text block of the same size — the
 // messages pane treats them as ordinary content, reserves the rows, and
-// drives the sixel byte stream from the placement pipeline (see
-// internal/ui/messages and imgpkg.SixelPaint) rather than from the line
+// drives the sixel byte stream from the placement pipeline (the
+// retired TUI's messages pane and imgpkg.SixelPaint) rather than from the line
 // content. Fallback carries the half-block equivalent used when the
 // image is only partially visible.
 func (s *SixelRenderer) Render(img image.Image, target image.Point) Render {

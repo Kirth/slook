@@ -92,7 +92,7 @@ func TestPreview_SwapImageUpdatesIndex(t *testing.T) {
 // TestPreview_SixelPaint_RoutedOutOfBand pins the fix for the tiled/
 // duplicated preview images: for ProtoSixel, View() must NOT write the
 // image bytes anywhere the caller can see (they'd get re-emitted every
-// frame with no way to erase them — see internal/ui/sixelpaint.go for
+// frame with no way to erase them — see the retired TUI's sixelpaint.go for
 // why that's a bug, not just a style choice) and must instead expose
 // them via SixelPaint() for the caller's out-of-band painter.
 func TestPreview_SixelPaint_RoutedOutOfBand(t *testing.T) {

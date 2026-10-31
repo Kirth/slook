@@ -22,7 +22,7 @@ func TestInText(t *testing.T) {
 		{"everyone broadcast", "<!everyone> notice", self, true},
 		// Pipe-labeled forms are a KNOWN GAP, not desired behavior:
 		// these pin what InText does today, inherited verbatim from
-		// internal/notify. internal/ui/messages/flatten.go proves the
+		// internal/notify. The retired TUI's flatten.go proved the
 		// repo sees these forms. Changing this is a behavior change and
 		// belongs in its own commit.
 		{"labeled direct mention is not detected", "hi <@U123|alice> there", self, false},

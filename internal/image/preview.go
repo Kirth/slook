@@ -54,7 +54,7 @@ type Preview struct {
 	// Encoded-image memo. View() runs on every App.View(), which
 	// bubbletea calls after EVERY message — every keystroke, key repeat
 	// and mouse motion — and the compositor deliberately never memoizes
-	// overlay frames (see internal/ui/app.go: overlay content can change
+	// overlay frames (see the retired TUI's app.go: overlay content can change
 	// without a Version bump). Re-encoding is not cheap: a full-pane
 	// sixel encode measures ~1.4s at typical preview dimensions, so
 	// without this memo the overlay re-encodes on every message and the
@@ -85,7 +85,7 @@ type Preview struct {
 //
 // Deliberately NOT written into the string View() returns: sixel bytes
 // in the frame string can't be erased or cheaply skipped when unchanged
-// (see internal/ui/sixelpaint.go, which has the same constraint for the
+// (see the retired TUI's sixelpaint.go, which has the same constraint for the
 // messages pane and the full rationale). The caller converts these to
 // absolute imgpkg.SixelPlacement values and paints them out-of-band.
 type SixelPaint struct {
@@ -263,7 +263,7 @@ func (p *Preview) View(width, height int, proto Protocol) string {
 	//     the same image ID is a harmless no-op, so writing it directly
 	//     here on every View() is correct.
 	//   - sixel has no re-render/erase of its own (see
-	//     internal/ui/sixelpaint.go for the full rationale): writing it
+	//     the retired TUI's sixelpaint.go for the full rationale): writing it
 	//     here, every View(), with no erase, is exactly what produced
 	//     the tiled/duplicated overlay images this replaces. Instead we
 	//     hand the bytes + position to the caller, which owns a

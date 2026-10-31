@@ -1133,17 +1133,13 @@ type ThreadsAggregate struct {
 	MentionCount int
 }
 
-// GetUnreadCounts fetches unread counts for all channels using Slack's
-// internal client.counts API (available with xoxc browser tokens).
-// Also returns the threads aggregate (HasUnreads / counts) for the
-// workspace; the threads block in client.counts is the only place
-// Slack tells us whether per-thread unreads exist without us having to
-// hit subscriptions.thread.* directly.
-func (c *Client) GetUnreadCounts() ([]UnreadInfo, ThreadsAggregate, error) {
-	return c.GetUnreadCountsContext(context.Background())
-}
-
-// GetUnreadCountsContext is GetUnreadCounts bounded by ctx.
+// GetUnreadCountsContext fetches unread counts for all channels using
+// Slack's internal client.counts API (available with xoxc browser
+// tokens), bounded by ctx. Also returns the threads aggregate
+// (HasUnreads / counts) for the workspace; the threads block in
+// client.counts is the only place Slack tells us whether per-thread
+// unreads exist without us having to hit subscriptions.thread.*
+// directly.
 func (c *Client) GetUnreadCountsContext(ctx context.Context) ([]UnreadInfo, ThreadsAggregate, error) {
 	reqURL := c.apiBaseURL + "client.counts"
 	form := url.Values{"token": {c.token}}
