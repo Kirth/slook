@@ -2,12 +2,13 @@
 
 slk is intentionally not a 1:1 port of the desktop client. Some Slack features are deferred or out of scope.
 
-## On the roadmap
+## Not there yet
 
-- Slack-side search (`Ctrl+/` / `:search`)
-- File uploads and downloads
-- Quiet hours and per-channel mute
-- Custom keybinding overrides
+`slk-gio` has no activity feed, no server-side search of history older than
+its cache, no `/leave`, no custom `/status`, no app dialogs (modals), no
+pressable Block Kit buttons and no drag-and-drop of files, and serves one
+workspace per process. The full list, with the Slack calls each would need,
+is the [GUI feature backlog](https://github.com/gammons/slk/blob/main/docs/superpowers/plans/2026-10-31-gui-feature-backlog.md).
 
 ## Not planned
 
@@ -17,22 +18,23 @@ slk is intentionally not a 1:1 port of the desktop client. Some Slack features a
 
 ## Markdown caveats
 
+The composer's text goes out through a CommonMark → mrkdwn + rich_text
+conversion:
+
 - Editing a message you originally formatted with markdown may flatten the rich_text formatting on Slack clients that prefer blocks. The mrkdwn fallback (`*bold*`, etc.) still renders correctly everywhere.
 - Headings (`# Title`) and blockquotes (`> quote`) are passed through verbatim — Slack has no heading construct and `>` is already valid mrkdwn.
 - Tables, footnotes, task lists, and reference-style links are not translated.
 
-## Image rendering caveats
+## Image caveats
 
-- iTerm2 ≥ 3.5 implements kitty graphics but does not support unicode placeholders, so it falls back to half-block.
-- Animated GIFs render as a static first frame.
-- Threads side panel renders images inline using the same pipeline as the main messages pane, on terminals that use kitty graphics or the half-block fallback. Sixel terminals see a placeholder/sentinel block in the thread panel for v1; the actual sixel byte stream is only emitted in the main messages pane. Click-to-preview and `O` / `v` from a thread reply are messages-pane only.
-- Link unfurl image previews are not yet rendered inline.
+- Animated GIFs show as a static first frame.
 
 ## Auth caveat
 
-Browser-cookie auth means tokens expire when you log out of the browser or
-Slack rotates them. Re-run `--add-workspace` and you're back in business. See
-[[Setup]] for the token-extraction walkthrough.
+slk signs in with the Slack desktop app's session (or a browser session with
+`--browser`), not an OAuth app. `slk-gio` refreshes desktop tokens at every
+start; a browser-session token lasts as long as that browser session, after
+which `slk --add-workspace --browser` refreshes it. See [[Setup]].
 
 ## Unofficial / TOS caveat
 

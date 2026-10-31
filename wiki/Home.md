@@ -1,28 +1,32 @@
 # slk Wiki
 
-A blazingly fast Slack TUI. Keyboard-driven, beautifully themed, under 20MB,
-one static binary, no Electron required.
+slk is a fast, native Slack desktop client, **`slk-gio`** (built with
+[Gio](https://gioui.org), one window per conversation, no Electron), and
+**`slk`**, the command-line companion that signs your workspaces in and
+exports channels to Markdown. slk's terminal client was retired on
+2026-10-31; the pages about it are kept under "Historical".
 
 Marketing site: [getslk.sh](https://getslk.sh) · Source: [github.com/gammons/slk](https://github.com/gammons/slk)
 
 ## Getting started
 
-1. **[[Installation]]** — prebuilt binaries for Linux, macOS, Windows; Go install; build from source.
-2. **[[Setup]]** — extracting your `xoxc` token and `d` cookie, adding a workspace.
-3. **[[Configuration]]** — `config.toml`, custom themes, XDG paths, per-workspace settings.
+1. **[[Installation]]** — the `slk` CLI from packages or Go; `slk-gio` from source and its prerequisites.
+2. **[[Setup]]** — signing in from the Slack desktop app (or a browser session), adding workspaces.
+3. **[[Configuration]]** — `config.toml`: the keys slk-gio reads, themes, XDG paths.
 
 ## Using slk
 
-- **[[Features]]** — full feature breakdown (messaging, compose, images, threads, reactions, channels, notifications, status, connectivity, customization).
-- **[[Keybindings]]** — every key, every mode.
-- **[[Commands]]** — `:` commands (workspaces, marks, windows) and slash commands.
-- **[[Terminal Compatibility|Terminal-Compatibility]]** — which terminals do what (kitty graphics, sixel, half-block, OSC 52).
-- **[[Clipboard and OSC 52|Clipboard-and-OSC-52]]** — getting copy/paste working under tmux, screen, and stricter terminals.
+- **[[Features]]** — what slk-gio does, and `slk export`.
+- The [slk-gio README](https://github.com/gammons/slk/blob/main/gui/README.md) — every feature in detail, with its keys.
 
 ## Reference
 
-- **[[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]]** — what's on the roadmap, what's out of scope, known caveats.
-- **[[Architecture]]** — service-oriented layout, data layer, render pipeline.
+- **[[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]]** — what's missing, what's out of scope, known caveats.
+- **[[Architecture]]** — how the two programs and the shared packages fit together.
+
+## Historical (the retired terminal client)
+
+- [[Keybindings]], [[Commands]], [[Terminal Compatibility|Terminal-Compatibility]], [[Clipboard and OSC 52|Clipboard-and-OSC-52]]
 
 ## Project
 

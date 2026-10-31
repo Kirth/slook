@@ -1,8 +1,148 @@
 # Configuration
 
-Config lives at `~/.config/slk/config.toml`.
+Config lives at `~/.config/slk/config.toml`. `slk --add-workspace` writes the
+`[workspaces.<slug>]` blocks; slk-gio writes one key there itself
+(`version_ts`, Slack's build timestamp, kept current as Slack's web client
+does). Everything else is yours.
 
-## Full example
+slk's terminal client, retired on 2026-10-31, read many more keys than slk-gio
+does. Those still parse (an old config keeps loading) but are ignored; they are
+listed [below](#ignored-keys).
+
+## What slk-gio and slk read
+
+```toml
+[gui]
+tray = true                     # tray icon; slk-gio keeps running with no window
+
+[gui.theme]
+preset = "hadal"                # hadal (default), dark, ink, light, or any slk
+                                # theme name ("nord", "gruvbox dark", …) or custom theme
+accent = "#2fb7c9"              # optional overrides by colour key, "#rrggbb"
+# [gui.theme.colors]            # the same overrides as a table of their own
+
+[appearance]
+timestamp_format = "3:04 PM"    # the clock in Slack's <!date> tokens ({time})
+
+[animations]
+typing_indicators = true        # "Ada is typing", apps' status, and telling
+                                # Slack you are typing
+
+[notifications]
+enabled = true
+on_mention = true               # usergroups you are in count as you
+on_dm = true
+on_keyword = ["deploy", "incident"]
+# notify_command: run INSTEAD of the built-in notification, via `sh -c` with
+# $SLK_TITLE and $SLK_BODY set (values in the environment, so message text
+# cannot inject shell syntax).
+# notify_command = 'notify-send "$SLK_TITLE" "$SLK_BODY"'
+# Muted conversations never notify; each conversation can override this in
+# its details panel (Default / Every message / Nothing).
+
+[cache]
+backfill = "90d"                # fill the cache for search from startup:
+                                # "90d", "1y", "all", or "off" (-backfill overrides)
+backfill_ignore = ["alerts-*"]  # names or globs the backfill and catch-up skip
+catch_up = true                 # on connect, one page for each followed
+catch_up_limit = 20             # conversation with newer messages, at most this many
+
+[workspaces.work]               # written by slk --add-workspace
+team_id = "T01ABCDEF"
+order = 1                       # slk --list-workspaces / slk export order
+version_ts = "…"                # written by slk-gio
+```
+
+The colour keys for overrides are `background`, `surface`, `overlay`,
+`text`, `text_muted`, `on_accent`, `accent`, `mention`, `broadcast`,
+`border`, `hover`, `control`, `control_hover`, `error`, `warning`,
+`success`, `badge`, `code_text`, `code_background`, `ephemeral` and
+`shadow` (`#rrggbbaa`; its alpha is the shadow's strength). `-theme NAME`
+picks a palette for one run. The [slk-gio README](https://github.com/gammons/slk/blob/main/gui/README.md)
+describes each palette.
+
+slk-gio's image cache is fixed at 200 MB; `[cache] max_image_cache_mb` is not
+read.
+
+## Custom themes
+
+Drop `.toml` files into `~/.config/slk/themes/`:
+
+```toml
+name = "My Theme"
+
+[colors]
+primary      = "#BD93F9"
+accent       = "#50FA7B"
+warning      = "#FFB86C"
+error        = "#FF5555"
+background   = "#282A36"
+surface      = "#343746"
+surface_dark = "#21222C"
+text         = "#F8F8F2"
+text_muted   = "#6272A4"
+border       = "#44475A"
+
+# Optional sidebar/rail overrides — lets you have a darker sidebar with a
+# lighter message pane (Slack's default look). Fall back to
+# background/text/text_muted/surface_dark when omitted.
+sidebar_background = "#19171D"
+sidebar_text       = "#D1D2D3"
+sidebar_text_muted = "#9A9B9E"
+rail_background    = "#19171D"
+```
+
+Every built-in theme now sets a channels-panel (sidebar) background that is
+perceptibly distinct from the message pane. When writing a custom theme,
+set `sidebar_background` to a clearly darker (or, on near-black themes, a
+slightly lighter) shade than `background` for the same effect.
+
+slk-gio reads these files at startup and maps a theme named in
+`[gui.theme]` onto its own colour roles; the sidebar and rail keys were the
+terminal client's and are not used.
+
+## Ignored keys
+
+Read by the retired terminal client only; slk-gio ignores them:
+
+| Key | Was |
+|---|---|
+| `[general] default_workspace` | the workspace to open (slk-gio: the first, or `-team NAME`) |
+| `[general] use_slack_sections`, `[sections.*]`, `[workspaces.<slug>] use_slack_sections` / `sections` | glob-based sidebar sections (slk-gio always follows Slack's sections) |
+| `[general] download_dir` | where `d` saved files |
+| `[appearance] theme`, `[theme]`, `[workspaces.<slug>] theme` | the terminal theme and its overrides (slk-gio: `[gui.theme]`) |
+| `[appearance] image_protocol`, `max_image_rows`, `max_image_cols` | terminal image rendering |
+| `[appearance] mouse_wheel_lines`, `emoji_images`, `emoji_cells`, `colored_usernames` | terminal rendering |
+| `[animations] enabled`, `smooth_scrolling`, `toast_transitions`, `message_fade_in` | terminal animations |
+| `[notifications] status_command` | a hook run on every unread change |
+| `[sidebar] hide_inactive_after_days`, `width`; `[workspaces.<slug>] sidebar_width` | the terminal sidebar |
+| `[compose] editor` | `Ctrl+E`'s external editor |
+| `[marks] persist_all`, `show_jump_overlay` | vim-style marks |
+| `[cache] max_image_cache_mb` | the image cache's size (slk-gio: fixed 200 MB) |
+
+`[workspaces.<slug>] order` still orders `slk --list-workspaces` and which
+workspace `slk export` picks; the rail it also ordered is gone.
+
+Read by nothing, in either client (candidates for removal from
+`internal/config`): `[notifications] quiet_hours`, `[cache]
+message_retention_days`, `[cache] max_db_size_mb`, `[appearance]
+show_avatars`.
+
+## Data paths (XDG)
+
+| Path | Contents |
+|---|---|
+| `~/.config/slk/` | `config.toml`, custom themes (`themes/*.toml`) |
+| `~/.local/share/slk/` | SQLite cache (`cache.db`), tokens (`tokens/`) |
+| `~/.cache/slk/` | image cache (`images/`) |
+| `$XDG_RUNTIME_DIR/slk-gio/files/` | files downloaded to preview, cleared at logout |
+
+## Historical: the terminal client's settings
+
+The rest of this page is the terminal client's configuration reference, kept
+as it was. None of it affects slk-gio except the custom theme file format.
+
+## Full example (terminal client)
 
 ```toml
 [general]
@@ -215,42 +355,6 @@ still computed as RGB approximations, so the tint regions of those
 elements use truecolor rather than your palette. The rest of the UI
 honors the palette.
 
-## Custom themes
-
-Drop `.toml` files into `~/.config/slk/themes/`:
-
-```toml
-name = "My Theme"
-
-[colors]
-primary      = "#BD93F9"
-accent       = "#50FA7B"
-warning      = "#FFB86C"
-error        = "#FF5555"
-background   = "#282A36"
-surface      = "#343746"
-surface_dark = "#21222C"
-text         = "#F8F8F2"
-text_muted   = "#6272A4"
-border       = "#44475A"
-
-# Optional sidebar/rail overrides — lets you have a darker sidebar with a
-# lighter message pane (Slack's default look). Fall back to
-# background/text/text_muted/surface_dark when omitted.
-sidebar_background = "#19171D"
-sidebar_text       = "#D1D2D3"
-sidebar_text_muted = "#9A9B9E"
-rail_background    = "#19171D"
-```
-
-Every built-in theme now sets a channels-panel (sidebar) background that is
-perceptibly distinct from the message pane. When writing a custom theme,
-set `sidebar_background` to a clearly darker (or, on near-black themes, a
-slightly lighter) shade than `background` for the same effect.
-
-Switch themes live with `Ctrl+y`, or cycle through them with `Alt+y` /
-`Alt+Shift+y`.
-
 ## Marks
 
 `m` followed by a letter records the selected message; `'` followed by
@@ -283,10 +387,3 @@ thread with nothing selected); the mark is kept either way. Marks
 are only removed when you remove them, with `:delmarks` or `Backspace`
 in the `:marks` overlay.
 
-## Data paths (XDG)
-
-| Path | Contents |
-|---|---|
-| `~/.config/slk/` | Configuration, custom themes |
-| `~/.local/share/slk/` | SQLite cache, tokens |
-| `~/.cache/slk/` | Avatars, image cache |

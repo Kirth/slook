@@ -1,5 +1,11 @@
 # Installation
 
+slk is two programs: **`slk`**, the CLI that signs workspaces in and exports
+channels, and **`slk-gio`**, the desktop client. Release packages carry the
+CLI only; `slk-gio` is built from source (below).
+
+## The `slk` CLI
+
 Grab a prebuilt binary from the [latest release](https://github.com/gammons/slk/releases/latest), or use one of the methods below.
 
 The shell snippets resolve the latest version automatically.
@@ -86,29 +92,50 @@ go install github.com/gammons/slk/cmd/slk@latest
 
 ## Build from source
 
-Requires Go 1.22+.
-
-On Linux, `Ctrl+V` paste-to-upload needs slightly different setup depending on your session type.
-
-**X11 sessions** use the `golang.design/x/clipboard` library, which requires X11 development headers at build time:
-
-- Debian/Ubuntu: `sudo apt-get install -y libx11-dev`
-- Fedora/RHEL: `sudo dnf install -y libX11-devel`
-- Arch: included in `xorg-server`
-
-**Wayland sessions** bypass the X11 library entirely and shell out to `wl-paste` from the `wl-clipboard` package — install it for paste-to-upload to work:
-
-- Debian/Ubuntu: `sudo apt-get install -y wl-clipboard`
-- Fedora/RHEL: `sudo dnf install -y wl-clipboard`
-- Arch: `sudo pacman -S wl-clipboard`
-
-slk auto-detects the session via `WAYLAND_DISPLAY` at startup. On headless Linux (or when neither dependency is met), slk runs but `Ctrl+V` smart-paste is disabled.
+Requires Go 1.26.
 
 ```bash
 git clone https://github.com/gammons/slk.git
 cd slk
-make build       # binary at bin/slk
+make build       # bin/slk, the CLI (pure Go, no cgo)
+make gui         # bin/slk-gio, the desktop client
 ```
+
+## `slk-gio`
+
+`slk-gio` needs cgo, a C compiler, `pkg-config` and Gio's libraries
+(Wayland, X11, xkbcommon, EGL/GLES, Vulkan headers). It is developed and
+tested on Linux.
+
+- **Debian/Ubuntu** (the list CI uses):
+  ```bash
+  sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev \
+    libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev \
+    libxcursor-dev libvulkan-dev
+  ```
+- **Nix / NixOS:** `make gui` builds inside `gui/shell.nix` when `nix-shell`
+  is there (Go, wayland, libxkbcommon, libGL, vulkan-headers, libX11,
+  libXcursor, libXfixes, libxcb). The shell uses your system's `<nixpkgs>`
+  rather than the flake's pin on purpose: Gio loads the system's GL driver,
+  which only loads into a binary built against the same glibc. The flake
+  therefore packages only the CLI.
+- **Other distributions:** the same libraries under their names; see
+  [Gio's Linux notes](https://gioui.org/doc/install/linux).
+
+At run time slk-gio uses these when they are installed:
+
+| Tool | For |
+|---|---|
+| `wl-paste` (wl-clipboard) on Wayland, `xclip` on X11 | Ctrl+V of a picture (Gio's own clipboard is text-only) and of a file path |
+| `zenity`, else `kdialog`, else `yad` | the paperclip's file chooser |
+| `xdg-open` | links and files |
+| `flux-preview` | previewing pictures and files (else the default application) |
+| a StatusNotifierItem host (KDE; GNOME with the AppIndicator extension) | the tray icon |
+
+On macOS there is no clipboard picture reader yet (`pngpaste` would be the
+tool).
+
+Try it without a Slack account: `bin/slk-gio -fake`.
 
 ## Verify your download
 
@@ -119,4 +146,4 @@ sha256sum -c checksums.txt --ignore-missing
 
 ## Next steps
 
-After installation, head to **[[Setup]]** to add your first workspace.
+After installation, head to **[[Setup]]** to add your first workspace with `slk --add-workspace`, then start `slk-gio`.

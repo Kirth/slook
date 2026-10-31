@@ -1,5 +1,7 @@
 # Commands
 
+> **Historical:** this page describes slk's terminal client (TUI), which was retired on 2026-10-31. slk is now the `slk-gio` desktop client and the `slk` CLI; see [[Features]] and the [slk-gio README](https://github.com/gammons/slk/blob/main/gui/README.md). The page is kept as it was.
+
 slk has two kinds of commands:
 
 - **`:` commands**, typed in Normal mode, drive slk itself: workspaces,

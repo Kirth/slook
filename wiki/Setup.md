@@ -16,12 +16,10 @@ workspace you want to use in slk. Native packages, flatpak
 slk --add-workspace
 ```
 
-Or just run `slk`. Onboarding launches automatically when no workspaces are
-configured.
-
 slk detects the workspaces you're signed in to in the desktop app and shows
 them in a list. Select the ones you want (all are selected by default) and
-you're done.
+you're done: start `slk-gio`. (Running `slk` with no arguments prints its
+help; `slk` is the CLI, the client is `slk-gio`.)
 
 ## Linux secret stores
 
@@ -89,18 +87,23 @@ untouched.
 ## Multiple workspaces
 
 You can add as many workspaces as you like by running `slk --add-workspace`
-again. They all stay connected in parallel for live unread badges. Use
-`:ws` for the picker, or `1`–`9` to jump directly. Configure rail order
-and per-workspace settings in [[Configuration]].
+again; `slk --list-workspaces` shows them. A running `slk-gio` serves one
+workspace: the first, or the one `slk-gio -team NAME` names (a team ID or
+name). Start one per workspace; launching it again for a workspace that
+already has one brings that one's list forward. The order `slk
+--list-workspaces` uses is `[workspaces.<slug>] order` (see
+[[Configuration]]).
 
 ## Token expiry
 
-You don't need to do anything when a token expires. slk re-mints tokens
-automatically from the Slack desktop app on each launch (and mid-session if
-needed), so sessions stay fresh on their own.
+You don't need to do anything when a token expires. `slk-gio` refreshes the
+stored tokens from the Slack desktop app's session every time it starts (and
+`slk export` before it exports), so sessions stay fresh on their own while the
+desktop app stays signed in. When that cannot be read, the stored token is
+used and the reason goes to stderr.
 
-If you ever sign out of the desktop app, just sign back in — slk will pick the
-session back up the next time it needs to re-mint. See the auth caveat in
+If you ever sign out of the desktop app, just sign back in — the next start
+picks the session back up. See the auth caveat in
 [[Tradeoffs and Non-Goals|Tradeoffs-and-Non-Goals]].
 
 ## Enterprise Grid
