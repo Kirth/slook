@@ -255,3 +255,205 @@ ok  	github.com/gammons/slk/cmd/slk	0.004s
 ```
 
 Additionally: `go run ./cmd/slk` (no argument) prints the help, then "slk is the CLI (workspace setup, export); the desktop app is slk-gio." on stderr, exit status 2. gui at `99c4edba`: `go build ./... && go vet ./... && gofmt -l . && go test ./...` → all ok. `-race` for the whole root module not run (contract: before Phases 5 and 6).
+
+## Phase 3 — GUI boots on `internal/bootstrap`; batched resolver; `version_ts`; starred closed DMs
+
+### 3.1 + 3.5 — `bootstrap: move the boot adapters out of cmd/slk; share the fake Slack server`
+
+- Commit: `d0a00836`
+- `git mv` (all `R`): `cmd/slk/bootstrap_adapters.go` → `internal/bootstrap/adapt/deps.go` (R067), `bootstrap_adapters_test.go` → `adapt/adapt_test.go` (R078), `starred_conversations.go` → `adapt/starred.go` (R091), `starred_conversations_test.go` → `adapt/starred_test.go` (R090). `cmd/slk/workspace.go` deleted (`mostRecentlyVisitedChannel` → `adapt.MostRecentlyVisited`).
+- Exported: `NewDeps(c, db, accessToken, openChannelID, health, logf)` (`Log` is the parameter; `Revalidate: edge.New(accessToken, c.TeamID(), c.HTTPClient())` verbatim), `Conversations`, `IMConversation`, `DropClosedMPIMs(chans, isOpen, logf)`, `Muted{Res}`, `UserDisplayName`, `HydrateFirstSight(db, ws, res, logf)`, `MostRecentlyVisited`, `MissingStarredConversations` (verbatim, `log.Printf` kept). Adapters (`bootAdapter`, `viewAdapter`, `countsAdapter`, `historyAdapter`, `rawMessages`, `storeAdapter`, `boundedMessageVersions`) stay unexported with their comments, the `rawMessages` lossiness comment included.
+- New: `adapt.FillFromCounts(ctx, db, e, teamID, res, logf)` in `adapt/conversations.go`: ids in `res.Counts.Unreads` absent from `res.Channels`/`res.IMs` are the gap; cache rows first (`db.GetChannel`; channel/private/group_dm rows become list entries, cached DM rows are skipped: the row has no peer ID), the rest in one `edge.ChannelsInfo(ctx, teamID, {id: 0})` (archived and IM results dropped), each result upserted with `IsMember: true`. One log line: `boot: gap size N (conversations client.counts names that userBoot did not list): A from the cache, B from channels/info, C left out`. Tests `TestFillFromCounts_FillsTheGapFromCacheThenEdge`, `TestFillFromCounts_NoGapNoRequest`; also `TestMostRecentlyVisited`.
+- `bootstrap.Unread.Latest` added; `countsAdapter` fills it and now calls `GetUnreadCountsContext(ctx)` (was the context-free `GetUnreadCounts`; its comment said it would switch once a ctx form existed). `TestCountsAdapter_CarriesUnreadsAndTheThreadRollup` asserts `Latest`.
+- `internal/slack/slacktest`: `NewServer(t, bodies)`, `NewClient(t, srv *httptest.Server)`, `(*Server).RequestTo`, `Paths`, `Count`, `UserBootBody`; `Request` records `Body` (raw) as well as `Form`, because edgeapi posts JSON as `text/plain`. Removed from `adapt_test.go`.
+- `cmd/slk/user_resolver_test.go` (until commit c) got `newTestDB` and `slacktest.NewClient`.
+- AGENTS.md: rows for `internal/bootstrap/adapt` and `slacktest`; `boundedMessageVersions`, `IMConversation`, `MissingStarredConversations` rows point at `adapt`.
+
+### 3.3 — `versionts: move _x_version_ts upkeep out of cmd/slk`
+
+- Commit: `701f2537`
+- `git mv`: `cmd/slk/save_version_ts.go` → `internal/config/versionts/versionts.go` (R066), `save_version_ts_test.go` → `versionts_test.go` (R066). `cmd/slk/connect.go` deleted; its `refreshVersionTS` + `shouldReloadTimeout` are `versionts.Refresh` in the new `refresh.go`.
+- API: `Seed(env, cfg, teamID)`, `TOMLKey(cfg, teamID)`, `Save(configPath, tomlKey, teamID, teamName, ts)`, `Refresh(ctx, client, cfg, configPath, teamName, logf)`. `Refresh` with `configPath == ""` applies the value to the envelope and does not write (the GUI passes "" when `config.Load` returned an error). Tests: the nine moved (`TestSaveWorkspaceVersionTS_*` ×5, `TestSeedVersionTS_*` ×4) + `TestRefresh_AppliesAndSaves`, `TestRefresh_EmptyConfigPathDoesNotWrite`.
+- `onboard.AppendWorkspaceConfigBlock`: `defer config.LockWrites()()` and `config.WriteAtomic` instead of `os.WriteFile` (Phase 2 deviation 2 closed).
+- AGENTS.md: `versionts` row.
+
+### 3.4 — `resolve: move the batched user resolver out of cmd/slk`
+
+- Commit: `2a237c5e`
+- `git mv`: `cmd/slk/user_resolver.go` → `internal/slack/resolve/resolve.go` (git records it as D + A: the file was rewritten to 25 % similarity, see deviation 4), `user_resolver_test.go` → `resolve_test.go` (R074).
+- API as planned: `Profile`, `Batcher`, `Single`, `New(workspaceID, db, batch, single, degraded, onResolved)`, `(*Resolver).Resolve(ctx, ids) map[string]Profile` (cache → one edge batch → users.info per id, semaphore 8, synchronous), `Request(id)` (200 ms window, inflight dedupe, cache gate). Plus `Resolver.Logf` (diagnostics; the plan's `New` had no logger).
+- Tests kept (renamed only where the API changed): `TestUserResolver_{BoundsConcurrentRequests,RequestDoesNotBlockTheCaller,BatchesMissesThroughEdge,EdgeMissFallsBackToPerUser,EmptyNameEdgeRecordFallsBackToPerUser,EdgeErrorFallsBackToPerUser,DegradedWorkspaceSkipsEdge,ResolveNowBatchesAndApplies,ResolveNowReturnsNilWhenDegraded,ResolveNowReturnsNilOnError,ResolveNowSkipsEmptyInput}` (the `ResolveNow*` tests call `Resolve`; "nil" is now "empty map", with no `Single`); `newResolvedWatch` is fed by `onResolved`. Dropped: `TestUserResolver_RecordsNamesInStore`. New: `TestResolve_CacheHitsMakeNoRequest`, `TestResolve_EdgeMissFallsBackPerUserBeforeReturning`.
+- AGENTS.md: the resolver row and the profile-status row point at `resolve`.
+
+### 3.2 + 3.6 — `gui: boot through client.userBoot, never users.conversations`
+
+- Commit: `488975f6`
+- `gui/backend/slack.go`: `ConnectSlack(ctx, tok, db, cacheDir, ConnectOptions{Config, ConfigLoadErr, ConfigPath, Log})`: `versionts.Seed` before `client.Connect`, then `newSlack` (the part after auth.test, also the test seam): `health`, `edge`, `resolver`, `go versionts.Refresh(context.Background(), …)`. `Conversations` = `bootOnce` (once per process, `bootMu`; `booted` flag) + a rebuild from `bootChans`/`counts`/visits/sections/mutes/notify levels with no request. `bootOnce`: visits → `adapt.MostRecentlyVisited` → errgroup(`bootstrap.Run(adapt.NewDeps(…))`, `sections.Bootstrap`); on error the loud `FALLING BACK` line (to `s.errOut`, stderr) + `GetChannels` + `GetUnreadCountsContext` + `mutes.Bootstrap(ctx, s.client)`; on success `HydrateFirstSight`, `Conversations`, `FillFromCounts`, `seedBootUsers`, `mutes.Bootstrap(ctx, adapt.Muted{res})`, counts + `noteThreadsAggregate` from `res.Counts`; then `MissingStarredConversations` (10 s, `res.IMs` or nil), `resolveAll(peers)`, state stored, `bootDone` closed, `SLK_DEBUG` → `slk-gio: boot requests:` + `DefaultCounter.Report()`. `opened()` appends to `bootChans`. `afterConnect(first)`: waits for `bootDone` (≤ `listWait`) and uses the boot's counts when `countsOK`; reconnects unchanged. `resolveAll` → `resolver.Resolve` (errgroup-of-8 gone); `userName` → `resolveAll` on a miss. `Profile()` unchanged (the only `GetUserProfileContext`).
+- `gui/cmd/slk-gio/main.go`: `ConnectOptions` from `cfg`/`cfgErr`/`configPath`, `Log: debugf` (stderr with `SLK_DEBUG`); `reportRequests()` in the hub's exit closure and the tray's quit closure.
+- `gui/backend/boot_test.go`: `TestConversations_BootsWithoutEnumerating`, `TestConversations_FallsBackToEnumerationOnlyWhenBootFails`, `TestConversations_SecondCallMakesNoRequest`, `TestConversations_FillsCountsGapFromEdge`; `cache.New(":memory:")`, `slacktest`.
+- Risk 3 done here (`bootstrap.Result.RevalidatedUsers`): 1 field + 1 assignment in `internal/bootstrap`, 26 lines in `adapt.HydrateFirstSight` (rows for revalidated users without one, via `UpsertUserFromEdge` with the version) — 24 non-comment production lines in all. Tests `TestRevalidate_ReportsTheUsersEdgeReturned`, `TestHydrateFirstSight_CachesRevalidatedUsersWithoutARow`. Effect: on a cold cache the DM peers come back from boot's own `users/info` and the resolver asks nothing.
+- `slacktest.Server.Requests(path)` added (the gap test reads each `channels/info` body).
+- `gui/README.md`: the list paragraph describes the boot; AGENTS.md: a row for the Gio boot.
+- `make gui` built `bin/slk-gio` (37.7 MB) at `488975f6`. The `-fake` backend (`gui/backend/fake.go`) is untouched; `go test ./backend` (fake tests included) passes.
+
+### Request shape (Conversations + first connect)
+
+Before (`76b0f18b`, read from the code; `Conversations` + `afterConnect(first)`):
+
+| Endpoint | Requests |
+|---|---|
+| auth.test | 1 |
+| users.conversations | 1 per 200 conversations |
+| client.counts | 2 (Conversations, then the first connect) |
+| users.channelSections.list | 1 |
+| stars.list | 1 |
+| users.prefs.get | 1 |
+| users.info | 1 per DM peer the cache did not name (8 at a time); again on every list reopen for peers still unnamed |
+| every list reopen | users.conversations + client.counts + channelSections + stars + prefs again |
+
+After (`488975f6`), as `TestConversations_BootsWithoutEnumerating` recorded it (empty cache, no visit; `client.shouldReload` arrives in the background and is filtered from the list):
+
+```
+boot requests: [/api/auth.test /api/users.channelSections.list /api/client.userBoot /api/stars.list /api/client.counts /cache/T1/channels/info /cache/T1/users/info]
+```
+
+| Endpoint | Requests |
+|---|---|
+| auth.test | 1 |
+| client.shouldReload | 1 (background) |
+| client.userBoot | 1 |
+| client.counts | 1 (the first connect reuses it) |
+| conversations.view | 1 when a visit exists (the last-visited conversation), else 0 |
+| edge channels/info | revalidation: 1 per context team (≤ 80 ids a request); + 1 batch for the counts gap when the cache lacks some |
+| edge users/info | revalidation of the view's authors + DM peers (conditional; nothing back when current) |
+| users.channelSections.list, stars.list | 1 each |
+| conversations.info | 1 per starred conversation absent from the list (none in the test) |
+| users.conversations, users.prefs.get, users.info | 0 (users.info only when edge is degraded or misses an id) |
+| every list reopen | 0 |
+
+### Verify (Phase 3) — run at `488975f6`
+
+`-count=1` added; bare `go`/`grep` lines run from the repo root, `go` ones under `nix-shell gui/shell.nix --run`. The runtime line is the user's (below). Verbatim output:
+
+```
+$ nix-shell gui/shell.nix --run 'go build ./... && go vet ./... && gofmt -l . && go test -count=1 ./internal/bootstrap/... ./internal/slack/... ./internal/config/... -race'
+ok  	github.com/gammons/slk/internal/bootstrap	1.016s
+ok  	github.com/gammons/slk/internal/bootstrap/adapt	2.004s
+ok  	github.com/gammons/slk/internal/slack	1.305s
+ok  	github.com/gammons/slk/internal/slack/boot	1.062s
+ok  	github.com/gammons/slk/internal/slack/edge	1.139s
+ok  	github.com/gammons/slk/internal/slack/membership	3.239s
+ok  	github.com/gammons/slk/internal/slack/mrkdwn	1.028s
+ok  	github.com/gammons/slk/internal/slack/resolve	4.715s
+?   	github.com/gammons/slk/internal/slack/slacktest	[no test files]
+ok  	github.com/gammons/slk/internal/config	3.526s
+ok  	github.com/gammons/slk/internal/config/versionts	1.065s
+exit=0
+$ cd gui && nix-shell shell.nix --run 'go build ./... && go vet ./... && go test -count=1 ./backend/... -race'
+ok  	github.com/gammons/slk/gui/backend	3.649s
+exit=0
+$ grep -rn "GetChannels(" gui/
+gui/backend/slack.go:513:		if chans, err = s.client.GetChannels(ctx); err != nil {
+$ grep -rn "GetUnreadCountsContext" gui/backend/
+gui/backend/slack.go:516:		if unreads, agg, err := s.client.GetUnreadCountsContext(ctx); err != nil {
+gui/backend/slack.go:1857:		unreads, agg, err = s.client.GetUnreadCountsContext(cctx)
+$ grep -rn "GetUserProfileContext" gui/backend/
+gui/backend/slack.go:1369:		u, err := s.client.GetUserProfileContext(ctx, id)
+$ grep -rn 'mutes.Bootstrap(.*s.client)' gui/
+gui/backend/slack.go:522:		if err := s.mutes.Bootstrap(ctx, s.client); err != nil {
+$ grep -rn '"github.com/gammons/slk/internal/slack"' internal/bootstrap/*.go | wc -l
+0
+$ grep -rln "bootConversations\|newUserResolver\|saveWorkspaceVersionTS\|newBootstrapDeps" cmd/ gui/ internal/ | wc -l
+0
+$ grep -rn "debuglog\|bubbletea\|internal/ui" internal/bootstrap/adapt internal/slack/resolve internal/config/versionts | wc -l
+0
+$ go test -count=1 -v -run 'TestRun_NeverEnumerates|TestRun_BootCallBudget|TestBootstrapDeps_|TestBootConversations_|TestMissingStarredConversations_|TestFillFromCounts_|TestUserResolver_BatchesMissesThroughEdge|TestUserResolver_DegradedWorkspaceSkipsEdge|TestSaveWorkspaceVersionTS_|TestSlackAPI_DeclaresNoWorkspaceEnumeration' ./internal/bootstrap/... ./internal/slack/... ./internal/config/... | grep -E '^(--- |ok|FAIL|PASS)'
+--- PASS: TestRun_NeverEnumerates (0.00s)
+--- PASS: TestRun_BootCallBudget (0.00s)
+--- PASS: TestRun_BootCallBudgetWithAChannelOpen (0.00s)
+PASS
+ok  	github.com/gammons/slk/internal/bootstrap	0.007s
+--- PASS: TestBootstrapDeps_PopulatesEveryDependency (0.00s)
+--- PASS: TestBootstrapDeps_RevalidatorUsesTheBrowserShapedHTTPClient (0.01s)
+--- PASS: TestBootConversations_MapsWhatTheSidebarBuilderReads (0.00s)
+--- PASS: TestBootConversations_SkipsArchivedAndClosed (0.00s)
+--- PASS: TestBootConversations_SkipsClosedMPIMs (0.00s)
+--- PASS: TestBootConversations_EmptyIsOpenDisablesMPIMFilter (0.00s)
+--- PASS: TestBootConversations_NilSafe (0.00s)
+--- PASS: TestFillFromCounts_FillsTheGapFromCacheThenEdge (0.01s)
+--- PASS: TestFillFromCounts_NoGapNoRequest (0.00s)
+--- PASS: TestMissingStarredConversations_BootClosedIM (0.00s)
+--- PASS: TestMissingStarredConversations_ReadOnlyLookup (0.00s)
+--- PASS: TestMissingStarredConversations_InvalidOrUnavailable (0.00s)
+--- PASS: TestMissingStarredConversations_Cancellation (0.00s)
+--- PASS: TestMissingStarredConversations_ContinuesAfterFailure (0.00s)
+PASS
+ok  	github.com/gammons/slk/internal/bootstrap/adapt	0.032s
+--- PASS: TestSlackAPI_DeclaresNoWorkspaceEnumeration (0.00s)
+PASS
+ok  	github.com/gammons/slk/internal/slack	0.012s
+PASS
+ok  	github.com/gammons/slk/internal/slack/boot	0.006s [no tests to run]
+PASS
+ok  	github.com/gammons/slk/internal/slack/edge	0.008s [no tests to run]
+PASS
+ok  	github.com/gammons/slk/internal/slack/membership	0.004s [no tests to run]
+PASS
+ok  	github.com/gammons/slk/internal/slack/mrkdwn	0.007s [no tests to run]
+--- PASS: TestUserResolver_BatchesMissesThroughEdge (0.23s)
+--- PASS: TestUserResolver_DegradedWorkspaceSkipsEdge (0.03s)
+PASS
+ok  	github.com/gammons/slk/internal/slack/resolve	0.267s
+PASS
+ok  	github.com/gammons/slk/internal/config	0.004s [no tests to run]
+--- PASS: TestSaveWorkspaceVersionTS_UpdatesExisting (0.00s)
+--- PASS: TestSaveWorkspaceVersionTS_AddsToExistingSection (0.00s)
+--- PASS: TestSaveWorkspaceVersionTS_DoesNotTouchOtherWorkspaces (0.00s)
+--- PASS: TestSaveWorkspaceVersionTS_CreatesFile (0.00s)
+--- PASS: TestSaveWorkspaceVersionTS_ConcurrentSavesDoNotLoseUpdates (0.00s)
+PASS
+ok  	github.com/gammons/slk/internal/config/versionts	0.011s
+$ cd gui && go test -count=1 -v -run 'TestConversations_' ./backend | grep -E '^(--- |ok|FAIL|PASS)'
+--- PASS: TestConversations_BootsWithoutEnumerating (0.01s)
+--- PASS: TestConversations_FallsBackToEnumerationOnlyWhenBootFails (0.01s)
+--- PASS: TestConversations_SecondCallMakesNoRequest (0.01s)
+--- PASS: TestConversations_FillsCountsGapFromEdge (0.01s)
+PASS
+ok  	github.com/gammons/slk/gui/backend	0.046s
+```
+
+Additionally at `488975f6`: root `go test -count=1 ./...` → no `FAIL` line, every package `ok`; gui `go build ./... && go vet ./... && gofmt -l . && go test -count=1 ./...` → all `ok`, gofmt empty. Capture check `git diff 76b0f18b..HEAD -M --stat -- internal/slack/testdata internal/slackhttp/testdata` → empty (no capture touched). `ls cmd/slk/*.go | wc -l` → 26 (`bootstrap_adapters*`, `starred_conversations*`, `user_resolver*`, `workspace.go`, `connect.go`, `save_version_ts*` gone).
+
+### Runtime check for the user (not run by the executor)
+
+```
+make gui
+SLK_DEBUG=1 ./bin/slk-gio 2>boot.log      # open the list, wait for it to fill, then quit
+grep -A30 "boot requests" boot.log
+grep "gap size" boot.log
+grep "FALLING BACK" boot.log              # expect nothing
+```
+
+Expected in the `boot requests:` block (`slackhttp.DefaultCounter.Report()`, highest count first): `client.userBoot` 1, `client.counts` 1, `users.channelSections.list` 1, `stars.list` 1, `auth.test` 1, `conversations.view` ≤ 1, edge `channels/info` / `users/info` a few; absent (0): `users.conversations`, `users.prefs.get`, `users.list`, `conversations.list`; `users.info` absent unless the log also has `marking edge degraded` (then one per unnamed DM peer). `client.shouldReload` may or may not be in it yet (background). The `requests this session:` block printed on quit should still have `client.counts` 1 if no reconnect happened.
+
+The gap line reads `slk-gio: boot: gap size N (conversations client.counts names that userBoot did not list): A from the cache, B from channels/info, C left out`. N is the subset gap (67/218 and 60/71 on the two workspaces measured). C is expected to hold DMs whose cached row has no peer and, on Enterprise Grid, conversations owned by another team. **Stop condition (hand-over contract): if C counts channels the user sees in Slack's sidebar** (compare the list with Slack's), FillFromCounts is not enough and the next step needs deciding.
+
+### Deviations (Phase 3)
+
+1. `MissingStarredConversations` lives in `adapt/starred.go`, not `conversations.go`, and `Muted`/`UserDisplayName`/`HydrateFirstSight` stay in `deps.go` (no `prefs.go`/`hydrate.go`): whole-file `git mv` keeps the renames (`starred.go` R091; `deps.go` R067 only because the conversation half moved out to the new `conversations.go`).
+2. `FillFromCounts` leaves out gap DMs: `cache.Channel` has no peer user ID, and edge fails every IM, so a DM userBoot omits cannot be listed without a per-id `conversations.info`. Counted in the gap line's "left out".
+3. `versionts.Refresh` is in `refresh.go` (same package) so `versionts.go` stays a rename (R066); with it in one file git recorded D + A.
+4. `resolve.go` is recorded as D + A (R025 at `-M10%`): the plan drops more than half of `user_resolver.go` (messages, name store, avatars, bots). The test file is R074. `resolveOneContext` stores the 72px image (`Image72`→`48`→`32`), the TUI stored `Image32`; the GUI used `Image72`.
+5. `TestUserResolver_FirstSight{PerUser,Edge}DeliversPeerStatus` were kept (the plan said drop `*DeliversPeerStatus`): they now assert the cache row and the reported `Profile`'s status, which the resolver still writes.
+6. `Resolver.Logf` field added (the plan's `New` signature has no logger and `debuglog` is not allowed there).
+7. Read state after the boot is kept current from the socket (`noteRead` on `channel_marked` and a reconnect's counts, `noteActivity` on a new message from someone else), not in the plan: without it a list reopened from the tray would show the boot's unread state (the old code re-fetched counts on every reopen). A new message marks a conversation unread until `channel_marked`; mention counts are not raised by it.
+8. `bootOnce` uses a scratch `cache.New(":memory:")` when slk's cache did not open: `bootstrap.Store` and `HydrateFirstSight` need one.
+9. Risk 3 (`RevalidatedUsers`) went into the GUI commit (d), since that is where it is used.
+10. `afterConnect(first)` waits for the boot via a `bootDone` channel (≤ `listWait`, 1 min) rather than checking `s.counts` once: the first connect usually happens while the boot is still running.
+
+### Follow-ups (Phase 3)
+
+- `Result.Messages` is not ingested (plan); the opened conversation costs one `conversations.history` when its window opens.
+- Gap DMs (deviation 2): if the runtime gap line shows DMs left out, list them via `conversations.info` (one per id) or carry the peer ID in the cache's channel row.
+- `Profile()` still asks `users.info` per hover card (plan: needs Title/TZ/Image192).
+- `(*slackclient.Client).GetUnreadCounts` (the context-free form) has no non-test caller left; delete it with Phase 5's orphan sweep.
