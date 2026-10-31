@@ -41,6 +41,7 @@ import (
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slackdesktop"
 	"github.com/gammons/slk/internal/slackfmt"
+	"github.com/gammons/slk/internal/slackhttp"
 	"github.com/gammons/slk/internal/theme"
 )
 
@@ -62,9 +63,10 @@ func main() {
 	// slk's config: the GUI's colours, and the conversations the
 	// backfill skips. Missing is fine (defaults); unreadable is reported
 	// and treated the same.
-	cfg, err := config.Load(filepath.Join(paths.Config(), "config.toml"))
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "slk-gio: config:", err)
+	configPath := filepath.Join(paths.Config(), "config.toml")
+	cfg, cfgErr := config.Load(configPath)
+	if cfgErr != nil {
+		fmt.Fprintln(os.Stderr, "slk-gio: config:", cfgErr)
 	}
 	// The search backfill runs from startup, as far back as [cache]
 	// backfill says (90 days unset); -backfill overrides it.
@@ -124,7 +126,9 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		be, err := openBackend(ctx, *fake, *fakeEvery, tok)
+		be, err := openBackend(ctx, *fake, *fakeEvery, tok, backend.ConnectOptions{
+			Config: cfg, ConfigLoadErr: cfgErr, ConfigPath: configPath, Log: debugf,
+		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "slk-gio:", err)
 			os.Exit(1)
@@ -132,12 +136,14 @@ func main() {
 		var tray atomic.Bool
 		h := newHub(ctx, be, lastWindowClosed(tray.Load, func(code int) {
 			cancel()
+			reportRequests()
 			os.Exit(code)
 		}))
 		// The tray keeps slk-gio running with no window open.
 		if cfg.GUI.Tray {
 			tray.Store(startTray(h, func() {
 				cancel()
+				reportRequests()
 				os.Exit(0)
 			}))
 		}
@@ -182,7 +188,22 @@ func lastWindowClosed(tray func() bool, exit func(code int)) func(error) {
 	}
 }
 
-func openBackend(ctx context.Context, fake bool, fakeEvery time.Duration, tok slackclient.Token) (backend.Backend, error) {
+// debugf is the Slack backend's diagnostics: stderr, with SLK_DEBUG set.
+func debugf(format string, args ...any) {
+	if os.Getenv("SLK_DEBUG") != "" {
+		fmt.Fprintf(os.Stderr, "slk-gio: "+format+"\n", args...)
+	}
+}
+
+// reportRequests prints the session's Slack API requests by endpoint
+// (slackhttp.DefaultCounter) on the way out, with SLK_DEBUG set.
+func reportRequests() {
+	if os.Getenv("SLK_DEBUG") != "" {
+		fmt.Fprintf(os.Stderr, "slk-gio: requests this session:\n%s", slackhttp.DefaultCounter.Report())
+	}
+}
+
+func openBackend(ctx context.Context, fake bool, fakeEvery time.Duration, tok slackclient.Token, opts backend.ConnectOptions) (backend.Backend, error) {
 	if fake {
 		f := backend.NewFake(time.Now())
 		f.Interval = fakeEvery
@@ -198,7 +219,7 @@ func openBackend(ctx context.Context, fake bool, fakeEvery time.Duration, tok sl
 	}
 	cctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
-	be, err := backend.ConnectSlack(cctx, tok, db, paths.Cache())
+	be, err := backend.ConnectSlack(cctx, tok, db, paths.Cache(), opts)
 	if err != nil && db != nil {
 		db.Close()
 	}

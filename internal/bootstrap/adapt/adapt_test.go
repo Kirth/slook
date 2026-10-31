@@ -961,3 +961,29 @@ func TestFillFromCounts_NoGapNoRequest(t *testing.T) {
 		t.Errorf("nil result: got %v; want nothing", got)
 	}
 }
+
+// TestHydrateFirstSight_CachesRevalidatedUsersWithoutARow: a DM peer of
+// a cold cache comes back from boot's edge users/info, which can only
+// update rows; first-sight hydration creates it, with its version, so
+// nothing has to ask edge for it again.
+func TestHydrateFirstSight_CachesRevalidatedUsersWithoutARow(t *testing.T) {
+	db, err := cache.New(":memory:")
+	if err != nil {
+		t.Fatalf("cache.New: %v", err)
+	}
+	defer db.Close()
+	peer := edge.User{ID: "U2", Name: "pat", TeamID: "T1", Version: 1783337599010}
+	peer.Profile.RealName = "Pat Real"
+	HydrateFirstSight(db, "T1", &bootstrap.Result{RevalidatedUsers: []edge.User{peer}}, nil)
+
+	u, err := db.GetUser("U2")
+	if err != nil {
+		t.Fatalf("U2 not cached: %v", err)
+	}
+	if u.DisplayName != "Pat Real" || u.Name != "pat" {
+		t.Errorf("U2 = %+v; want Pat Real / pat", u)
+	}
+	if v, _ := db.UserVersions("T1"); v["U2"] != 1783337599010 {
+		t.Errorf("U2 version = %d; want the edge record's", v["U2"])
+	}
+}

@@ -431,4 +431,31 @@ func HydrateFirstSight(db *cache.DB, workspaceID string, res *bootstrap.Result, 
 			logf("bootstrap: hydrating user %s: %v", u.ID, err)
 		}
 	}
+	// The users edge revalidation returned that still have no row (DM
+	// peers of a cold cache: revalidate asked for them at version 0,
+	// and UpdateUserFromEdge cannot create rows). Written with their
+	// version, so the next boot asks only for what changed.
+	for _, u := range res.RevalidatedUsers {
+		if _, err := db.GetUser(u.ID); err == nil {
+			continue
+		}
+		name := u.Profile.DisplayName
+		if name == "" {
+			name = u.Profile.RealName
+		}
+		if name == "" {
+			name = u.Name
+		}
+		if err := db.UpsertUserFromEdge(workspaceID, cache.EdgeUserUpdate{
+			ID: u.ID, HomeTeamID: u.TeamID, Name: u.Name, DisplayName: name,
+			AvatarURL: u.Profile.ImageOriginal, IsBot: u.IsBot,
+			IsExternal:  u.TeamID != "" && u.TeamID != workspaceID,
+			StatusEmoji: u.Profile.StatusEmoji, StatusText: u.Profile.StatusText,
+			StatusExpiration: u.Profile.StatusExpiration,
+			HuddleState:      u.Profile.HuddleState, HuddleExpiration: u.Profile.HuddleStateExpirationTS,
+			Version: u.Version,
+		}); err != nil {
+			logf("bootstrap: hydrating revalidated user %s: %v", u.ID, err)
+		}
+	}
 }

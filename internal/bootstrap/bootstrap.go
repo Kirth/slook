@@ -311,6 +311,15 @@ type Result struct {
 	Users        []boot.User
 	ViewChannels []boot.ViewChannelEntry
 	Emojis       map[string]string
+
+	// RevalidatedUsers are the records edge users/info returned during
+	// revalidation: the changed ones, and in full every user the cache
+	// did not hold (asked at version 0) — the DM peers of a cold cache
+	// among them. revalidate writes them only through
+	// UpdateUserFromEdge, which leaves an absent row absent, so a caller
+	// that wants those users named (and cached) without asking edge a
+	// second time reads them here.
+	RevalidatedUsers []edge.User
 }
 
 // Deps is everything Run needs. Every field is required unless its

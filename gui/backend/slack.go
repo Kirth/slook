@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,8 +21,11 @@ import (
 	"github.com/gammons/slk/gui/rich"
 	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/blockkit"
+	"github.com/gammons/slk/internal/bootstrap"
+	"github.com/gammons/slk/internal/bootstrap/adapt"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/config/versionts"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/core/blocks"
 	"github.com/gammons/slk/internal/emoji"
@@ -31,7 +35,10 @@ import (
 	"github.com/gammons/slk/internal/msgsync"
 	"github.com/gammons/slk/internal/service"
 	slackclient "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/slack/boot"
+	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/slack/mrkdwn"
+	"github.com/gammons/slk/internal/slack/resolve"
 	"github.com/gammons/slk/internal/slackfmt"
 	"github.com/gammons/slk/internal/slackhttp"
 	"github.com/gammons/slk/internal/text"
@@ -49,10 +56,27 @@ const imageCacheMB = 200
 
 // Slack is a real workspace, signed in with a token slk stored.
 type Slack struct {
-	client  *slackclient.Client
-	team    string
-	fetcher *imgpkg.Fetcher
-	files   *filedl.Downloader // attachments, for the previewer
+	client *slackclient.Client
+	team   string
+	token  string // the xoxc token, for edgeapi (edge.New takes it directly)
+	// edge is edgeapi for this workspace (channels/info, users/info,
+	// search), on the client's own browser-shaped HTTP client; health is
+	// whether boot found it broken (then nothing batches through it).
+	edge   *edge.Client
+	health *edge.Health
+	// resolver names users the cache does not: edge users/info in
+	// batches, users.info per id as the fallback.
+	resolver *resolve.Resolver
+	// logf is the backend's diagnostics (ConnectOptions.Log); errOut is
+	// where warnings that must be seen go (stderr).
+	logf   func(string, ...any)
+	errOut io.Writer
+	// bootMu serializes the boot (bootOnce); bootDone is closed when it
+	// has run (see afterConnect).
+	bootMu   sync.Mutex
+	bootDone chan struct{}
+	fetcher  *imgpkg.Fetcher
+	files    *filedl.Downloader // attachments, for the previewer
 	// db is slk's cache: messages, user names, avatars and the user's
 	// channel visits. Nil when it could not be opened; then nothing is
 	// cached and every window open goes to Slack.
@@ -109,6 +133,28 @@ type Slack struct {
 	commands  []Command         // nil until fetched
 	customs   map[string]string // custom emoji; nil until fetched
 	convOrder []string          // conversations, most recently active first
+	// booted says the boot ran; boot is its result (nil after the
+	// users.conversations fallback); bootChans the user's conversations
+	// as it left them, kept current by opened(); counts the read state
+	// by conversation (countsOK: client.counts answered), kept current
+	// from the socket (noteRead, noteActivity). Conversations builds
+	// the list from these with no request.
+	booted    bool
+	boot      *bootstrap.Result
+	bootChans []slack.Channel
+	counts    map[string]slackclient.UnreadInfo
+	countsOK  bool
+}
+
+// ConnectOptions is what ConnectSlack needs besides the token: slk's
+// config (Config, and ConfigLoadErr when config.toml did not load), the
+// config file's path (version_ts is saved there), and Log, the
+// backend's diagnostics (nil discards).
+type ConnectOptions struct {
+	Config        config.Config
+	ConfigLoadErr error
+	ConfigPath    string
+	Log           func(string, ...any)
 }
 
 var _ rich.Names = (*Slack)(nil)
@@ -118,14 +164,37 @@ var _ rich.Names = (*Slack)(nil)
 // user names and avatars and holds the user's channel visits. The
 // backend keeps it. cacheDir is slk's cache directory; downloaded
 // images go in its images/ subdirectory.
-func ConnectSlack(ctx context.Context, tok slackclient.Token, db *cache.DB, cacheDir string) (*Slack, error) {
+//
+// Only auth.test is asked here (ctx bounds it); the boot proper
+// (client.userBoot and the rest, see bootOnce) runs on the first
+// Conversations, outside ctx. The build timestamp the requests carry
+// (_x_version_ts) is seeded from config.toml first, so even auth.test
+// carries it, and refreshed in the background (client.shouldReload).
+func ConnectSlack(ctx context.Context, tok slackclient.Token, db *cache.DB, cacheDir string, opts ConnectOptions) (*Slack, error) {
 	client := slackclient.NewClient(tok.AccessToken, tok.Cookie)
+	versionts.Seed(client.Envelope(), opts.Config, tok.TeamID)
 	if err := client.Connect(ctx); err != nil {
 		return nil, fmt.Errorf("connecting %s: %w", tok.TeamName, err)
+	}
+	return newSlack(client, tok, db, cacheDir, opts), nil
+}
+
+// newSlack is ConnectSlack after auth.test: the backend over a connected
+// client (a test's points at a fake Slack).
+func newSlack(client *slackclient.Client, tok slackclient.Token, db *cache.DB, cacheDir string, opts ConnectOptions) *Slack {
+	logf := opts.Log
+	if logf == nil {
+		logf = func(string, ...any) {}
 	}
 	s := &Slack{
 		client:   client,
 		team:     tok.TeamName,
+		token:    tok.AccessToken,
+		health:   edge.NewHealth(),
+		edge:     edge.New(tok.AccessToken, client.TeamID(), client.HTTPClient()),
+		logf:     logf,
+		errOut:   os.Stderr,
+		bootDone: make(chan struct{}),
 		db:       db,
 		sections: service.NewSectionStore(),
 		mutes:    service.NewMuteStore(),
@@ -142,6 +211,15 @@ func ConnectSlack(ctx context.Context, tok slackclient.Token, db *cache.DB, cach
 		catchUpOn:  true,
 		catchUpMax: config.DefaultCatchUpLimit,
 	}
+	s.resolver = resolve.New(client.TeamID(), db, s.edge, client, s.health.Degraded, nil)
+	s.resolver.Logf = logf
+	// The build timestamp, refreshed off the connect's deadline. A
+	// config.toml that did not load is not rewritten.
+	configPath := opts.ConfigPath
+	if opts.ConfigLoadErr != nil {
+		configPath = ""
+	}
+	go versionts.Refresh(context.Background(), client, opts.Config, configPath, tok.TeamName, logf)
 	if db != nil {
 		// The workspace row first: users and channels reference it.
 		if err := db.UpsertWorkspace(cache.Workspace{ID: client.TeamID(), Name: tok.TeamName}); err != nil {
@@ -163,7 +241,7 @@ func ConnectSlack(ctx context.Context, tok slackclient.Token, db *cache.DB, cach
 		s.fetcher = imgpkg.NewFetcher(store, slackhttp.NewImageHTTPClient(nil))
 		s.fetcher.SetAuths(auths)
 	}
-	return s, nil
+	return s
 }
 
 func (s *Slack) Workspace() string       { return s.team }
@@ -238,17 +316,17 @@ func (s *Slack) UserGroup(id string) (string, bool) {
 	return g.Handle, ok && g.Handle != ""
 }
 
-// userName returns a user's name, asking Slack for one it does not know.
+// userName returns a user's name, asking Slack for one it does not know
+// (resolveAll).
 func (s *Slack) userName(ctx context.Context, id string) string {
 	if name, ok := s.knownUser(id); ok {
 		return name
 	}
-	p, err := s.client.GetUserProfileContext(ctx, id)
-	if err != nil || p.User == nil {
-		return id
+	s.resolveAll(ctx, []string{id})
+	if name, ok := s.knownUser(id); ok {
+		return name
 	}
-	s.persistUser(id, p.Name, p.Profile.DisplayName, p.Profile.Image72, p.IsBot)
-	return s.rememberUser(id, p.Name, p.Profile.DisplayName, p.RealName, p.Profile.Image72)
+	return id
 }
 
 func (s *Slack) botName(ctx context.Context, id string) string {
@@ -271,77 +349,53 @@ func (s *Slack) botName(ctx context.Context, id string) string {
 	return b.Name
 }
 
-// resolveAll learns the names of users not yet known, a few at a time.
+// resolveAll learns the names of users not yet known: the cache, then
+// one edge users/info batch, then users.info for what that leaves (8 at
+// a time); see resolve.Resolver.Resolve. Known users cost nothing.
 func (s *Slack) resolveAll(ctx context.Context, ids []string) {
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(8)
+	if s.resolver == nil {
+		return
+	}
+	var unknown []string
 	for _, id := range ids {
 		if id == "" {
 			continue
 		}
-		if _, ok := s.knownUser(id); ok {
-			continue
+		if _, ok := s.knownUser(id); !ok {
+			unknown = append(unknown, id)
 		}
-		g.Go(func() error {
-			s.userName(gctx, id)
-			return nil
-		})
 	}
-	_ = g.Wait()
+	if len(unknown) == 0 {
+		return
+	}
+	for _, p := range s.resolver.Resolve(ctx, unknown) {
+		s.rememberUser(p.ID, p.Handle, p.DisplayName, p.RealName, p.AvatarURL)
+	}
 }
 
+// Conversations is the user's conversations with their read state. The
+// first call boots the workspace (bootOnce: client.userBoot and the rest
+// of Slack's own boot sequence, never an enumeration); every call after
+// builds the list from what the boot learned and the socket has kept
+// current since, with no request.
 func (s *Slack) Conversations(ctx context.Context) ([]Conversation, error) {
-	// The list's activity data comes from one request (or query) each,
-	// alongside the conversations themselves. Only the conversations
-	// are essential; without the rest the list still works, plainer.
-	var (
-		chans   []slack.Channel
-		unreads []slackclient.UnreadInfo
-		visits  map[string]int64
-	)
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() (err error) {
-		chans, err = s.client.GetChannels(gctx)
-		return err
-	})
-	g.Go(func() error {
-		var err error
-		var agg slackclient.ThreadsAggregate
-		if unreads, agg, err = s.client.GetUnreadCountsContext(gctx); err != nil {
-			fmt.Fprintln(os.Stderr, "slk-gio: unread counts:", err)
-		} else {
-			s.noteThreadsAggregate(gctx, agg)
-		}
-		return nil
-	})
-	g.Go(func() error {
-		if err := s.sections.Bootstrap(gctx, s.client); err != nil {
-			fmt.Fprintln(os.Stderr, "slk-gio: sidebar sections:", err)
-		}
-		return nil
-	})
-	g.Go(func() error {
-		if err := s.mutes.Bootstrap(gctx, s.client); err != nil {
-			fmt.Fprintln(os.Stderr, "slk-gio: muted channels:", err)
-		}
-		return nil
-	})
-	if s.db != nil {
-		g.Go(func() error {
-			var err error
-			if visits, err = s.db.GetChannelVisits(s.client.TeamID()); err != nil {
-				fmt.Fprintln(os.Stderr, "slk-gio: channel visits:", err)
-			}
-			return nil
-		})
-	}
-	if err := g.Wait(); err != nil {
+	if err := s.bootOnce(ctx); err != nil {
 		return nil, err
 	}
-	reads := make(map[string]slackclient.UnreadInfo, len(unreads))
-	for _, u := range unreads {
-		reads[u.ChannelID] = u
+	var visits map[string]int64
+	if s.db != nil {
+		var err error
+		if visits, err = s.db.GetChannelVisits(s.client.TeamID()); err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio: channel visits:", err)
+		}
 	}
+	s.mu.Lock()
+	chans := slices.Clone(s.bootChans)
+	reads := make(map[string]slackclient.UnreadInfo, len(s.counts))
+	for id, u := range s.counts {
+		reads[id] = u
+	}
+	s.mu.Unlock()
 	starred := map[string]bool{}
 	for _, id := range s.sections.StarredConversationIDs() {
 		starred[id] = true
@@ -374,6 +428,214 @@ func (s *Slack) Conversations(ctx context.Context) ([]Conversation, error) {
 	sortConversations(convs)
 	s.watchPresence(peers)
 	return convs, nil
+}
+
+// starredTimeout bounds the lookups of starred conversations the boot's
+// list lacks (conversations.info, one per star).
+const starredTimeout = 10 * time.Second
+
+// bootOnce boots the workspace the way Slack's web client does, once per
+// process: client.userBoot, client.counts, conversations.view for the
+// last-visited conversation and edge revalidation (bootstrap.Run), with
+// the sidebar sections alongside. It never enumerates (no
+// users.conversations, users.list, conversations.list): that is what got
+// Enterprise Grid users signed out for "data scraping" (see
+// internal/bootstrap). The conversations client.counts names that
+// userBoot's subset leaves out come from the cache, then one edge
+// channels/info (adapt.FillFromCounts); starred closed DMs from the
+// boot's DMs (adapt.MissingStarredConversations); DM peers from the
+// cache, then edge users/info (resolveAll).
+//
+// Only if client.userBoot fails does it enumerate, loudly on stderr:
+// users.conversations, client.counts and users.prefs.get, as slk-gio
+// booted before. A failure there is returned and the next call tries
+// again.
+//
+// The boot's messages (Result.Messages) are not ingested: without
+// LatestUpdates they would claim a span the cache does not hold, and the
+// window's open fetches the page anyway. Its emoji are the opened
+// conversation's, not the workspace's, so CustomEmoji keeps its
+// emoji.list.
+func (s *Slack) bootOnce(ctx context.Context) error {
+	s.bootMu.Lock()
+	defer s.bootMu.Unlock()
+	s.mu.Lock()
+	done := s.booted
+	s.mu.Unlock()
+	if done {
+		return nil
+	}
+	teamID := s.client.TeamID()
+	// bootstrap writes through a cache; without slk's, a scratch one.
+	db := s.db
+	if db == nil {
+		mem, err := cache.New(":memory:")
+		if err != nil {
+			return fmt.Errorf("boot: scratch cache: %w", err)
+		}
+		defer mem.Close()
+		db = mem
+	}
+	var visits map[string]int64
+	if s.db != nil {
+		var err error
+		if visits, err = s.db.GetChannelVisits(teamID); err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio: channel visits:", err)
+		}
+	}
+
+	var (
+		res     *bootstrap.Result
+		bootErr error
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		res, bootErr = bootstrap.Run(gctx, adapt.NewDeps(s.client, db, s.token, adapt.MostRecentlyVisited(visits), s.health, s.logf))
+		return nil
+	})
+	g.Go(func() error {
+		if err := s.sections.Bootstrap(gctx, s.client); err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio: sidebar sections:", err)
+		}
+		return nil
+	})
+	_ = g.Wait()
+
+	var (
+		chans    []slack.Channel
+		counts   map[string]slackclient.UnreadInfo
+		countsOK bool
+		ims      []boot.IM
+	)
+	if bootErr != nil {
+		fmt.Fprintf(s.errOut, "slk-gio: boot sequence failed (%v); FALLING BACK to users.conversations enumeration — this is the request shape that got Enterprise Grid users signed out\n", bootErr)
+		var err error
+		if chans, err = s.client.GetChannels(ctx); err != nil {
+			return err
+		}
+		if unreads, agg, err := s.client.GetUnreadCountsContext(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio: unread counts:", err)
+		} else {
+			counts, countsOK = unreadMap(unreads), true
+			s.noteThreadsAggregate(ctx, agg)
+		}
+		if err := s.mutes.Bootstrap(ctx, s.client); err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio: muted channels:", err)
+		}
+	} else {
+		ims = res.IMs
+		// userBoot's list already leaves out archived conversations,
+		// closed DMs and closed group DMs (adapt.Conversations).
+		adapt.HydrateFirstSight(db, teamID, res, s.logf)
+		chans = adapt.Conversations(res)
+		chans = append(chans, adapt.FillFromCounts(ctx, db, s.edge, teamID, res, s.logf)...)
+		s.seedBootUsers(res)
+		if err := s.mutes.Bootstrap(ctx, adapt.Muted{Res: res}); err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio: muted channels:", err)
+		}
+		if res.CountsOK {
+			unreads := make([]slackclient.UnreadInfo, 0, len(res.Counts.Unreads))
+			for _, u := range res.Counts.Unreads {
+				unreads = append(unreads, slackclient.UnreadInfo{ChannelID: u.ChannelID, MentionCount: u.MentionCount,
+					HasUnread: u.HasUnread, LastRead: u.LastRead, Latest: u.Latest})
+			}
+			counts, countsOK = unreadMap(unreads), true
+			t := res.Counts.Threads
+			s.noteThreadsAggregate(ctx, slackclient.ThreadsAggregate{HasUnreads: t.HasUnreads, UnreadCount: t.UnreadCount, MentionCount: t.MentionCount})
+		}
+	}
+
+	// Starred conversations the list lacks: closed starred DMs from the
+	// boot's own DMs, anything else by conversations.info.
+	known := make([]string, 0, len(chans))
+	for _, c := range chans {
+		known = append(known, c.ID)
+	}
+	sctx, cancel := context.WithTimeout(ctx, starredTimeout)
+	chans = append(chans, adapt.MissingStarredConversations(sctx, known, s.sections.StarredConversationIDs(), ims, s.client.GetConversationInfo)...)
+	cancel()
+
+	// The DMs' people, named before the list shows them.
+	var peers []string
+	for _, c := range chans {
+		if c.IsIM {
+			peers = append(peers, c.User)
+		}
+	}
+	s.resolveAll(ctx, peers)
+
+	s.mu.Lock()
+	// Conversations the socket opened while the boot ran (opened).
+	for _, c := range s.bootChans {
+		if !slices.ContainsFunc(chans, func(b slack.Channel) bool { return b.ID == c.ID }) {
+			chans = append(chans, c)
+		}
+	}
+	s.booted, s.boot, s.bootChans = true, res, chans
+	s.counts, s.countsOK = counts, countsOK
+	s.mu.Unlock()
+	close(s.bootDone)
+	if os.Getenv("SLK_DEBUG") != "" {
+		fmt.Fprintf(s.errOut, "slk-gio: boot requests:\n%s", slackhttp.DefaultCounter.Report())
+	}
+	return nil
+}
+
+// unreadMap keys client.counts' read state by conversation.
+func unreadMap(unreads []slackclient.UnreadInfo) map[string]slackclient.UnreadInfo {
+	out := make(map[string]slackclient.UnreadInfo, len(unreads))
+	for _, u := range unreads {
+		out[u.ChannelID] = u
+	}
+	return out
+}
+
+// seedBootUsers names the people the boot returned: the opened
+// conversation's authors (conversations.view) and the users edge
+// revalidated (the DMs' people among them). Bot flags and the cache rows
+// are HydrateFirstSight's.
+func (s *Slack) seedBootUsers(res *bootstrap.Result) {
+	for _, u := range res.Users {
+		s.rememberUser(u.ID, u.Name, u.Profile.DisplayName, u.Profile.RealName, u.Profile.ImageOriginal)
+	}
+	for _, u := range res.RevalidatedUsers {
+		s.rememberUser(u.ID, u.Name, u.Profile.DisplayName, u.Profile.RealName, u.Profile.ImageOriginal)
+	}
+}
+
+// noteRead records a conversation's read state as the socket reports it
+// (channel_marked, a reconnect's client.counts), so a later
+// Conversations shows it.
+func (s *Slack) noteRead(u slackclient.UnreadInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.counts == nil {
+		s.counts = map[string]slackclient.UnreadInfo{}
+	}
+	if u.Latest == "" {
+		u.Latest = s.counts[u.ChannelID].Latest
+	}
+	s.counts[u.ChannelID] = u
+}
+
+// noteActivity records a new message for a later Conversations: the
+// conversation's newest message, and unread when someone else wrote it
+// (until channel_marked says it was read).
+func (s *Slack) noteActivity(channelID, ts, userID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.counts == nil {
+		s.counts = map[string]slackclient.UnreadInfo{}
+	}
+	u := s.counts[channelID]
+	u.ChannelID = channelID
+	if ts > u.Latest {
+		u.Latest = ts
+	}
+	if userID != "" && userID != s.client.UserID() && ts > u.LastRead {
+		u.HasUnread = true
+	}
+	s.counts[channelID] = u
 }
 
 // conversationOfLocked is a Slack conversation as the windows show it:
@@ -421,6 +683,9 @@ func (s *Slack) opened(ctx context.Context, c slack.Channel) Conversation {
 	conv := s.conversationOfLocked(c, levels[c.ID], starred)
 	if !slices.Contains(s.convOrder, c.ID) {
 		s.convOrder = append([]string{c.ID}, s.convOrder...)
+	}
+	if !slices.ContainsFunc(s.bootChans, func(b slack.Channel) bool { return b.ID == c.ID }) {
+		s.bootChans = append(s.bootChans, c)
 	}
 	s.mu.Unlock()
 	s.persistChannels([]Conversation{conv})
@@ -1474,6 +1739,7 @@ func (s *Slack) Run(ctx context.Context, emit func(Event)) error {
 				})
 			case rawCounts:
 				for _, u := range v.unreads {
+					s.noteRead(u)
 					emit(ReadChanged{ChannelID: u.ChannelID, LastRead: u.LastRead, Unread: u.HasUnread, Mentions: u.MentionCount})
 				}
 			case rawConnected:
@@ -1518,6 +1784,7 @@ func (s *Slack) Run(ctx context.Context, emit func(Event)) error {
 			case rawPresence:
 				emit(PresenceChanged{UserID: v.user, Active: v.presence == "active"})
 			case rawMarked:
+				s.noteRead(slackclient.UnreadInfo{ChannelID: v.channelID, LastRead: v.ts, HasUnread: v.unread > 0, MentionCount: v.mentions})
 				emit(ReadChanged{ChannelID: v.channelID, LastRead: v.ts, Unread: v.unread > 0, Mentions: v.mentions})
 			case rawSections:
 				v(s.sections)
@@ -1559,17 +1826,44 @@ func (c *connScope) end() {
 // After a reconnect the read state goes to Run for the list (the first
 // connect's is what Conversations just loaded); then the conversations
 // the socket missed are caught up (catchUpAfterConnect).
+//
+// The first connect makes no request of its own when the boot's
+// client.counts answered: it waits for the boot (at most listWait) and
+// uses that.
 func (s *Slack) afterConnect(ctx context.Context, first bool) {
-	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	unreads, agg, err := s.client.GetUnreadCountsContext(cctx)
-	cancel()
-	if err != nil {
-		if ctx.Err() == nil {
-			fmt.Fprintln(os.Stderr, "slk-gio: unread counts after connect:", err)
+	var unreads []slackclient.UnreadInfo
+	if first {
+		select {
+		case <-s.bootDone:
+		case <-ctx.Done():
+			return
+		case <-time.After(listWait):
 		}
-		return
+		s.mu.Lock()
+		if s.booted && s.countsOK {
+			unreads = make([]slackclient.UnreadInfo, 0, len(s.counts))
+			for _, u := range s.counts {
+				unreads = append(unreads, u)
+			}
+		}
+		s.mu.Unlock()
 	}
-	s.noteThreadsAggregate(ctx, agg)
+	if unreads == nil {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		var (
+			agg slackclient.ThreadsAggregate
+			err error
+		)
+		unreads, agg, err = s.client.GetUnreadCountsContext(cctx)
+		cancel()
+		if err != nil {
+			if ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, "slk-gio: unread counts after connect:", err)
+			}
+			return
+		}
+		s.noteThreadsAggregate(ctx, agg)
+	}
 	if !first {
 		select {
 		case s.queue <- rawCounts{unreads}:
@@ -1591,6 +1885,9 @@ func (s *Slack) applyEvent(ctx context.Context, ev slackclient.MessageEvent, emi
 	if ev.Kind == slackclient.MessageDeleted {
 		emit(MessageDeleted{ChannelID: ev.ChannelID, TS: ev.Message.Timestamp})
 		return
+	}
+	if ev.Kind == slackclient.MessageNew {
+		s.noteActivity(ev.ChannelID, ev.Message.Timestamp, ev.Message.User)
 	}
 	r := rawFromSlack(ev.ChannelID, ev.Message)
 	// A changed message is a new version of one already delivered,

@@ -117,6 +117,19 @@ func (s *Server) RequestTo(t testing.TB, path string) Request {
 	return Request{}
 }
 
+// Requests returns every request to path, in arrival order.
+func (s *Server) Requests(path string) []Request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Request
+	for _, r := range s.reqs {
+		if r.Path == path {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // Paths lists every request's path, in arrival order.
 func (s *Server) Paths() []string {
 	s.mu.Lock()

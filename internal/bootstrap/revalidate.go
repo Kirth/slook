@@ -343,6 +343,7 @@ func revalidateUsers(ctx context.Context, deps Deps, out *Result, logf func(stri
 		logf("bootstrap: users/info for %d users: %v (leaving them stale)", len(updated), err)
 		return
 	}
+	out.RevalidatedUsers = users
 
 	// Counts of each huddle_state value, logged without user IDs, so a
 	// debug run shows if Slack starts sending a value other than

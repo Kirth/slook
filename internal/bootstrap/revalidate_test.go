@@ -1342,3 +1342,28 @@ func TestRevalidate_StaysInsideTheBootCallBudget(t *testing.T) {
 		t.Errorf("users/info called %d times; want exactly 1 (sequence: %v)", n, f.calls)
 	}
 }
+
+// TestRevalidate_ReportsTheUsersEdgeReturned: the users/info answer is
+// on the Result, so a caller can name (and first-sight cache) the users
+// UpdateUserFromEdge left without a row instead of asking edge again;
+// a failed call reports none of the poisoned records.
+func TestRevalidate_ReportsTheUsersEdgeReturned(t *testing.T) {
+	f := openedFake()
+	res, err := Run(context.Background(), f.Deps())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !reflect.DeepEqual(res.RevalidatedUsers, cannedUsersInfo()) {
+		t.Errorf("RevalidatedUsers = %+v; want the users/info answer", res.RevalidatedUsers)
+	}
+
+	f = openedFake()
+	f.usersInfoErr = errors.New("ratelimited")
+	res, err = Run(context.Background(), f.Deps())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.RevalidatedUsers) != 0 {
+		t.Errorf("RevalidatedUsers = %+v after a failed users/info; want none", res.RevalidatedUsers)
+	}
+}

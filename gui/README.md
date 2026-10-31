@@ -275,10 +275,22 @@ the first, or click a row. Viewing a conversation (its window has the
 keyboard) marks it read in Slack, as Slack's own clients do. Visits are
 kept in slk's cache, which the TUI's channel finder also orders by.
 
-Unread state, newest-message times, sections, stars and mutes each take
-one request for the whole workspace (`client.counts`,
-`users.channelSections.list`, `stars.list`, `users.prefs.get`), and
-stay current from the socket. In a chat, Enter sends, Shift+Enter is a new line, and
+The list comes from the boot Slack's own web client makes, once per
+run (`internal/bootstrap`): `client.userBoot` (the conversations, the
+DMs, mutes), `client.counts` (unread state and newest-message times),
+`conversations.view` for the conversation last visited, and edgeapi
+`channels/info` and `users/info`, which ask only about what changed since
+the cache last heard. Sections and stars are one request each
+(`users.channelSections.list`, `stars.list`). It never lists the
+workspace's conversations (`users.conversations`), which is what got
+Enterprise Grid users signed out for "data scraping"; only if
+`client.userBoot` fails does it, with a loud line on stderr. userBoot
+leaves some conversations out on real workspaces; those `client.counts`
+names come from the cache, then from one `channels/info`. DM partners
+the cache does not know are named in batches through edgeapi. All of it
+stays current from the socket, so reopening the list asks Slack nothing.
+With `SLK_DEBUG=1` slk-gio prints the boot's requests by endpoint
+("boot requests:") and the session's on exit. In a chat, Enter sends, Shift+Enter is a new line, and
 Ctrl+K opens the quick switcher. Links open in the browser and
 pictures and files in the previewer when clicked, and the pointer says
 so. Hovering an author's
