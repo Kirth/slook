@@ -58,3 +58,25 @@ func TestForwardedLink(t *testing.T) {
 		}
 	}
 }
+
+func TestButtonActionsSkipSelects(t *testing.T) {
+	m := backend.Message{Actions: []backend.Action{
+		{Index: 0, Label: "Pick", Type: "select"},
+		{Index: 1, Label: "Send", Type: "button"},
+		{Index: 2, Label: "Cancel", Type: "button"},
+	}}
+	got := ButtonActions(m)
+	if len(got) != 2 || got[0].Label != "Send" || got[1].Label != "Cancel" {
+		t.Fatalf("ButtonActions = %+v", got)
+	}
+	if !HasButtonActions(m) {
+		t.Fatal("HasButtonActions = false")
+	}
+	m.Actions = m.Actions[:1]
+	if HasButtonActions(m) || ButtonActions(m) != nil {
+		t.Fatal("a menu alone counted as a button")
+	}
+	if HasButtonActions(backend.Message{}) {
+		t.Fatal("a message without actions has buttons")
+	}
+}

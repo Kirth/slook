@@ -400,7 +400,14 @@ can import, not copied.
   blocks, quotes, bulleted and numbered lists, links, @-mentions,
   #channels, @here, emoji.
 - **Block Kit**: section, header, context, divider, image and actions
-  blocks (buttons are drawn, not pressable).
+  blocks (Block Kit buttons are drawn, not pressable).
+- **Buttons on a reply only you can see**: an app's ephemeral reply with
+  legacy attachment buttons (`/giphy`'s Shuffle and Send, Slackbot's
+  "Add them") says "buttons work here", and clicking one presses it as
+  Slack's web client does; a button whose app asks for confirmation asks
+  first. The app answers by replacing or removing the reply. Menus are
+  drawn, not pressable, and buttons on messages everyone sees are not
+  pressable either (Slack's clients send them only from ephemerals).
 - **Legacy attachments** as a card with Slack's color stripe: author,
   title, text, fields, image or thumbnail, footer.
 - **Uploads**: image files as thumbnails, other files as a chip with
@@ -529,7 +536,6 @@ with `GIORENDERER=opengl` and without.
   from the desktop.
 - **Leaving conversations.** `/leave` is not there.
 - **Interactive apps.** Dialogs some commands open (an app's modal) and
-  the buttons on ephemeral replies (`/giphy`'s Shuffle and Send) do
-  nothing yet.
+  Block Kit buttons do nothing yet.
 - **Strike-through** is drawn dimmed instead.
 - **More than one workspace** at a time.

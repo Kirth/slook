@@ -101,3 +101,91 @@ func TestFakeForwardPostsALinkCard(t *testing.T) {
 		t.Fatalf("unknown message: %v", err)
 	}
 }
+
+func TestFakePressActionDeletesTheEphemeral(t *testing.T) {
+	f := NewFake(time.Unix(1_700_000_000, 0))
+	f.Interval = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan Event, 8)
+	go f.Run(ctx, func(ev Event) { got <- ev })
+	<-got // connected
+
+	preview := func() Message {
+		t.Helper()
+		if err := f.RunCommand(ctx, "C1", "", "/standup", "shipped the cache"); err != nil {
+			t.Fatal(err)
+		}
+		m := nextPosted(t, got).Message
+		if !m.Ephemeral || len(m.Actions) != 3 {
+			t.Fatalf("preview %+v", m)
+		}
+		return m
+	}
+	deleted := func(ts string) {
+		t.Helper()
+		for ev := range got {
+			if d, ok := ev.(MessageDeleted); ok {
+				if d.ChannelID != "C1" || d.TS != ts {
+					t.Fatalf("deleted %+v, want C1 %s", d, ts)
+				}
+				return
+			}
+		}
+	}
+
+	m := preview()
+	send, shuffle, cancelBtn := m.Actions[0], m.Actions[1], m.Actions[2]
+	if send.Label != "Send" || send.Style != "primary" || cancelBtn.Confirm == nil || cancelBtn.Confirm.Title != "Cancel?" {
+		t.Fatalf("actions %+v", m.Actions)
+	}
+	// The body's buttons name the actions they press.
+	var pressed []int
+	for _, b := range m.Body {
+		if c, ok := b.(rich.Card); ok {
+			for _, inner := range c.Blocks {
+				if bs, ok := inner.(rich.Buttons); ok {
+					for _, it := range bs.Items {
+						pressed = append(pressed, it.Action)
+					}
+				}
+			}
+		}
+	}
+	if len(pressed) != 3 || pressed[0] != 0 || pressed[2] != 2 {
+		t.Fatalf("buttons press %v", pressed)
+	}
+
+	if err := f.PressAction(ctx, m, shuffle); err != nil {
+		t.Fatal(err)
+	}
+	sh := nextPosted(t, got).Message
+	if sh.TS != m.TS || !sh.Edited || !sh.Ephemeral || !strings.Contains(rich.PlainBlocks(sh.Body), "the cache shipped") {
+		t.Fatalf("shuffled %+v", sh)
+	}
+
+	if err := f.PressAction(ctx, sh, sh.Actions[0]); err != nil {
+		t.Fatal(err)
+	}
+	posted := nextPosted(t, got).Message
+	if posted.Author != "Standup Bot" || posted.Ephemeral || posted.Text != "the cache shipped" {
+		t.Fatalf("sent %+v", posted)
+	}
+	deleted(m.TS)
+	if err := f.PressAction(ctx, sh, sh.Actions[0]); err == nil || err.Error() != "invalid_action" {
+		t.Fatalf("pressing a gone preview: %v", err)
+	}
+
+	m = preview()
+	if err := f.PressAction(ctx, m, m.Actions[2]); err != nil {
+		t.Fatal(err)
+	}
+	deleted(m.TS)
+
+	m = preview()
+	notEphemeral := m
+	notEphemeral.Ephemeral = false
+	if err := f.PressAction(ctx, notEphemeral, m.Actions[0]); err == nil {
+		t.Fatal("pressed a button of a message everyone sees")
+	}
+}

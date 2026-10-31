@@ -1043,3 +1043,15 @@ func TestDispatchSubteamEvents(t *testing.T) {
 	// A handler without the interface is left alone.
 	dispatchWebSocketEvent([]byte(`{"type":"subteam_updated"}`), &mockEventHandler{})
 }
+
+func TestLegacyActionIDs(t *testing.T) {
+	frame := []byte(`{"type":"message","attachments":[{"actions":[{"id":"1","name":"a"},{"id":"2","name":"b"}]},{"text":"none"},{"actions":[{"id":"3"}]}]}`)
+	if got, want := fmt.Sprint(LegacyActionIDs(frame)), "[[1 2] [] [3]]"; got != want {
+		t.Errorf("LegacyActionIDs = %s, want %s", got, want)
+	}
+	for _, data := range []string{`{"type":"message"}`, `not json`, `{"attachments":[{"actions":[{"id":7}]}]}`} {
+		if got := LegacyActionIDs([]byte(data)); got != nil {
+			t.Errorf("LegacyActionIDs(%s) = %v, want nil", data, got)
+		}
+	}
+}

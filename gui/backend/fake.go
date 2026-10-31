@@ -58,6 +58,9 @@ type Fake struct {
 	adaDNDUntil time.Time
 	// self is the user's own presence and do-not-disturb.
 	self SelfStatus
+	// standups is the /standup previews on screen (ephemerals with
+	// buttons), by ts.
+	standups map[string]fakeStandup
 	// bf is the pretend backfill: it walks the conversations on a
 	// timer so the search window has progress to show.
 	bf struct {
@@ -855,11 +858,10 @@ func (f *Fake) RunCommand(ctx context.Context, channelID, threadTS, name, args s
 		m := post(args)
 		rich.Italicize(m.Body) // as Slack's me_message
 		ev = MessagePosted{Message: m}
-	case "/remind", "/standup":
+	case "/standup":
+		ev = MessagePosted{Message: f.standupLocked(channelID, threadTS, args)}
+	case "/remind":
 		m := f.nextLocked(channelID, "Slackbot", "Got it! I'll remind you: *"+args+"*")
-		if name == "/standup" {
-			m = f.nextLocked(channelID, "Standup Bot", "Thanks, your notes are saved: "+args)
-		}
 		m.Ephemeral = true
 		m.ThreadTS, m.InThreadOnly = threadTS, threadTS != ""
 		ev = MessagePosted{Message: m}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/gammons/slk/gui/rich"
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/core/blocks"
 	imgpkg "github.com/gammons/slk/internal/image"
 )
 
@@ -142,6 +143,31 @@ type Message struct {
 	// Reactions are the emoji reactions on the message, in the order
 	// they were first added.
 	Reactions []Reaction
+	// Actions are the legacy attachment actions of a message only the
+	// user can see (an app's ephemeral reply), every action of every
+	// attachment in order: rich.Button.Action indexes them. Nil for
+	// other messages: Slack's web client presses buttons only on
+	// ephemerals, which carry the action ids a press echoes.
+	Actions []Action
+}
+
+// Action is one legacy attachment action: a button (Type "button") or
+// a menu ("select"). Index is its place in Message.Actions. URL, when
+// set, makes the button a link to open, not a press. Confirm, when set,
+// is the question to ask before pressing. The rest is what a press
+// echoes back to Slack.
+type Action struct {
+	Index   int
+	Label   string
+	Type    string
+	Style   string // "", "default", "primary" or "danger"
+	URL     string
+	Confirm *blocks.ActionConfirm
+
+	legacy       blocks.LegacyAction
+	attachmentID int
+	callbackID   string
+	serviceID    string
 }
 
 // Reaction is one emoji on a message: its name as Slack names it
@@ -627,6 +653,11 @@ type Backend interface {
 	// result arrives through Run: a posted message or an ephemeral
 	// reply. Slack refusing it is a *core.CommandError.
 	RunCommand(ctx context.Context, channelID, threadTS, name, args string) error
+	// PressAction presses a button of a message only the user can see
+	// (chat.attachmentAction, as Slack's web client does). Slack answers
+	// through Run: an ephemeral replaced (a MessagePosted) or gone (a
+	// MessageDeleted), or a new message.
+	PressAction(ctx context.Context, m Message, a Action) error
 	// Sections is the user's Slack sidebar sections in Slack's order;
 	// empty when they are unknown.
 	Sections() []Section

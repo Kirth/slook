@@ -1061,6 +1061,10 @@ type rawMessage struct {
 	blocks                                                          []blocks.Block
 	attachments                                                     []slack.Attachment
 	reactions                                                       []slack.ItemReaction
+	// actionIDs are the ids of the attachments' actions, which slack-go
+	// drops (slackclient.LegacyActionIDs); an ephemeral's buttons need
+	// them to be pressed.
+	actionIDs [][]string
 }
 
 // rawFromSlack is the message as slack-go decoded it.
@@ -1114,7 +1118,13 @@ func (s *Slack) message(ctx context.Context, r rawMessage) Message {
 	when, _ := export.TimeFromTS(r.ts)
 	isReply := r.threadTS != "" && r.threadTS != r.ts
 	body := rich.Body(r.text, r.blocks, s)
-	body = append(body, rich.FromAttachments(blockkit.ParseAttachments(r.attachments), s)...)
+	atts := blockkit.ParseAttachments(r.attachments)
+	var actions []Action
+	if r.ephemeral {
+		blocks.ApplyActionIDs(atts, r.actionIDs)
+		actions = messageActions(atts, r.botID)
+	}
+	body = append(body, rich.FromAttachments(atts, s)...)
 	body = append(body, rich.FromFiles(r.files)...)
 	if r.subtype == "me_message" {
 		rich.Italicize(body) // a /me line, italic as in Slack's clients
@@ -1135,6 +1145,7 @@ func (s *Slack) message(ctx context.Context, r rawMessage) Message {
 		Ephemeral:    r.ephemeral,
 		FromSelf:     r.userID != "" && r.userID == s.client.UserID(),
 		Reactions:    reactions(r.reactions, s.client.UserID()),
+		Actions:      actions,
 	}
 }
 
@@ -1940,7 +1951,7 @@ func (h socketHandler) OnEphemeralMessage(m slackclient.EphemeralMessage) {
 	h.queue <- rawMessage{
 		channelID: m.ChannelID, userID: m.UserID, ts: m.TS, text: m.Text, threadTS: m.ThreadTS, subtype: m.Subtype,
 		botID: m.BotID, username: m.Username, ephemeral: true,
-		blocks: blockkit.Parse(m.Blocks), attachments: m.Attachments,
+		blocks: blockkit.Parse(m.Blocks), attachments: m.Attachments, actionIDs: m.ActionIDs,
 	}
 }
 

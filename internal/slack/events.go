@@ -258,10 +258,11 @@ type wsActionIDs struct {
 	} `json:"attachments"`
 }
 
-// legacyActionIDs returns the action ids of a message frame, indexed
-// like its attachments and their actions. nil when there are none or
-// they are not strings -- ids are best-effort and never block delivery.
-func legacyActionIDs(data []byte) [][]string {
+// LegacyActionIDs returns the action ids of a message frame, indexed
+// like its attachments and their actions: what blocks.ApplyActionIDs
+// puts back on the parsed attachments. nil when there are none or they
+// are not strings -- ids are best-effort and never block delivery.
+func LegacyActionIDs(data []byte) [][]string {
 	var raw wsActionIDs
 	if err := json.Unmarshal(data, &raw); err != nil || len(raw.Attachments) == 0 {
 		return nil
@@ -310,7 +311,7 @@ func dispatchEphemeral(data []byte, msg wsMessageEvent, handler EventHandler) {
 		Text:        msg.Text,
 		Blocks:      msg.Blocks,
 		Attachments: msg.Attachments,
-		ActionIDs:   legacyActionIDs(data),
+		ActionIDs:   LegacyActionIDs(data),
 	})
 }
 

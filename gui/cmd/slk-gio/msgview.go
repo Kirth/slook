@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"image"
 	"os"
 	"time"
@@ -138,6 +139,8 @@ func (v *msgView) applyCommon(item any) (handled bool, note string) {
 		return true, "Could not react: " + it.err.Error()
 	case deleteFailed:
 		return true, "Could not delete: " + it.err.Error()
+	case pressFailed:
+		return true, "Couldn't send " + it.label + ": " + it.err.Error()
 	case forwarded:
 		if it.err != nil {
 			return true, "Could not forward: " + it.err.Error()
@@ -167,7 +170,7 @@ func (v *msgView) handleWidgets(gtx C, started func()) {
 			if v.startPreview(r) && started != nil {
 				started()
 			}
-		})
+		}, v.pressAction)
 	}
 }
 
@@ -422,7 +425,7 @@ func (v *msgView) message(gtx C, m backend.Message, prev *backend.Message) D {
 		v.widgets[m.TS] = w
 	}
 	w.begin()
-	w.gallery = attachments(m.Body)
+	w.gallery, w.msg = attachments(m.Body), m
 	if m.AuthorID != "" && (w.avatarHover.Hovered() || w.nameHover.Hovered()) {
 		v.authorHover, v.hoverName = m.AuthorID, m.Author
 	}
@@ -469,7 +472,11 @@ func (v *msgView) message(gtx C, m backend.Message, prev *backend.Message) D {
 					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 						layout.Rigid(func(gtx C) D {
 							return layout.Inset{Left: avatarDp + gutterDp, Bottom: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
-								lbl := captionLabel(v.th, "Only visible to you")
+								text := "Only visible to you"
+								if chat.HasButtonActions(m) {
+									text += " · buttons work here"
+								}
+								lbl := captionLabel(v.th, text)
 								lbl.Color = colMuted
 								return lbl.Layout(gtx)
 							})
@@ -625,4 +632,45 @@ func (v *msgView) preview(req previewReq) {
 	if err := showPreview(ok, index); err != nil {
 		v.box.post(previewDone{name: req.items[req.index].Name, err: err})
 	}
+}
+
+// pressFailed is Slack refusing a button press.
+type pressFailed struct {
+	label string
+	err   error
+}
+
+// pressAction presses one of an ephemeral's buttons, after asking when
+// the app wants a confirmation (Slack's defaults where it gives none).
+func (v *msgView) pressAction(m backend.Message, a backend.Action) {
+	if c := a.Confirm; c != nil {
+		title, ok, dismiss := c.Title, c.OKText, c.DismissText
+		if title == "" {
+			title = "Are you sure?"
+		}
+		if ok == "" {
+			ok = "Okay"
+		}
+		if dismiss == "" {
+			dismiss = "Cancel"
+		}
+		v.confirm = confirmDialog{
+			open: true, focus: true,
+			title: title, body: c.Text, okLabel: ok, cancelLabel: dismiss, danger: a.Style == "danger",
+			onOK: func(string) { v.press(m, a) },
+		}
+		return
+	}
+	v.press(m, a)
+}
+
+// press sends a press off the window's event loop; Slack's answer
+// arrives as events, a refusal as a pressFailed.
+func (v *msgView) press(m backend.Message, a backend.Action) {
+	go func() {
+		if err := v.h.be.PressAction(v.h.ctx, m, a); err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio: press "+a.Label+":", err)
+			v.box.post(pressFailed{a.Label, err})
+		}
+	}()
 }

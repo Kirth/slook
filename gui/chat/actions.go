@@ -47,3 +47,26 @@ func ForwardedLink(text string) (string, bool) {
 	}
 	return url, true
 }
+
+// ButtonActions is m's legacy buttons in order; menus are not buttons
+// and are left out. Only a message only the user can see has any
+// (backend.Message.Actions).
+func ButtonActions(m backend.Message) []backend.Action {
+	var out []backend.Action
+	for _, a := range m.Actions {
+		if a.Type == "button" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// HasButtonActions reports whether m has a legacy button to press.
+func HasButtonActions(m backend.Message) bool {
+	for _, a := range m.Actions {
+		if a.Type == "button" {
+			return true
+		}
+	}
+	return false
+}

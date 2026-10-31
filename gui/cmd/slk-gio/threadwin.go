@@ -558,7 +558,7 @@ func (t *threadWindow) parentPost(gtx C, m backend.Message) D {
 		t.widgets[m.TS] = w
 	}
 	w.begin()
-	w.gallery = attachments(m.Body)
+	w.gallery, w.msg = attachments(m.Body), m
 	if m.AuthorID != "" && (w.avatarHover.Hovered() || w.nameHover.Hovered()) {
 		t.authorHover, t.hoverName = m.AuthorID, m.Author
 	}

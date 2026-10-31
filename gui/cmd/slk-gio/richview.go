@@ -54,6 +54,8 @@ type msgWidgets struct {
 	// previewer; nAtt counts them as they are drawn this frame.
 	gallery []backend.Attachment
 	nAtt    int
+	// msg is the message drawn, whose Actions its buttons press.
+	msg backend.Message
 
 	// avatarHover and nameHover notice the pointer over the author.
 	avatarHover, nameHover widget.Clickable
@@ -78,12 +80,14 @@ type msgWidgets struct {
 	tsel textSel
 }
 
-// openClick is a clickable that launches a URL, or previews one of the
-// message's attachments.
+// openClick is a clickable that launches a URL, previews one of the
+// message's attachments, or presses one of its actions (action, an
+// index into the message's Actions; -1 for none).
 type openClick struct {
 	btn     widget.Clickable
 	open    string
 	preview *previewReq
+	action  int
 }
 
 func newMsgWidgets() *msgWidgets {
@@ -122,7 +126,7 @@ func (w *msgWidgets) click(open string) *openClick {
 		c = new(openClick)
 		w.clicks[w.nClick] = c
 	}
-	c.open, c.preview = open, nil
+	c.open, c.preview, c.action = open, nil, -1
 	w.nClick++
 	return c
 }
@@ -138,9 +142,10 @@ func (w *msgWidgets) sel() *widget.Selectable {
 }
 
 // handle acts on events since the last frame: links open in the
-// browser on a click, attachments in the previewer; hover reports the
-// pointer entering or leaving a mention, with the user's ID.
-func (w *msgWidgets) handle(gtx C, hover func(userID string, on bool), preview func(previewReq)) {
+// browser on a click, attachments in the previewer, buttons are pressed
+// through press; hover reports the pointer entering or leaving a
+// mention, with the user's ID.
+func (w *msgWidgets) handle(gtx C, hover func(userID string, on bool), preview func(previewReq), press func(backend.Message, backend.Action)) {
 	for _, st := range w.texts {
 		for {
 			span, ev, ok := st.Update(gtx)
@@ -164,6 +169,10 @@ func (w *msgWidgets) handle(gtx C, hover func(userID string, on bool), preview f
 			continue
 		}
 		switch {
+		case c.action >= 0 && c.action < len(w.msg.Actions):
+			if press != nil {
+				press(w.msg, w.msg.Actions[c.action])
+			}
 		case c.preview != nil && preview != nil:
 			preview(*c.preview)
 		case c.open != "":
@@ -394,7 +403,7 @@ func (v *richView) block(gtx C, w *msgWidgets, b rich.Block) D {
 		})
 	case rich.Buttons:
 		return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
-			return v.buttons(gtx, b.Items)
+			return v.buttons(gtx, w, b.Items)
 		})
 	case rich.Card:
 		return insetSel(gtx, w, layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}, func(gtx C) D {
@@ -531,21 +540,57 @@ func (v *richView) context(gtx C, w *msgWidgets, c rich.Context) D {
 }
 
 // buttons draws action labels as outlined chips; they do nothing.
-func (v *richView) buttons(gtx C, items []rich.Button) D {
+func (v *richView) buttons(gtx C, w *msgWidgets, items []rich.Button) D {
 	children := make([]layout.FlexChild, 0, len(items))
 	for _, it := range items {
-		label := it.Label
 		children = append(children, layout.Rigid(func(gtx C) D {
 			return layout.Inset{Right: unit.Dp(6)}.Layout(gtx, func(gtx C) D {
-				border := widget.Border{Color: colBorder, CornerRadius: unit.Dp(4), Width: unit.Dp(1)}
-				return border.Layout(gtx, func(gtx C) D {
-					return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4), Left: unit.Dp(10), Right: unit.Dp(10)}.Layout(gtx,
-						secondaryLabel(v.th, label).Layout)
-				})
+				return v.button(gtx, w, it)
 			})
 		}))
 	}
 	return layout.Flex{}.Layout(gtx, children...)
+}
+
+// button is one button: a framed label. A link button opens its URL; a
+// button of the message's Actions (an ephemeral's) is pressed, with a
+// red frame when it is dangerous and an accent one when it is the
+// primary choice; anything else (Block Kit, a menu) is only drawn.
+func (v *richView) button(gtx C, w *msgWidgets, it rich.Button) D {
+	frame := func(gtx C, border, bg color.NRGBA) D {
+		b := widget.Border{Color: border, CornerRadius: unit.Dp(4), Width: unit.Dp(1)}
+		return b.Layout(gtx, func(gtx C) D {
+			return rounded(gtx, bg, unit.Dp(4), func(gtx C) D {
+				return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4), Left: unit.Dp(10), Right: unit.Dp(10)}.Layout(gtx,
+					secondaryLabel(v.th, it.Label).Layout)
+			})
+		})
+	}
+	var c *openClick
+	switch {
+	case it.URL != "":
+		c = w.click(it.URL)
+	case it.Action >= 0 && it.Action < len(w.msg.Actions) && w.msg.Actions[it.Action].Type == "button":
+		c = w.click("")
+		c.action = it.Action
+	default:
+		return frame(gtx, colBorder, color.NRGBA{})
+	}
+	border := colBorder
+	switch it.Style {
+	case "danger":
+		border = colError
+	case "primary":
+		border = colAccent
+	}
+	return c.btn.Layout(gtx, func(gtx C) D {
+		pointer.CursorPointer.Add(gtx.Ops)
+		bg := color.NRGBA{}
+		if c.btn.Hovered() {
+			bg = colControl
+		}
+		return frame(gtx, border, bg)
+	})
 }
 
 // file is a chip naming a non-image upload; clicking opens it in Slack.
