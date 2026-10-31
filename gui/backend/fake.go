@@ -483,6 +483,9 @@ func (f *Fake) UserGroups() []UserGroup { return append([]UserGroup(nil), fakeGr
 
 func (f *Fake) WebURL(string) string { return "" }
 
+// Domain is the subdomain of the fake's permalinks (demo.slack.com).
+func (f *Fake) Domain() string { return "demo" }
+
 func (f *Fake) Sections() []Section { return append([]Section(nil), fakeSections...) }
 
 // MarkRead clears the conversation's unread state and echoes it, as

@@ -838,6 +838,9 @@ func (s *Slack) WebURL(channelID string) string {
 	return "https://app.slack.com/client/" + s.client.TeamID() + "/" + channelID
 }
 
+// Domain is the workspace's subdomain from auth.test's URL.
+func (s *Slack) Domain() string { return s.client.TeamSubdomain() }
+
 // MarkRead marks a conversation read up to ts, as viewing it in Slack
 // does. Slack echoes it back as a ReadChanged.
 func (s *Slack) MarkRead(ctx context.Context, channelID, ts string) error {

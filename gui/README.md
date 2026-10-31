@@ -345,9 +345,12 @@ the cache does not know are named in batches through edgeapi. All of it
 stays current from the socket, so reopening the list asks Slack nothing.
 With `SLK_DEBUG=1` slk-gio prints the boot's requests by endpoint
 ("boot requests:") and the session's on exit. In a chat, Enter sends, Shift+Enter is a new line, and
-Ctrl+K opens the quick switcher. Links open in the browser and
-pictures and files in the previewer when clicked, and the pointer says
-so. Hovering an author's
+Ctrl+K opens the quick switcher. A link to a message in this workspace
+(a copied permalink, a forwarded message) opens its conversation's
+window scrolled to the message and lit, and a link to a thread reply
+opens the thread too; other links, other workspaces' included, open in
+the browser. Pictures and files open in the previewer when clicked, and
+the pointer says so. Hovering an author's
 name or avatar, or an @-mention, shows a card with their profile:
 picture, names, title, status and local time.
 

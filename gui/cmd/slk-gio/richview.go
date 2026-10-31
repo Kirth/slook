@@ -141,11 +141,14 @@ func (w *msgWidgets) sel() *widget.Selectable {
 	return s
 }
 
-// handle acts on events since the last frame: links open in the
-// browser on a click, attachments in the previewer, buttons are pressed
-// through press; hover reports the pointer entering or leaving a
-// mention, with the user's ID.
-func (w *msgWidgets) handle(gtx C, hover func(userID string, on bool), preview func(previewReq), press func(backend.Message, backend.Action)) {
+// handle acts on events since the last frame: links open through open
+// on a click (openURL, the browser, when nil), attachments in the
+// previewer, buttons are pressed through press; hover reports the
+// pointer entering or leaving a mention, with the user's ID.
+func (w *msgWidgets) handle(gtx C, hover func(userID string, on bool), preview func(previewReq), press func(backend.Message, backend.Action), open func(url string)) {
+	if open == nil {
+		open = openURL
+	}
 	for _, st := range w.texts {
 		for {
 			span, ev, ok := st.Update(gtx)
@@ -155,7 +158,7 @@ func (w *msgWidgets) handle(gtx C, hover func(userID string, on bool), preview f
 			switch ev.Type {
 			case richtext.Click:
 				if url, _ := span.Get("url").(string); url != "" {
-					openURL(url)
+					open(url)
 				}
 			case richtext.Hover, richtext.Unhover:
 				if id, _ := span.Get("user").(string); id != "" && hover != nil {
@@ -176,7 +179,7 @@ func (w *msgWidgets) handle(gtx C, hover func(userID string, on bool), preview f
 		case c.preview != nil && preview != nil:
 			preview(*c.preview)
 		case c.open != "":
-			openURL(c.open)
+			open(c.open)
 		}
 	}
 }
@@ -201,6 +204,9 @@ type richView struct {
 	// myGroup reports whether a usergroup is one of the user's; a
 	// mention of it is drawn as a mention of them. Nil means none.
 	myGroup func(id string) bool
+	// open opens a clicked link: hub.openLink, which shows a link to a
+	// message of this workspace in its window. Nil opens the browser.
+	open func(url string)
 }
 
 // busyNote is "Downloading…" under an attachment being fetched.

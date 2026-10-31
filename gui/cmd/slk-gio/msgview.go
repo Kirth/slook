@@ -96,7 +96,7 @@ func newMsgView(h *hub, th *material.Theme, box *inbox, busy func(backend.Attach
 		profiles:    map[string]*profileEntry{},
 		downloading: map[string]bool{},
 	}
-	v.view = richView{th: th, images: h.images, box: box, busy: busy, myGroup: h.isMyGroup}
+	v.view = richView{th: th, images: h.images, box: box, busy: busy, myGroup: h.isMyGroup, open: h.openLink}
 	return v
 }
 
@@ -170,7 +170,7 @@ func (v *msgView) handleWidgets(gtx C, started func()) {
 			if v.startPreview(r) && started != nil {
 				started()
 			}
-		}, v.pressAction)
+		}, v.pressAction, v.view.open)
 	}
 }
 

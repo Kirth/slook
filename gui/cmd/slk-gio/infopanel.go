@@ -211,7 +211,7 @@ func (c *chatWindow) infoUpdate(gtx C) {
 	}
 	for _, w := range []*msgWidgets{p.topic, p.purpose} {
 		if w != nil {
-			w.handle(gtx, c.setSpanHover, func(r previewReq) { c.startPreview(r) }, nil)
+			w.handle(gtx, c.setSpanHover, func(r previewReq) { c.startPreview(r) }, nil, c.view.open)
 		}
 	}
 }

@@ -695,6 +695,9 @@ type Backend interface {
 	// WebURL is the conversation in Slack's web client, or "" if there
 	// is none.
 	WebURL(channelID string) string
+	// Domain is the workspace's slack.com subdomain ("acme" for
+	// acme.slack.com), which its permalinks carry; "" when unknown.
+	Domain() string
 	// Presence reports whether a person is active now. Changes for the
 	// people the user has DMs with arrive through Run.
 	Presence(ctx context.Context, userID string) (active bool, err error)

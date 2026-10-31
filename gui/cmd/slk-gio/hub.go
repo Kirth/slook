@@ -864,6 +864,49 @@ func (h *hub) openNote(n notifications.Note) {
 	h.openChatAt(conv, n.TS)
 }
 
+// openLink opens a clicked link: one to a message in this workspace
+// (chat.LinkTarget) in the conversation's window, scrolled to it and
+// lit, and for a thread reply the thread too, lit on the reply (as
+// openNote); anything else, or a conversation Slack will not describe,
+// in the browser.
+func (h *hub) openLink(url string) {
+	channelID, ts, threadTS, ok := chat.LinkTarget(url, h.be.Domain())
+	if !ok {
+		openURL(url)
+		return
+	}
+	open := func(conv backend.Conversation) {
+		if threadTS != "" && threadTS != ts {
+			h.openChatAt(conv, threadTS)
+			h.openThread(conv, threadTS, ts)
+			return
+		}
+		h.openChatAt(conv, ts)
+	}
+	h.mu.Lock()
+	var conv *backend.Conversation
+	for _, c := range h.convs {
+		if c.ID == channelID {
+			conv = &c
+			break
+		}
+	}
+	h.mu.Unlock()
+	if conv != nil {
+		open(*conv)
+		return
+	}
+	go func() {
+		c, err := h.be.Conversation(h.ctx, channelID)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio: open link", url+":", err)
+			openURL(url)
+			return
+		}
+		open(c)
+	}()
+}
+
 // peopleFresh is how long the people list serves before it is read
 // again: new people show up as messages arrive.
 const peopleFresh = 5 * time.Minute
