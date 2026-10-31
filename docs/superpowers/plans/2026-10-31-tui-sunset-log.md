@@ -653,3 +653,109 @@ Run in a private X server so neither the user's clipboard nor screen was touched
 - A failure part-way through a multi-file upload keeps every file; a retry re-sends the ones that went. `Upload` could report how many were posted so the composer drops those chips.
 - macOS has no clipboard image reader (`pngpaste` would be the tool); `internal/clipboard` finds nothing there.
 - `wiki/Installation.md`'s clipboard section still describes the TUI (Phase 6).
+
+## Phase 4.4 — Mark unread; Phase 4.5 — Own presence / DND
+
+### 4.4 — `gui: mark a conversation or thread unread from a message`
+
+- Commit: `5cb7d95b`
+- Backend: `MarkUnread(ctx, channelID, threadTS, boundaryTS)` after `MarkThreadRead`. `gui/backend/read.go`: channel → `client.MarkChannelUnread` then queue `rawMarked{unread: 1, mentions: n}`, `n` = cached rows after the boundary (`GetMessagesSince`, the boundary row itself and the user's own skipped) that are in a DM/group DM or match `mention.InText` (the TUI's `countMentionsSince` rule); thread → `client.MarkThreadUnread` then `rawThreadUnread` → cache `UpdateThreadLastReadIfExists(boundary)`, `ThreadState{Unread: true}`, `ThreadsChanged`, `recountThreads`. Not optimistic (as `MarkThreadRead`).
+- `threads.go threadMarked`: a `thread_marked` whose read mark is before a cached reply that is not the user's own now emits `ThreadState{Unread: true}` (was always false), via `repliesAfter`. Slack echoes a mark unread as `thread_marked`; without this the echo would clear what was just marked. See deviation 2.
+- Fake (`fake_read.go`): channel → `Unread`, `Mentions` (non-self, not thread-only, after the boundary; every message in a DM/group DM, else `mention.InText`), `ReadChanged{Unread, Mentions, LastRead}`; unknown → `channel_not_found`; thread (C1 only) → `followed[ts] = true`, `ThreadState{Unread}`, `ThreadsChanged`, `threadsUnreadLocked()`.
+- `gui/chat/readgate.go`: `ReadGate` (`Hold(newest)`, `Blur()`, `Arrived(ts)`, `Open()`; zero value open), `UnreadBoundary`, `ThreadUnreadBoundary`.
+- Windows: `msgView.markUnread func(m) func()` (nil action → no item); `menuItems` adds "Mark unread from here" after "Open in Slack" for non-ephemerals (`msgMenu.items` now `[8]`). `chatwin.go`: `gate`, carried in `chatState`; `markRead` returns while `!gate.Open()`; `focusChanged(on)` (was inline in `run`) blurs the gate on focus loss; a `MessagePosted` for this channel, not ephemeral, not thread-only → `Arrived` before `markRead`; `markUnreadFrom(b)` → `Hold(newestKept)`, `marked = b`, `go be.MarkUnread`; a refusal comes back as `unreadFailed` → `Blur`, `marked` restored, note "Could not mark unread: …". `threadwin.go` the same with `ThreadUnreadBoundary` (the parent offers no item). `listwin.go` unchanged.
+- Tests: `TestReadGateReleasesOnBlur`, `TestReadGateReleasesOnNewerMessage`, `TestUnreadBoundary`, `TestThreadUnreadBoundary`, `TestFakeMarkUnreadChannel`, `TestFakeMarkUnreadThread`; added: `TestMarkUnread_CountsMentionsAfterTheBoundary` and `TestThreadMarkedEchoOfAnUnreadStaysUnread` (slacktest + in-memory cache), and headless window tests `TestChatWindowKeepsAMarkUnreadUntilBlurOrNewMessage` / `TestThreadWindowKeepsAMarkUnreadUntilBlurOrNewReply` (`cmd/slk-gio/readgate_test.go`: a real hub over the fake with `MarkRead`/`MarkThreadRead`/`MarkUnread` recorded, windows built with `newChatWindow`/`newThreadWindow` and never run). With the gate check removed from `chatWindow.markRead` the chat test fails ("marked \"read C1 …\", want \"\"").
+- README: a sentence in the actions-menu paragraph. AGENTS.md: one Gio row.
+
+### 4.5 — `gui: set your own presence and do-not-disturb`
+
+- Commit: `63f42e2a`
+- Backend: `SelfStatus{Away, DND, DNDUntil}`, event `SelfPresenceChanged{Status}` (with `isEvent`), `SelfStatus(ctx)`, `SetPresence(ctx, away)`, `Snooze(ctx, minutes)`, `EndSnooze(ctx)`, `EndDND(ctx)` after `Presence`.
+- `gui/backend/presence.go`: `Slack.self` under `mu`; `SelfStatus` = `users.getPresence` (Away = `manual_away` or `presence == "away"`) + `dnd.info` → `DNDStateFromStatus`. The `OnSelfPresenceChange` / `OnDNDChange` stubs in `slack.go` are replaced by handlers queuing `rawSelfPresence` / `rawSelfDND`, applied in `Run` (`applySelf`) → `SelfPresenceChanged`. Setters go through `setSelf`: queue the new status, call with `reactTimeout`, on error queue the old one and log `slk-gio: presence:`. `SetPresence` → `users.setPresence` `auto`/`away`; `Snooze` → `dnd.setSnooze`; `EndSnooze` → `dnd.endSnooze`; `EndDND` → `dnd.endSnooze` then `dnd.endDnd`, failing only when both fail (deviation 5).
+- Fake (`fake_presence.go`): `self`; setters apply and emit; `Run` emits `SelfPresenceChanged` right after `ConnectionChanged` (`nextPosted` in `fake_test.go` skips it). `TestFakePresenceAndSnooze`. Slack side: `TestSelfStatus_ReadsPresenceAndDND`, `TestSetPresence_TakesBackWhatSlackRefuses` (slacktest).
+- `gui/chat/presence.go`: `PresenceItem{Label, Away, Snooze, End, Minutes, Current}`, `PresenceItems(st, now)` (Active, Away, six snoozes, "Snooze until tomorrow morning", "End do not disturb" only while DND; Active/Away marked current only outside DND), `MinutesUntilTomorrowMorning`, `SelfText` ("Away", "Do not disturb until 15:20", "Away · do not disturb until …", "" when simply active; built on `DNDText`). Tests `TestPresenceItemsMarkTheCurrentOne`, `TestPresenceItemsOfferEndOnlyWhileDND`, `TestMinutesUntilTomorrowMorning`, `TestSelfText`.
+- Hub: `self` + `selfStatus()`, `loadSelf()` (one `be.SelfStatus` after `showList()`, from `main.go`), `SelfPresenceChanged` in `dispatch` (to the list; `onSelf` called after the lock is released, in order), `setPresence(it, from)` (End → `EndDND`, Snooze → `Snooze`, else `SetPresence(it.Away)`; error → `sendFailed{note: "Could not change presence: …"}` to `from`, or the list when `from` is nil).
+- List: `headerSpec(gtx)` tile wrapped in `withSelf` (`withPresence` dot, or an `iconDND` badge during DND), `headerSpec.OnLeading` (+ `headerBar.leading`, laid over the tile so the dot is not clipped) opens `presenceMenu` (`gui/cmd/slk-gio/presencemenu.go`: `popupScrim`/`popupPanel`/`popupFrame`, rules between groups, `dismissed`); the subtitle is the unread summary + " · " + `SelfText` when that is not empty. `menuRow` lifted to `menuRowAt(gtx, th, cl, label, danger, current)` (a ✓ after the current one). `TestPopupTagsAreDistinct` covers `presenceMenu`.
+- Tray (`tray_linux.go`): Active / Away (checkboxes), Snooze for 1 hour, End do not disturb (shown only during DND), from `trayPresenceItems` (`tray_items.go`, untagged); the tooltip from `trayTooltip` follows `h.onSelf`. `TestTrayPresenceItems` asserts the items, checks and tooltip.
+- Compose: `/away` (toggle), `/active`, `/status away|active` → `hub.setPresence`; any other `/status` → "/status isn't supported in slk-gio yet", text kept. `TestComposerPresenceCommands`.
+- README: paragraph after the tray paragraph, the tray paragraph mentions presence. AGENTS.md: one Gio row.
+
+### Verify (4.4, 4.5) — run at `63f42e2a`, gui module (`cd gui && nix-shell shell.nix --run ...`), `-count=1 -v` added
+
+```
+$ go test -count=1 -v ./backend -run "TestFakeMarkUnread|TestMarkUnread_|TestThreadMarkedEcho"
+--- PASS: TestFakeMarkUnreadChannel (0.00s)
+--- PASS: TestFakeMarkUnreadThread (0.00s)
+--- PASS: TestMarkUnread_CountsMentionsAfterTheBoundary (0.01s)
+--- PASS: TestThreadMarkedEchoOfAnUnreadStaysUnread (0.01s)
+ok  	github.com/gammons/slk/gui/backend	0.028s
+$ go test -count=1 -v ./chat -run "TestReadGate|TestUnreadBoundary|TestThreadUnreadBoundary"
+--- PASS: TestReadGateReleasesOnBlur (0.00s)
+--- PASS: TestReadGateReleasesOnNewerMessage (0.00s)
+--- PASS: TestUnreadBoundary (0.00s)
+--- PASS: TestThreadUnreadBoundary (0.00s)
+ok  	github.com/gammons/slk/gui/chat	0.004s
+$ go test -count=1 -v ./cmd/slk-gio -run KeepsAMarkUnread
+--- PASS: TestChatWindowKeepsAMarkUnreadUntilBlurOrNewMessage (1.43s)
+--- PASS: TestThreadWindowKeepsAMarkUnreadUntilBlurOrNewReply (0.21s)
+ok  	github.com/gammons/slk/gui/cmd/slk-gio	1.742s
+$ go test -count=1 -v ./backend -run "TestFakePresence|TestSelfStatus_|TestSetPresence_"
+--- PASS: TestFakePresenceAndSnooze (0.00s)
+--- PASS: TestSelfStatus_ReadsPresenceAndDND (0.01s)
+--- PASS: TestSetPresence_TakesBackWhatSlackRefuses (0.01s)
+ok  	github.com/gammons/slk/gui/backend	0.030s
+$ go test -count=1 -v ./chat -run "TestPresence|TestMinutesUntil|TestSelfText"
+--- PASS: TestPresenceItemsMarkTheCurrentOne (0.00s)
+--- PASS: TestPresenceItemsOfferEndOnlyWhileDND (0.00s)
+--- PASS: TestMinutesUntilTomorrowMorning (0.00s)
+--- PASS: TestSelfText (0.00s)
+ok  	github.com/gammons/slk/gui/chat	0.004s
+$ go test -count=1 -v ./cmd/slk-gio -run "TestComposerPresence|TestTrayPresence|TestPopupTags"
+--- PASS: TestPopupTagsAreDistinct (0.00s)
+--- PASS: TestComposerPresenceCommands (0.02s)
+--- PASS: TestTrayPresenceItems (0.00s)
+ok  	github.com/gammons/slk/gui/cmd/slk-gio	0.022s
+$ go build ./... && go vet ./... && gofmt -l . && go test -count=1 ./... -race
+ok  	github.com/gammons/slk/gui/backend	4.992s
+ok  	github.com/gammons/slk/gui/chat	1.018s
+ok  	github.com/gammons/slk/gui/cmd/slk-gio	10.345s
+ok  	github.com/gammons/slk/gui/motion	1.010s
+ok  	github.com/gammons/slk/gui/notifications	1.027s
+ok  	github.com/gammons/slk/gui/palette	1.010s
+ok  	github.com/gammons/slk/gui/rich	1.020s
+ok  	github.com/gammons/slk/gui/search	1.021s
+ok  	github.com/gammons/slk/gui/selection	1.011s
+ok  	github.com/gammons/slk/gui/sidebar	1.019s
+ok  	github.com/gammons/slk/gui/textedit	1.012s
+exit=0
+```
+
+At `5cb7d95b` the gui module was also build/vet/gofmt-clean and `go test -count=1 ./... -race` all `ok`. Root module at `63f42e2a` (and `5cb7d95b`): `go build ./... && go vet ./... && gofmt -l .` clean; `go test -count=1 ./...` every package `ok`.
+
+### Manual (`-fake`), performed
+
+Built to the scratchpad (`go build -o <scratch>/slk-gio ./cmd/slk-gio`, at the 4.5 tree, which contains 4.4 unchanged), run in a private X server: `Xvfb :97` (`nix-shell -p xvfb`), `WAYLAND_DISPLAY` unset, `DISPLAY=:97`, `DBUS_SESSION_BUS_ADDRESS` pointing at a socket that does not exist (no tray registration, no portal, no notifications on the user's desktop), `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_CACHE_HOME` in the scratchpad with `[gui] tray = false` and `[notifications] enabled = false`; `<scratch>/slk-gio -fake -fake-every 0`. Driven with `xdotool` (key, type, clicks, `windowfocus` to move the keyboard between windows, `windowmove`/`windowsize`), frames with `ffmpeg -f x11grab -i :97`. Stopped with `pkill -f "^<scratch>/slk-gio -fake"` and `pkill -f "Xvfb :97"`; the user's `slk-gio` (pid 450995) was untouched.
+
+- 4.5: list tile shows a green dot. Tile → menu (Active ✓, Away, rule, six snoozes, until tomorrow morning) → Away → grey ring, subtitle "2 unread conversations · Away". Tile → Snooze for 20 minutes → paused-bell badge, subtitle (window widened to 640 px) "… · Away · do not disturb until 13:15". In #general `/active` → subtitle "… · Do not disturb until 13:15", composer emptied. Tile → menu now ends with a rule and "End do not disturb" → clicked → green dot, plain subtitle. `/away` → grey ring "· Away"; `/away` again → green. `/status lunch` → "/status isn't supported in slk-gio yet", text left in the composer.
+- 4.4: #general focused, right-click the third-newest (Margaret's "Following up in #eng-backend") → menu has "Mark unread from here" → clicked → the list shows "general" under UNREAD ("3 unread conversations") and the focused window does not clear it (2 s later still unread). Focus the list (`windowfocus`), then #general again → general leaves UNREAD. Marked unread again, then typed "hello" + Enter in #general → cleared by the new message. Thread window on Margaret's broadcast: the parent's "⋯" menu has no "Mark unread from here", the reply's right-click menu has it → Threads count 1 → 2; focus away and back → 1. Group DM "Grace Hopper, Linus Torvalds": Mark unread from the third-newest → UNREAD row with badge 3 (every message counts in a DM).
+- Not exercised by hand: the tray menu (disabled on purpose; `TestTrayPresenceItems` asserts its items, checks and tooltip); Slack refusing a change (covered by `TestSetPresence_TakesBackWhatSlackRefuses`); the real workspace (left to the user/verifier).
+
+### Deviations (4.4, 4.5)
+
+1. Mark unread's refusal is a window item `unreadFailed{err, restore}` rather than a bare `sendFailed`: it also puts the window's `marked` back to the newest message (Slack still has it read), then shows the note through `failed(sendFailed{note})`.
+2. `threadMarked` (existing) now derives `ThreadState.Unread` from the cache (`repliesAfter`) instead of always false: Slack echoes `subscriptions.thread.mark read=0` as `thread_marked`, which would otherwise clear the thread just marked unread. A behaviour change to an existing path, in the 4.4 commit because 4.4 needs it; covered by `TestThreadMarkedEchoOfAnUnreadStaysUnread`.
+3. `mentionsAfter` counts rows strictly after the boundary; the TUI's `countMentionsSince` counted "at or after", which included the boundary message, which stays read.
+4. `MinutesUntilTomorrowMorning` was copied, not moved: `internal/ui/presencemenu` cannot import the gui module, and the TUI's copy goes with Phase 5.1. There was no test of it in the TUI (the plan's "with its test"); `TestMinutesUntilTomorrowMorning` is new.
+5. `EndDND` fails only when both `dnd.endSnooze` and `dnd.endDnd` fail; the TUI reported `endSnooze`'s error whenever `endDnd` succeeded, which made ending a scheduled DND (no snooze to end) look like a failure.
+6. `chat.SelfDot` not added: the dot is `withSelf` in `headerbar.go` (the `presence` type it maps to lives in package main). The list's subtitle keeps the unread summary and appends `SelfText` ("2 unread conversations · Away") instead of being replaced by it; `SelfText` is "" while simply active.
+7. During DND no menu row is marked current (the header says it); a ✓ on "End do not disturb" read wrongly in the first manual run and was removed before the commit.
+8. The tray's "End snooze" is labelled "End do not disturb" and calls `EndDND` (the menu's item), so one label means one thing; it is hidden outside DND. `Backend.EndSnooze` exists as planned but no UI uses it yet.
+9. The presence menu is mouse-driven (Escape closes it), like `msgMenu`; no arrow-key navigation.
+10. `headerBar.leading` is laid over the tile rather than around it: a `Clickable` clips what it wraps, which cut the presence dot in the first manual run.
+
+### Follow-ups (4.4, 4.5)
+
+- Slack's own `channel_marked` echo of a mark unread may arrive after the queued `rawMarked` with a mention count of 0 (the TUI's comment says the echo carries none), turning the list's badge into a plain dot. Not observable on `-fake`; check on the real workspace.
+- Usergroup mentions (`mention.InGroups`) are not counted in `mentionsAfter`, as in the TUI.
+- `SetPresence(false)` sends `auto`: Slack may still report the user away while idle elsewhere; the optimistic green dot then goes grey on the next `presence_change` only if one arrives for the user.
+- A custom `/status` (emoji + text) is not there; `users.profile.set` would be the call.
