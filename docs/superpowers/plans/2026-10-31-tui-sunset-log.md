@@ -1106,3 +1106,179 @@ Against the plan's expected values:
 - `release.yml` can move to `ubuntu-latest` and drop its cgo comment.
 - `.goreleaser.yaml`'s pre-release footer still says "run it with `SLK_DEBUG=1 slk`" and points at the request tally; the CLI does not run a session. Phase 6 wording.
 - `MinutesUntilTomorrowMorning`'s TUI copy went with `internal/ui/presencemenu`; the gui copy is now the only one.
+
+## Phase 5b — Trim the terminal image stack
+
+- Commit: `66461d8e` — `image: keep the fetcher and cache, drop the terminal renderers`
+- Each deletion checked first with grep over `gui/`, `cmd/` and the surviving `internal/` for the exported symbols of the file (outside callers of `internal/image` were only `imgpkg.Fetcher`, `FetchRequest`, `NewCache`, `NewFetcher`, `PickThumb`, `ThumbSpec`; of `internal/avatar` only `SizedURL`, `FetchKey`; of `internal/emoji` only `BuildCustomEmojiURL`, `CanonicalSlackName`, `CodeMap`, `EmojiCacheKey`, `Sprint`, `StripSkinTone`, `StripSkinToneFromText`).
+- `internal/image`: `git rm` of kitty (+ `kitty_cellpx_test`, `kitty_upload_atomic_test`), sixel (+ `sixel_cellpx_test`), sixelframe (+ `sixelframe_integration_test.go`, the bubbletea program), sixelpaint, halfblock, preview, probe (+ `_unix`, `_other`), capability, cellmetrics (+ `_unix`, `_windows`), registry, renderer, and `migrate.go` (+ test; `MigrateAvatars` had no caller and the cache does not use it). `fetcher.go` lost the prerender pipeline (`ConfigurePrerender`, `ConfigurePrerenderKitty`, `Prerendered`, `maybePrerender`, `prerenderKey`, the `prerendered*` fields, `FetchRequest.CellTarget`) and `TestFetcher_FetchPopulatesPrerender`; comments naming deleted TUI functions reworded; the package doc (was in `renderer.go`) is now on `fetcher.go`. `testdata/tiny.webp` stays (`TestFetcher_DecodesWebP`).
+- `internal/avatar`: `avatar.go` is now the package doc + `FetchKey`; the TUI's `Cache` (Preload worker pool, ANSI render memo, kitty / half-block cells) and its tests (`avatar_test.go`, `kitty_test.go`, `parity_test.go`, `sized_test.go`) deleted; `TestFetchKey` kept in a new `avatar_test.go`. `SizedURL` untouched.
+- `internal/emoji`: `place.go` (kitty placement; its `EmojiCacheKey` moved to `url.go`, + `TestEmojiCacheKey`), `width.go`, `imagemode.go` and their tests deleted.
+- `gui/boundary_test.go`: `charm.land/lipgloss` and `github.com/mattn/go-sixel` added to `guiBannedImports`; `TestBoundaryBannedMatchesTreesNotNeighbours` gained `go-sixel` (banned) and `go-sqlite3` (not).
+- `internal/slack/resolve/resolve_test.go`: one comment that explained a test body by `avatar.Cache.Preload` reworded.
+- AGENTS.md: the `emoji.Width` row removed (its symbol is gone).
+- go.mod (root, `go mod tidy`): `charm.land/bubbletea/v2` direct → `// indirect` (via huh); `github.com/charmbracelet/x/ansi`, `github.com/charmbracelet/x/term` direct → `// indirect`; `github.com/mattn/go-sixel` and `github.com/soniakeys/quant` removed; go.sum −4 lines. `charm.land/lipgloss/v2` stays direct (`cmd/slk/remove_workspace.go`). gui/go.mod (`go mod tidy`): `charm.land/lipgloss/v2`, `charmbracelet/{colorprofile,ultraviolet,x/ansi,x/term,x/termios,x/windows}`, `clipperhouse/{displaywidth,uax29/v2}`, `lucasb-eyer/go-colorful`, `mattn/go-runewidth`, `mattn/go-sixel`, `muesli/cancelreader`, `soniakeys/quant`, `xo/terminfo` removed (all indirect); gui/go.sum −32 lines.
+- `flake.nix` `vendorHash` = `sha256-3zdIahgS0Z8hcuUO/Z6YR5MhTIruhXJwDKd1KUMJJH4=` (`nix build .#slk.goModules` with a placeholder, the `got:` value); `nix build .#slk` then exit 0, `result/bin/slk` (the `result` link removed afterwards).
+- Checks before commit: both modules `go build ./... && go vet ./...` clean, `gofmt -l .` empty (after `gofmt -w internal/image/fetcher.go`, field alignment), `go test -count=1 ./... -race` every package `ok` in both.
+
+### Deviations (5b)
+
+1. `internal/emoji/width.go` deleted rather than rewritten on `go-runewidth`/`uniseg`: its only caller was `emoji.Place` (kitty placement, deleted with the renderers), so `emoji.Width` had no caller left; `imagemode.go` was read only by `width.go` and went with it.
+2. `internal/emoji/place.go` deleted (the plan named only `width.go`): `Place` needs `Fetcher.Prerendered` and `image.Protocol`, both deleted; the GUI used only its `EmojiCacheKey`, now in `url.go`.
+3. `internal/avatar`'s `Cache` deleted whole: the plan's "keep the download/cache" is `internal/image`'s `Fetcher`/`Cache`; `avatar.Cache` was the TUI's per-user ANSI render memo and had no caller outside its tests.
+4. `migrate.go` deleted: the plan keeps it only "if the cache uses it"; nothing calls `MigrateAvatars`.
+
+### Verify (Phase 5b) — run at `66461d8e`
+
+```
+$ grep -rl 'charm.land\|charmbracelet' --include='*.go' . | grep -v _test | sort
+cmd/slk/onboarding_browser.go
+cmd/slk/onboarding.go
+cmd/slk/remove_workspace.go
+$ grep -n 'bubbletea\|go-sixel' go.mod
+29:	charm.land/bubbletea/v2 v2.0.6 // indirect
+$ grep -c 'charmbracelet\|lipgloss\|go-sixel\|bubbletea' gui/go.mod
+0
+$ ls internal/image internal/avatar
+internal/avatar:
+avatar.go
+avatar_test.go
+sizedurl.go
+sizedurl_test.go
+
+internal/image:
+cache.go
+cache_test.go
+fetcher.go
+fetcher_reqid_test.go
+fetcher_test.go
+testdata
+thumb_test.go
+$ nix-shell gui/shell.nix --run 'go build ./... && go vet ./... && test -z "$(gofmt -l .)" && go test -count=1 ./... -race | grep -v "^ok\|no test files"'
+(no output; grep exit 1)
+$ cd gui && nix-shell shell.nix --run 'go build ./... && go vet ./... && test -z "$(gofmt -l .)" && go test -count=1 ./... -race | grep -v "^ok\|no test files"'
+(no output; grep exit 1)
+$ cd gui && go test -count=1 . -run Boundary -v
+=== RUN   TestBoundaryGUINeverImportsTheRetiredTUI
+--- PASS: TestBoundaryGUINeverImportsTheRetiredTUI (0.00s)
+=== RUN   TestBoundaryBannedMatchesTreesNotNeighbours
+--- PASS: TestBoundaryBannedMatchesTreesNotNeighbours (0.00s)
+PASS
+ok  	github.com/gammons/slk/gui	0.004s
+$ nix build .#slk
+exit=0
+```
+
+Full `-race` output at `66461d8e` (also the timing run for AGENTS.md: wall clock root 32.9 s, gui 11.8 s; without `-race` 4.4 s and 2.8 s; `-count=1`, warm cache, 8-core/16-thread Ryzen AI 7 PRO 350):
+
+```
+ok  	github.com/gammons/slk/cmd/slk	1.522s
+ok  	github.com/gammons/slk/internal/attach	1.049s
+ok  	github.com/gammons/slk/internal/avatar	1.017s
+ok  	github.com/gammons/slk/internal/blockkit	1.067s
+ok  	github.com/gammons/slk/internal/bootstrap	1.032s
+ok  	github.com/gammons/slk/internal/bootstrap/adapt	2.541s
+ok  	github.com/gammons/slk/internal/cache	31.144s
+ok  	github.com/gammons/slk/internal/clipboard	1.017s
+ok  	github.com/gammons/slk/internal/config	5.009s
+ok  	github.com/gammons/slk/internal/config/versionts	1.093s
+ok  	github.com/gammons/slk/internal/core	1.013s
+ok  	github.com/gammons/slk/internal/core/blocks	1.016s
+ok  	github.com/gammons/slk/internal/datefmt	1.011s
+ok  	github.com/gammons/slk/internal/debuglog	1.032s
+ok  	github.com/gammons/slk/internal/emoji	1.051s
+ok  	github.com/gammons/slk/internal/export	1.042s
+ok  	github.com/gammons/slk/internal/filedl	1.021s
+ok  	github.com/gammons/slk/internal/filepick	1.011s
+?   	github.com/gammons/slk/internal/ids	[no test files]
+ok  	github.com/gammons/slk/internal/image	1.094s
+?   	github.com/gammons/slk/internal/launch	[no test files]
+ok  	github.com/gammons/slk/internal/mention	1.010s
+ok  	github.com/gammons/slk/internal/msgsync	8.135s
+ok  	github.com/gammons/slk/internal/notify	1.046s
+ok  	github.com/gammons/slk/internal/onboard	1.018s
+?   	github.com/gammons/slk/internal/paths	[no test files]
+ok  	github.com/gammons/slk/internal/searchq	1.012s
+ok  	github.com/gammons/slk/internal/service	1.955s
+ok  	github.com/gammons/slk/internal/slack	1.434s
+ok  	github.com/gammons/slk/internal/slack/boot	1.114s
+ok  	github.com/gammons/slk/internal/slack/edge	1.203s
+ok  	github.com/gammons/slk/internal/slack/membership	4.355s
+ok  	github.com/gammons/slk/internal/slack/mrkdwn	1.032s
+ok  	github.com/gammons/slk/internal/slack/resolve	6.205s
+?   	github.com/gammons/slk/internal/slack/slacktest	[no test files]
+ok  	github.com/gammons/slk/internal/slackdesktop	1.081s
+ok  	github.com/gammons/slk/internal/slackfmt	1.031s
+ok  	github.com/gammons/slk/internal/slackhttp	1.273s
+ok  	github.com/gammons/slk/internal/slackurl	1.013s
+ok  	github.com/gammons/slk/internal/slashcmd	1.015s
+ok  	github.com/gammons/slk/internal/text	1.022s
+ok  	github.com/gammons/slk/internal/theme	1.018s
+ok  	github.com/gammons/slk/internal/threadsubs	1.022s
+ok  	github.com/gammons/slk/internal/typing	1.013s
+ok  	github.com/gammons/slk/internal/usergroups	1.016s
+ok  	github.com/gammons/slk/internal/version	1.016s
+ok  	github.com/gammons/slk/gui	1.024s
+ok  	github.com/gammons/slk/gui/backend	5.377s
+ok  	github.com/gammons/slk/gui/chat	1.021s
+ok  	github.com/gammons/slk/gui/cmd/slk-gio	10.567s
+?   	github.com/gammons/slk/gui/internal/richtext	[no test files]
+?   	github.com/gammons/slk/gui/internal/styledtext	[no test files]
+ok  	github.com/gammons/slk/gui/motion	1.011s
+ok  	github.com/gammons/slk/gui/notifications	1.031s
+ok  	github.com/gammons/slk/gui/palette	1.011s
+ok  	github.com/gammons/slk/gui/rich	1.022s
+ok  	github.com/gammons/slk/gui/search	1.020s
+ok  	github.com/gammons/slk/gui/selection	1.011s
+ok  	github.com/gammons/slk/gui/sidebar	1.016s
+ok  	github.com/gammons/slk/gui/textedit	1.011s
+```
+
+## Phase 6 — Docs
+
+- Commit `1583d21e` — `docs: describe the CLI + GUI split`: README.md (slk-gio + the CLI; features from gui/README.md; install: the CLI as before, slk-gio from source with CI's apt list and `gui/shell.nix`'s libraries, run-time tools; Setup; Debugging: `SLK_DEBUG` for slk-gio — boot requests, gap size, session tally, FALLING BACK — `SLK_GIO_TRACE`, the CLI's log; `hero.gif` and the bubbletea/lipgloss sentence gone); AGENTS.md rewritten (below); gui/README.md (title without "(prototype)"; the custom-themes and `SLK_DEBUG` boot-requests lines were already there from 1.3 and 3.2; sentences about the TUI corrected: the token refresh, theme names, notifications keys, visits, the module note, the shared image cache, the layout list, `message_spans`); `.goreleaser.yaml` pre-release footer (`SLK_DEBUG=1 slk-gio 2>slk-gio.log`, grep for the boot and session tallies); `release.yml` comment (no darwin cgo build any more; runner unchanged).
+- Commit `9bbb82ea` — `docs: wiki for slk-gio and the slk CLI`: `Architecture.md` (the new layout), `Home.md`, `_Sidebar.md`, `Features.md` (slk-gio, plus `slk export`), `Installation.md` (CLI packages, build from source, slk-gio prerequisites and run-time tools), `Setup.md`, `Tradeoffs-and-Non-Goals.md`, `Configuration.md` (keys slk-gio/slk read, ignored TUI keys, keys nothing reads, the old reference under a historical heading); `Keybindings.md`, `Commands.md`, `Terminal-Compatibility.md`, `Clipboard-and-OSC-52.md` get the historical header, content left.
+- Commit `b5c76a3d` — `docs: specs index and the slk-gio feature backlog`: `docs/superpowers/specs/README.md` (all 95 design docs + the captures directory in the two lists, every plan likewise: 54 still useful, 41 archived, 2 current; checked by script that each file is listed once), `docs/superpowers/plans/2026-10-31-gui-feature-backlog.md`, `docs/reviewing-prs.md` points 7–8, `docs/STATUS.md` historical header, a `wiki/Features.md` fix (slk-gio does not show huddles).
+- AGENTS.md rewrite: build block for both modules with the timings above (root ~4 s / ~33 s `-race`, gui ~3 s / ~12 s; `internal/cache` 31 s, `msgsync` 8 s, `resolve` 6 s; gui `cmd/slk-gio` 11 s, `backend` 5 s); the nix-shell note; the layout from `ls internal gui gui/cmd` (including `gui/sidebar`, `gui/textedit`, `gui/internal/*`, `internal/core`, `service`, `image`, … and the orphans marked); invariants: gui boundary test, `Backend` as the one port (a feature = method + Slack + Fake + tests + window), windows reached only through their inbox, boot never enumerates (`TestRun_NeverEnumerates`, `TestSlackAPI_DeclaresNoWorkspaceEnumeration`, `TestConversations_BootsWithoutEnumerating`), SQLite a cache with msgsync its only writer, the shared-map rule; shared-code tables regrouped (text and formatting; Slack, cache and sync; workspace setup and config; desktop integration; the Gio frontend), every row into `internal/ui`, `internal/bubbles`, the deleted `core` ports or deleted `cmd/slk` files removed, survivors re-pointed (`slackfmt`, `datefmt`, `theme`, `blockkit`, `bootstrap.Run` + `adapt`, `resolve`, `versionts`, `onboard`, `threadsubs` via `RefreshThreads`, `slashcmd` via the Gio composer, `PressAction`/`RunCommand` via `Backend`), new rows for `internal/image`, `emoji.EmojiCacheKey`, `ForwardMessage`, `GetUsersInConversationMax`, Gio's `clipboard.WriteCmd`, `notify.ShouldNotify`; every Gio row kept (one reworded: "an slk theme" for "a TUI theme"); rows whose code is now unused say so. Test helpers rewritten for `backend.NewFake`, `nextPosted`, `slacktest`, `bootSlack`, `gateTestHub`, `newComposeBox`/`TestComposer*`, `searchTestWindow`, the capture helpers; "Manual checks that cannot reach the user's desktop" with the recipe (scratchpad build, Xvfb `:97`, dead session bus, `GDK_DEBUG=no-portals`, scratch XDG dirs with tray and notifications off, stub `xdg-open`, `-fake -fake-every 0`, xdotool/ffmpeg/xclip, `pkill` of the scratch binary only) and the zenity leak it prevents; known duplication (msgsync, export's `GetChannels`, fake vs Slack lockstep); Conventions and Workflow kept, with Gio examples. A script checked every backticked identifier in the new AGENTS.md against `cmd/`, `internal/`, `gui/` (all found).
+
+### Deviations (Phase 6)
+
+1. Spec classification: the plan's two lists did not name `2026-04-23-slack-tui-design` (put under TUI-only), `inline-emoji-selector` (TUI-only), `compose-mentions` and `reconnection-and-new-message-landmark` (protocol: messages; cache/sync), and named `emoji-as-images` under protocol (kept there for its custom-emoji URL rules, though its plan directory is archived).
+2. Plans: the plan's keep/archive lists were partial; the rest were sorted by whether their content is protocol/engine (kept) or the TUI's UI, rendering or refactors (archived). The list is in the specs README.
+3. Beyond the plan's file list: `wiki/Setup.md` (it said running `slk` starts onboarding, that all workspaces stay connected with `:ws`/`1`–`9`, and that slk re-mints mid-session — none true now), `wiki/Tradeoffs-and-Non-Goals.md` (roadmap listed search and uploads as missing; image caveats were the terminal's), `wiki/_Sidebar.md`, `docs/reviewing-prs.md` (pointed reviewers at the `internal/ui` boundary and goldens), `docs/STATUS.md` (historical header).
+4. Backlog: `Result.RevalidatedUsers` is recorded as done (Phase 3 did it), not as backlog. The plan's O2 and O3 are not defined anywhere in it; the backlog says so. O1 is done by 5b.
+5. The two release-file edits are the ones named (pre-release footer; `release.yml` comment only).
+6. README's install keeps Homebrew/AUR/`go install` for the CLI and says release packages carry only the CLI; slk-gio is from source (no package exists; O4).
+
+### Found in the docs, contradicting the code, not resolved
+
+- `internal/config/config.go`'s `GUITheme` comment and `internal/theme` comments still say "TUI theme name"; comments, left (listed in the backlog).
+- `wiki/Configuration.md` keeps the terminal client's reference below a historical heading; its custom-theme section is current, the sections after the heading are not.
+- The `docs/superpowers/specs/` and `plans/` documents themselves are unchanged and still describe `internal/ui` etc.; the specs README is the guide to which still apply.
+
+### Verify (Phase 6) — run at `b5c76a3d`
+
+```
+$ test -f docs/superpowers/specs/README.md && test -f docs/superpowers/plans/2026-10-31-gui-feature-backlog.md; echo $?
+0
+$ grep -ci 'tui' README.md .goreleaser.yaml
+README.md:0
+.goreleaser.yaml:1
+$ grep -ni 'tui' README.md .goreleaser.yaml
+.goreleaser.yaml:14:# (macOS paste in the retired TUI, issue #156) and was retired with it. slk is
+$ grep -c 'internal/ui\|internal/bubbles' AGENTS.md
+0
+$ grep -n 'bubbletea\|lipgloss' AGENTS.md | wc -l
+0
+$ grep -n 'gui/backend/fake.go\|slacktest' AGENTS.md
+70:    slacktest/              fake Slack HTTP server for tests
+142:  `slacktest` for the Slack side), and the window. Logic a window needs goes in
+303:| The Gio frontend's conversation list and boot: Slack's own boot once per run (no enumeration; `users.conversations` only as the loud fallback when `client
+326:| A whole made-up workspace behind `backend.Backend` (conversations, people, threads, usergroups, unjoined channels C20–C22, a `/standup` app with buttons, 
+328:| A fake Slack HTTP server: canned bodies per path, every request recorded (form and raw body, since edgeapi posts JSON as `text/plain`), and a real `*slack
+329:| A `backend.Slack` over a slacktest server with an empty in-memory cache, signed in, not booted (warnings captured) | `bootSlack(t, srv)` (`gui/backend/boo
+$ grep -rn 'wiki/Architecture' README.md
+README.md:147:  [Architecture](https://github.com/gammons/slk/wiki/Architecture)
+```
+
+The `gui/backend/fake.go|slacktest` and `wiki/Architecture` lines were cut at 160/200 columns when captured. `.goreleaser.yaml`'s one `tui` hit is the build comment "macOS paste in the retired TUI", which the plan allows. `yq` parses `.goreleaser.yaml` and `release.yml`.
