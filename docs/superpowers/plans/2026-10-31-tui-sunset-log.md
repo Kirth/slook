@@ -457,3 +457,98 @@ The gap line reads `slk-gio: boot: gap size N (conversations client.counts names
 - Gap DMs (deviation 2): if the runtime gap line shows DMs left out, list them via `conversations.info` (one per id) or carry the peer ID in the cache's channel row.
 - `Profile()` still asks `users.info` per hover card (plan: needs Title/TZ/Image192).
 - `(*slackclient.Client).GetUnreadCounts` (the context-free form) has no non-test caller left; delete it with Phase 5's orphan sweep.
+
+## Phase 4 — Feature ports into slk-gio (4.1, 4.2)
+
+### 4.1 — `gui: find and join channels you are not in`
+
+- Commit: `c43a06d8`
+- Backend: `ChannelResult{ID, Name, Kind, Member}`, `SearchChannels`, `Join` (after `Conversation`). `gui/backend/channels.go`: no edge → "channel search is not available"; empty query → nil, no request; `top_channels` = first 25 of `s.convOrder` (`maxTopChannels`, comment carried from `cmd/slk/channel_search.go`); archived/IM/MPIM skipped; `Member` = `s.kinds` has the ID; `member_channels` ignored. `Join` = `client.JoinChannel` + `s.Conversation` (which queues the `ConversationOpened`).
+- Fake (`fake_channels.go`): `fakeUnjoined` C20 platform-sre, C21 design-crit, C22 cat-pictures in `f.unjoined`; `SearchChannels` fold-contains over joined channels (Member) then unjoined (by ID); `Join` moves to `convs`/`order`, seeds two lines (read), emits `ConversationOpened`; member → no event; unknown → `channel_not_found`.
+- `gui/chat/remote.go`: `RemoteDelay` (300 ms), `RemoteSearch` (`Type`, `Due`, `Done`, `Results`, `Searching`, `Wake`), `Unjoined`, `ExactChannel`.
+- GUI: switcher "Channels you're not in" rows (`joinLine`), `update` returns a `switcherPick`; list-window `itemJoin` rows under a heading, Enter with no local match joins the first remote, a note line under the filter for a failed search/join; `hub.joinAndOpen`, `hub.searchChannels` (`channelsFound`); compose `/open`/`/join` → `openChannel`: `<#C…|name>` by ID (listed → open; else join by ID), listed by name, else one `SearchChannels` + `ExactChannel` + join.
+- `cmd/slk/channel_search{,_test}.go` deleted: no non-test caller (Phase 2 removed the TUI composition root); the rules and a test moved to `gui/backend/channels_test.go` (`TestSearchChannels_MapsResultsAndHintsFromTheList`, `TestSearchChannels_WithoutEdge`, slacktest).
+- README: paragraph after the switcher paragraph; slash-command paragraph mentions `/join`; "Starting conversations" shrank to `/msg` + `/leave`. AGENTS.md: one Gio row.
+
+### 4.2 — `gui: start a DM or group DM`
+
+- Commit: `b5cc11bb`
+- Backend: `OpenConversation` (after `Join`); `gui/backend/dm.go`: `MaxRecipients = 8`, `recipients` (drops self, repeats, empty; 0 → "choose someone to message"; >8 → "at most 8 people in a group message"), `client.OpenConversation` + `s.Conversation`. Test `TestOpenConversation_LeavesOutSelfAndRepeats` (slacktest: `users=U2,U3`, one request, refusals make none).
+- Fake (`fake_dm.go`): one ID → DM by `PeerID`, no event; several → group by sorted member key (D2 = U2,U4 seeded); else `D<seq>` (from 101) named from `fakeNames`/`fakeMembers`, group names joined ", ", empty log, `ConversationOpened`.
+- `gui/chat/newmsg.go`: `MaxRecipients` (= backend's), `Recipients` (`Toggle(Person)`, `Has`, `Pop`, `Full`, `IDs`, `Counter`), `PeopleChoices`.
+- GUI: `newMessagePicker` (`gui/cmd/slk-gio/newmsg.go`; editor "To: a name", pills via `wrapRow`, `popupList`/`choiceRow`, counter caption; Up/Down, Space/Tab toggle, Backspace on empty pops, Enter opens, Escape/outside click via `dismissed`); hosted by `chatWindow` (switcher's "New message…" row, shown when the filter is empty) and `listWindow` (header action `iconCompose`). `hub.openDM` (a DM in `h.convs` opens with no request; else `OpenConversation`; text via `openChatWith`, which fills only an empty composer). Compose `/msg`/`/dm`: listed DM/group DM by name, else `findPerson(people, mentions.Wire(target))` → `openDM`; nobody → "No one called @name". `TestPopupTagsAreDistinct` covers the picker.
+- README paragraph after 4.1's; "Starting conversations" bullet became "**Leaving conversations.** `/leave` is not there." AGENTS.md: one Gio row.
+
+### Verify (4.1, 4.2) — run at `b5cc11bb`, gui module (`cd gui && nix-shell shell.nix --run ...`), `-count=1 -v` added
+
+```
+$ go test -count=1 -v ./backend -run 'TestFakeSearchChannels|TestFakeJoin|TestSearchChannels_' | grep -E "^(--- |ok|FAIL)"
+--- PASS: TestSearchChannels_MapsResultsAndHintsFromTheList (0.01s)
+--- PASS: TestSearchChannels_WithoutEdge (0.01s)
+--- PASS: TestFakeSearchChannelsFindsUnjoined (0.00s)
+--- PASS: TestFakeJoinOpensTheChannel (0.00s)
+ok  	github.com/gammons/slk/gui/backend	0.031s
+$ go test -count=1 -v ./chat -run 'TestRemoteSearch|TestUnjoined|TestExactChannel' | grep -E "^(--- |ok|FAIL)"
+--- PASS: TestRemoteSearchFiresOncePerPause (0.00s)
+--- PASS: TestRemoteSearchIgnoresStaleAnswers (0.00s)
+--- PASS: TestUnjoinedDropsMembersAndListed (0.00s)
+--- PASS: TestExactChannel (0.00s)
+ok  	github.com/gammons/slk/gui/chat	0.003s
+$ go test -count=1 -v ./backend -run 'TestFakeOpenConversation|TestOpenConversation_' | grep -E "^(--- |ok|FAIL)"
+--- PASS: TestOpenConversation_LeavesOutSelfAndRepeats (0.01s)
+--- PASS: TestFakeOpenConversationReusesTheDM (0.00s)
+--- PASS: TestFakeOpenConversationMakesAGroup (0.00s)
+ok  	github.com/gammons/slk/gui/backend	0.022s
+$ go test -count=1 -v ./chat -run 'TestRecipients|TestPeopleChoices' | grep -E "^(--- |ok|FAIL)"
+--- PASS: TestRecipientsCapAtEight (0.00s)
+--- PASS: TestRecipientsPop (0.00s)
+--- PASS: TestPeopleChoicesLeaveOutSpecialsAndBots (0.00s)
+ok  	github.com/gammons/slk/gui/chat	0.003s
+$ go test -count=1 -v ./cmd/slk-gio -run 'TestFindPerson|TestFindConversation|TestPopupTagsAreDistinct|TestSwitcherMatches' | grep -E "^(--- |ok|FAIL)"
+--- PASS: TestFindConversation (0.00s)
+--- PASS: TestSwitcherMatches (0.00s)
+--- PASS: TestFindPerson (0.00s)
+--- PASS: TestPopupTagsAreDistinct (0.00s)
+ok  	github.com/gammons/slk/gui/cmd/slk-gio	0.007s
+$ go build ./... && go vet ./... && gofmt -l . && go test -count=1 ./... -race
+ok  	github.com/gammons/slk/gui/backend	4.200s
+ok  	github.com/gammons/slk/gui/chat	1.019s
+ok  	github.com/gammons/slk/gui/cmd/slk-gio	9.716s
+ok  	github.com/gammons/slk/gui/motion	1.010s
+ok  	github.com/gammons/slk/gui/notifications	1.032s
+ok  	github.com/gammons/slk/gui/palette	1.011s
+ok  	github.com/gammons/slk/gui/rich	1.018s
+ok  	github.com/gammons/slk/gui/search	1.018s
+ok  	github.com/gammons/slk/gui/selection	1.015s
+ok  	github.com/gammons/slk/gui/sidebar	1.015s
+ok  	github.com/gammons/slk/gui/textedit	1.010s
+exit=0
+```
+
+Root module at `b5cc11bb`: `go build ./... && go vet ./... && gofmt -l .` clean; `go test -count=1 ./...` every package `ok` (`cmd/slk` included after the `channel_search` deletion).
+
+### Manual (`-fake`), performed
+
+Built to the scratchpad (`go build -o <scratch>/bin/slk-gio`, not `make gui`: the user's `slk-gio` was running from `bin/slk-gio`), launched as `./bin/slk-gio -fake -fake-every 0` with `WAYLAND_DISPLAY=` so it ran under XWayland, driven with `xdotool` key/type, frames captured with `ffmpeg -f x11grab -window_id`; stopped with `pkill -f "^\./bin/slk-gio -fake"`. The user's `slk-gio` (pid 450995) was untouched.
+
+- 4.1: list filter `sre` → after the pause "CHANNELS YOU'RE NOT IN: # platform-sre  Join"; Enter → window "# platform-sre". In that window Ctrl+K, `crit` → "Channels you're not in: # design-crit". `/open #nope` → "No conversation named nope" with the text put back. `/join #cat-pictures` → window "# cat-pictures".
+- 4.2: Ctrl+K shows "New message…" first (the first conversation lit); Up, Enter → picker; `gra` Space `mar` Space → pills Grace Hopper, Margaret Hamilton, "2 / 8"; Enter → window "● Grace Hopper, Margaret Hamilton". `/msg @Ada hello` → Ada's DM with "hello" in the composer; with "my draft" typed there, `/msg @Ada other` → the window comes back with "my draft". `/msg @Linus hey` → new DM window "Linus Torvalds". `/msg @nobody hey` → "No one called @nobody". Not exercised by hand: clicking the list header's pencil (pointer clicks would move the user's mouse); the same picker is exercised from the switcher.
+
+### Deviations (4.1, 4.2)
+
+1. `switcher.update` returns a `switcherPick` struct (conv / join / all / newMsg / closed) instead of a growing tuple with `joinPick`; it takes a `search func(q)` (`hub.searchChannels`).
+2. `chat.RemoteSearch` gained `Searching()` (the list shows "Searching channels…" instead of "No conversation matches." while an answer is due) and keeps answers by query (≤ 32), so going back to an answered query makes no request; a failed one (nil) is not kept and is asked again only when typed again. Stale answers are kept under their own query, never shown for another.
+3. `chat.Recipients.Toggle` takes a `backend.Person` (the pills need names), not an ID; `Has` and `IDs` added. `MaxRecipients` lives in `backend` (`dm.go`) and `chat.MaxRecipients` aliases it, so the backend's refusal and the picker's cap are one number.
+4. `/msg` target parsing is `findPerson` in `cmd/slk-gio/commands.go` (with `namePrefix`, factored out of `findConversation`, unchanged behaviour): a `<@U…>` mention, else a whole name at the start ("@Grace Hopper see you"), else `chat.BestPerson` on the first word. The plan's "`MentionedUserIDs(first)` or `BestPerson`" alone would cut "@Grace Hopper hi" after "Grace". The rest is in wire form when it contains a completed mention (as the TUI's `/msg`).
+5. `hub.openDM` opens a DM the list already has without `conversations.open` + `conversations.info` (one person only; a group DM's members are not in `Conversation`).
+6. The switcher lights the first conversation, not "New message…", when it opens or the filter is emptied, so Ctrl+K Enter still opens the first unread conversation.
+7. `/open` of a `<#C…|name>` mention the list does not have joins by ID directly, without a search.
+8. `joinAndOpen`'s failure note does not give the typed `/open` text back (as planned: `sendFailed{note}` only); `/open` failures before the join (no match, search error) do.
+9. Picker Space is taken from the editor's text (a space typed is removed and toggles), not a key filter: Gio delivers a typed space as an EditEvent, and names are matched by their start, so the filter never needs one.
+10. Added Slack-side tests not in the plan: `TestSearchChannels_*` (the rules from the deleted `cmd/slk/channel_search_test.go`), `TestOpenConversation_LeavesOutSelfAndRepeats`, `TestFindPerson`.
+
+### Follow-ups (4.1, 4.2)
+
+- `internal/core.ChannelService.SearchRemote` and the AGENTS.md row "Resolve a command's channel argument" describe the TUI path; both go with Phase 5.
+- The picker lists only people slk has seen (`Backend.People`, no request); edgeapi `users/search` (`edge.UsersSearch`) could find the rest with the same `RemoteSearch` debounce.
+- `/msg`'s text dropped when the DM already has a draft is not given back to the composer it was typed in (the TUI's `offerTypedBack`).
