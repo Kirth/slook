@@ -1,4 +1,4 @@
-package main
+package resolve
 
 import (
 	"context"
@@ -78,7 +78,7 @@ func TestUserResolver_BoundsConcurrentRequests(t *testing.T) {
 
 	db := newTestDB(t)
 	watch := newResolvedWatch(requests, nil)
-	r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, nil, nil)
+	r := New("T1", db, nil, slacktest.NewClient(t, srv), nil, watch.send)
 
 	for i := 0; i < requests; i++ {
 		r.Request(fmt.Sprintf("U%03d", i))
@@ -92,7 +92,7 @@ func TestUserResolver_BoundsConcurrentRequests(t *testing.T) {
 	// the failure the old 10s deadline poll was trying to catch.
 	//
 	// This is also the barrier for the cache writes: resolveOne upserts
-	// the row and only then sends UserResolvedMsg, so 60 messages means
+	// the row and only then reports it (onResolved), so 60 messages means
 	// 60 goroutines are done touching the DB. Without it they outlive
 	// the test and race t.TempDir's RemoveAll.
 	<-watch.done // every users.info round trip resolved and was cached
@@ -125,7 +125,7 @@ func TestUserResolver_RequestDoesNotBlockTheCaller(t *testing.T) {
 
 	db := newTestDB(t)
 	watch := newResolvedWatch(requests, nil)
-	r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, nil, nil)
+	r := New("T1", db, nil, slacktest.NewClient(t, srv), nil, watch.send)
 
 	returned := make(chan struct{})
 	go func() {
@@ -153,14 +153,14 @@ func TestUserResolver_RequestDoesNotBlockTheCaller(t *testing.T) {
 	<-watch.done // every resolveOne finished writing its cache row
 }
 
-// resolvedWatch is a userResolver send callback that records every
-// message and closes done once want of them are UserResolvedMsgs
-// satisfying match (nil matches any).
+// resolvedWatch is a Resolver onResolved callback that records every
+// profile and closes done once want of them satisfy match (nil matches
+// any).
 //
 // It is the barrier tests wait on instead of the clock. Both resolution
-// paths write the cache row *before* sending UserResolvedMsg —
-// resolveOne upserts then sends, applyEdgeUser upserts then sends — so
-// a matching message proves the write landed. Waiting on
+// paths write the cache row *before* calling onResolved —
+// resolveOneContext upserts then reports, applyEdgeUser upserts then
+// reports — so a matching profile proves the write landed. Waiting on
 // fakeBatcher.calls() does not: fakeBatcher records the batch on entry
 // and returns, while the resolver applies the records afterwards, so a
 // call count races everything applyEdgeUser writes.
@@ -169,23 +169,22 @@ func TestUserResolver_RequestDoesNotBlockTheCaller(t *testing.T) {
 // body and racing t.TempDir's RemoveAll.
 type resolvedWatch struct {
 	mu    sync.Mutex
-	sent  []any
-	match func(userResolvedMsg) bool
+	sent  []Profile
+	match func(Profile) bool
 	want  int
 	n     int
 	done  chan struct{}
 }
 
-func newResolvedWatch(want int, match func(userResolvedMsg) bool) *resolvedWatch {
+func newResolvedWatch(want int, match func(Profile) bool) *resolvedWatch {
 	return &resolvedWatch{match: match, want: want, done: make(chan struct{})}
 }
 
-func (w *resolvedWatch) send(m any) {
+func (w *resolvedWatch) send(p Profile) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.sent = append(w.sent, m)
-	u, ok := m.(userResolvedMsg)
-	if !ok || (w.match != nil && !w.match(u)) {
+	w.sent = append(w.sent, p)
+	if w.match != nil && !w.match(p) {
 		return
 	}
 	w.n++
@@ -194,15 +193,15 @@ func (w *resolvedWatch) send(m any) {
 	}
 }
 
-// messages returns every message sent so far. Call it only after
+// messages returns every profile reported so far. Call it only after
 // receiving from done, which is the ordering barrier.
-func (w *resolvedWatch) messages() []any {
+func (w *resolvedWatch) messages() []Profile {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return append([]any(nil), w.sent...)
+	return append([]Profile(nil), w.sent...)
 }
 
-// fakeBatcher implements userBatcher and records each batch it was
+// fakeBatcher implements Batcher and records each batch it was
 // asked for.
 type fakeBatcher struct {
 	mu   sync.Mutex
@@ -246,7 +245,7 @@ func TestUserResolver_BatchesMissesThroughEdge(t *testing.T) {
 	// attribution: the Request queue coalesces the render/WS-path
 	// misses this test pins, while the unresolved-DM sweep was the
 	// dominant cold-boot source (batched separately, through
-	// ResolveNow). edge users/info takes 80 ids a request and
+	// ResolveNow, now Resolve). edge users/info takes 80 ids a request and
 	// returns full records inline — the same misses are ~4 requests.
 	db := newTestDB(t)
 	batcher := &fakeBatcher{res: []edge.User{
@@ -254,7 +253,7 @@ func TestUserResolver_BatchesMissesThroughEdge(t *testing.T) {
 		edgeUserRecord("U002", "bob", "", "Bob Real", "T1", 1783337599011, false),
 	}}
 	watch := newResolvedWatch(2, nil)
-	r := newUserResolver("T1", nil, db, nil, watch.send, batcher, nil)
+	r := New("T1", db, batcher, nil, nil, watch.send)
 
 	r.Request("U001")
 	r.Request("U002")
@@ -267,7 +266,7 @@ func TestUserResolver_BatchesMissesThroughEdge(t *testing.T) {
 	// returns *before* the state asserted below exists, and the
 	// GetUser calls race the write — an intermittent "U001 was not
 	// cached from the edge batch: sql: no rows in result set".
-	// applyEdgeUser writes the row and *then* sends UserResolvedMsg,
+	// applyEdgeUser writes the row and *then* reports it,
 	// per user, so waiting for both messages implies every write has
 	// landed.
 	//
@@ -308,15 +307,9 @@ func TestUserResolver_BatchesMissesThroughEdge(t *testing.T) {
 	if u2.DisplayName != "Bob Real" {
 		t.Errorf("U002 display = %q; want the real-name fallback", u2.DisplayName)
 	}
-	// One UserResolvedMsg per resolved user, same as the per-user path.
-	resolved := 0
-	for _, m := range watch.messages() {
-		if _, ok := m.(userResolvedMsg); ok {
-			resolved++
-		}
-	}
-	if resolved != 2 {
-		t.Errorf("UserResolvedMsg count = %d; want 2 — the UI patches display names live from these", resolved)
+	// One report per resolved user, same as the per-user path.
+	if resolved := len(watch.messages()); resolved != 2 {
+		t.Errorf("onResolved count = %d; want 2 — the frontend names users live from these", resolved)
 	}
 	// Dedup end-to-end: a repeat Request resolves nothing further.
 	//
@@ -356,8 +349,8 @@ func TestUserResolver_EdgeMissFallsBackToPerUser(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	watch := newResolvedWatch(1, func(m userResolvedMsg) bool { return m.UserID == "U002" })
-	r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, batcher, nil)
+	watch := newResolvedWatch(1, func(m Profile) bool { return m.ID == "U002" })
+	r := New("T1", db, batcher, slacktest.NewClient(t, srv), nil, watch.send)
 	r.Request("U001")
 	r.Request("U002")
 
@@ -379,7 +372,7 @@ func TestUserResolver_EmptyNameEdgeRecordFallsBackToPerUser(t *testing.T) {
 	// Unobserved in captures, but symmetric to the sweep's guard: an
 	// edge record with all three name fields empty must not be
 	// treated as a successful resolution or emitted (an empty
-	// UserResolvedMsg would blank a rendered in-history name).
+	// report would blank a rendered in-history name).
 	db := newTestDB(t)
 	batcher := &fakeBatcher{res: []edge.User{
 		edgeUserRecord("U001", "", "", "", "T1", 1, false),
@@ -393,10 +386,10 @@ func TestUserResolver_EmptyNameEdgeRecordFallsBackToPerUser(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	watch := newResolvedWatch(1, func(m userResolvedMsg) bool {
-		return m.UserID == "U001" && m.DisplayName == "Alice"
+	watch := newResolvedWatch(1, func(m Profile) bool {
+		return m.ID == "U001" && m.DisplayName == "Alice"
 	})
-	r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, batcher, nil)
+	r := New("T1", db, batcher, slacktest.NewClient(t, srv), nil, watch.send)
 	r.Request("U001")
 	r.Request("U002")
 
@@ -419,8 +412,8 @@ func TestUserResolver_EmptyNameEdgeRecordFallsBackToPerUser(t *testing.T) {
 		t.Errorf("U002 cached as %+v (err=%v); the good record in the same batch must still apply", u2, err)
 	}
 	for _, m := range watch.messages() {
-		if msg, ok := m.(userResolvedMsg); ok && msg.DisplayName == "" {
-			t.Errorf("an empty-name UserResolvedMsg was sent for %s; that blanks a rendered in-history name", msg.UserID)
+		if m.DisplayName == "" {
+			t.Errorf("an empty-name profile was reported for %s; that blanks a shown name", m.ID)
 		}
 	}
 }
@@ -434,8 +427,8 @@ func TestUserResolver_EdgeErrorFallsBackToPerUser(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	watch := newResolvedWatch(1, func(m userResolvedMsg) bool { return m.UserID == "U001" })
-	r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, batcher, nil)
+	watch := newResolvedWatch(1, func(m Profile) bool { return m.ID == "U001" })
+	r := New("T1", db, batcher, slacktest.NewClient(t, srv), nil, watch.send)
 	r.Request("U001")
 
 	// No timeout by design: `go test` already imposes one, and a
@@ -464,7 +457,7 @@ func TestUserResolver_DegradedWorkspaceSkipsEdge(t *testing.T) {
 	defer srv.Close()
 
 	watch := newResolvedWatch(1, nil)
-	r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, batcher, func() bool { return true })
+	r := New("T1", db, batcher, slacktest.NewClient(t, srv), func() bool { return true }, watch.send)
 	r.Request("U001")
 
 	// No timeout by design: `go test` already imposes one, and a
@@ -497,12 +490,12 @@ func TestUserResolver_ResolveNowBatchesAndApplies(t *testing.T) {
 		edgeUserRecord("U001", "alice", "Alice", "", "T1", 1783337599010, false),
 		edgeUserRecord("U002", "bob", "", "Bob Real", "T1", 1783337599011, false),
 	}}
-	r := newUserResolver("T1", nil, db, nil, nil, batcher, nil)
+	r := New("T1", db, batcher, nil, nil, nil)
 
-	got := r.ResolveNow([]string{"U001", "U002"})
+	got := r.Resolve(context.Background(), []string{"U001", "U002"})
 
 	if len(got) != 2 {
-		t.Fatalf("ResolveNow returned %d records; want 2", len(got))
+		t.Fatalf("Resolve returned %d records; want 2", len(got))
 	}
 	calls := batcher.calls()
 	if len(calls) != 1 {
@@ -515,7 +508,7 @@ func TestUserResolver_ResolveNowBatchesAndApplies(t *testing.T) {
 	// callers and conditional revalidation both read them.
 	for _, id := range []string{"U001", "U002"} {
 		if _, err := db.GetUser(id); err != nil {
-			t.Errorf("%s was not cached by ResolveNow: %v", id, err)
+			t.Errorf("%s was not cached by Resolve: %v", id, err)
 		}
 	}
 	versions, err := db.UserVersions("T1")
@@ -530,10 +523,12 @@ func TestUserResolver_ResolveNowBatchesAndApplies(t *testing.T) {
 func TestUserResolver_ResolveNowReturnsNilWhenDegraded(t *testing.T) {
 	db := newTestDB(t)
 	batcher := &fakeBatcher{}
-	r := newUserResolver("T1", nil, db, nil, nil, batcher, func() bool { return true })
+	r := New("T1", db, batcher, nil, func() bool { return true }, nil)
 
-	if got := r.ResolveNow([]string{"U001"}); got != nil {
-		t.Errorf("a degraded workspace resolved %v through edge; want nil so the caller falls back per-user", got)
+	// No Single here, so nothing can resolve it: the point is that edge
+	// is not asked.
+	if got := r.Resolve(context.Background(), []string{"U001"}); len(got) != 0 {
+		t.Errorf("a degraded workspace resolved %v through edge; want nothing", got)
 	}
 	if n := len(batcher.calls()); n != 0 {
 		t.Errorf("a degraded workspace made %d edge calls; want 0", n)
@@ -543,10 +538,10 @@ func TestUserResolver_ResolveNowReturnsNilWhenDegraded(t *testing.T) {
 func TestUserResolver_ResolveNowReturnsNilOnError(t *testing.T) {
 	db := newTestDB(t)
 	batcher := &fakeBatcher{err: errors.New("ratelimited")}
-	r := newUserResolver("T1", nil, db, nil, nil, batcher, nil)
+	r := New("T1", db, batcher, nil, nil, nil)
 
-	if got := r.ResolveNow([]string{"U001"}); got != nil {
-		t.Errorf("a failed edge call returned %v; want nil", got)
+	if got := r.Resolve(context.Background(), []string{"U001"}); len(got) != 0 {
+		t.Errorf("a failed edge call returned %v; want nothing", got)
 	}
 	if _, err := db.GetUser("U001"); err == nil {
 		t.Error("U001 was cached from a response the resolver rejected")
@@ -556,13 +551,13 @@ func TestUserResolver_ResolveNowReturnsNilOnError(t *testing.T) {
 func TestUserResolver_ResolveNowSkipsEmptyInput(t *testing.T) {
 	db := newTestDB(t)
 	batcher := &fakeBatcher{}
-	r := newUserResolver("T1", nil, db, nil, nil, batcher, nil)
+	r := New("T1", db, batcher, nil, nil, nil)
 
-	if got := r.ResolveNow(nil); got != nil {
-		t.Errorf("ResolveNow(nil) = %v; want nil", got)
+	if got := r.Resolve(context.Background(), nil); len(got) != 0 {
+		t.Errorf("Resolve(nil) = %v; want nothing", got)
 	}
-	if got := r.ResolveNow([]string{""}); got != nil {
-		t.Errorf("ResolveNow([\"\"]) = %v; want nil — an updated_ids map containing \"\" is a request shape nothing observed produces", got)
+	if got := r.Resolve(context.Background(), []string{""}); len(got) != 0 {
+		t.Errorf("Resolve([\"\"]) = %v; want nothing — an updated_ids map containing \"\" is a request shape nothing observed produces", got)
 	}
 	if n := len(batcher.calls()); n != 0 {
 		t.Errorf("empty input produced %d edge calls; want 0", n)
@@ -578,7 +573,7 @@ func TestUserResolver_FirstSightPerUserDeliversPeerStatus(t *testing.T) {
 
 	db := newTestDB(t)
 	watch := newResolvedWatch(1, nil)
-	r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, nil, nil)
+	r := New("T1", db, nil, slacktest.NewClient(t, srv), nil, watch.send)
 	r.Request("U1")
 	<-watch.done
 
@@ -590,15 +585,15 @@ func TestUserResolver_FirstSightPerUserDeliversPeerStatus(t *testing.T) {
 		u.HuddleState != "in_a_huddle" || u.HuddleExpiration != 1700000900 {
 		t.Fatalf("cached first-sight status = %+v", u)
 	}
-	for _, raw := range watch.messages() {
-		if msg, ok := raw.(userStatusMsg); ok && msg.UserID == "U1" {
-			if msg.TeamID != "T1" || msg.Emoji != ":calendar:" || msg.Huddle != "in_a_huddle" {
-				t.Fatalf("first-sight status message = %+v", msg)
+	for _, p := range watch.messages() {
+		if p.ID == "U1" {
+			if p.TeamID != "T1" || p.StatusEmoji != ":calendar:" || p.HuddleState != "in_a_huddle" || p.StatusExpiration != 1700003600 {
+				t.Fatalf("first-sight profile = %+v", p)
 			}
 			return
 		}
 	}
-	t.Fatal("first-sight users.info resolution emitted no peer status")
+	t.Fatal("first-sight users.info resolution reported nothing")
 }
 
 func TestUserResolver_FirstSightEdgeDeliversPeerStatus(t *testing.T) {
@@ -611,9 +606,9 @@ func TestUserResolver_FirstSightEdgeDeliversPeerStatus(t *testing.T) {
 
 	db := newTestDB(t)
 	watch := newResolvedWatch(1, nil)
-	r := newUserResolver("T1", nil, db, nil, watch.send, &fakeBatcher{res: []edge.User{u}}, nil)
-	if got := r.ResolveNow([]string{"U1"}); len(got) != 1 {
-		t.Fatalf("ResolveNow returned %d users; want 1", len(got))
+	r := New("T1", db, &fakeBatcher{res: []edge.User{u}}, nil, nil, watch.send)
+	if got := r.Resolve(context.Background(), []string{"U1"}); len(got) != 1 {
+		t.Fatalf("Resolve returned %d users; want 1", len(got))
 	}
 
 	cached, err := db.GetUser("U1")
@@ -623,72 +618,65 @@ func TestUserResolver_FirstSightEdgeDeliversPeerStatus(t *testing.T) {
 	if cached.StatusEmoji != ":palm_tree:" || cached.HuddleState != "in_a_huddle" {
 		t.Fatalf("cached edge first-sight status = %+v", cached)
 	}
-	for _, raw := range watch.messages() {
-		if msg, ok := raw.(userStatusMsg); ok && msg.UserID == "U1" {
-			if msg.TeamID != "T1" || msg.Emoji != ":palm_tree:" || msg.Huddle != "in_a_huddle" {
-				t.Fatalf("edge first-sight status message = %+v", msg)
+	for _, p := range watch.messages() {
+		if p.ID == "U1" {
+			if p.TeamID != "T1" || p.StatusEmoji != ":palm_tree:" || p.HuddleState != "in_a_huddle" || p.Version != 7 {
+				t.Fatalf("edge first-sight profile = %+v", p)
 			}
 			return
 		}
 	}
-	t.Fatal("first-sight edge resolution emitted no peer status")
+	t.Fatal("first-sight edge resolution reported nothing")
 }
 
-// TestUserResolver_RecordsNamesInStore: names the resolver fetches
-// must land in the workspace's name store, not only in SQLite. The UI
-// drops a UserResolvedMsg for a workspace it is not showing, so for an
-// inactive workspace the store is the only place the name survives
-// until the user switches to it (the switch snapshot carries it).
-// Before this, a name resolved while inactive was in SQLite only;
-// Request's cache-skip gate then never re-resolved it, and the
-// switched-to UI showed the raw ID.
-func TestUserResolver_RecordsNamesInStore(t *testing.T) {
-	t.Run("edge batch", func(t *testing.T) {
-		db := newTestDB(t)
-		r := newUserResolver("T1", nil, db, nil, nil, &fakeBatcher{res: []edge.User{
-			edgeUserRecord("U1", "alice", "Alice", "", "T1", 7, false),
-		}}, nil)
-		store := newUserNameStore(nil)
-		r.names = store
-		if got := r.ResolveNow([]string{"U1"}); len(got) != 1 {
-			t.Fatalf("ResolveNow returned %d users; want 1", len(got))
-		}
-		if name, ok := store.Get("U1"); !ok || name != "Alice" {
-			t.Errorf("store U1 = (%q, %v); want (\"Alice\", true)", name, ok)
-		}
-	})
-	t.Run("per-user users.info", func(t *testing.T) {
-		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U2","name":"bob","team_id":"T1","profile":{"display_name":"Bob"}}}`))
-		}))
-		defer srv.Close()
-		db := newTestDB(t)
-		watch := newResolvedWatch(1, nil)
-		r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, nil, nil)
-		store := newUserNameStore(nil)
-		r.names = store
-		r.Request("U2")
-		<-watch.done
-		if name, ok := store.Get("U2"); !ok || name != "Bob" {
-			t.Errorf("store U2 = (%q, %v); want (\"Bob\", true)", name, ok)
-		}
-	})
-	t.Run("bots.info", func(t *testing.T) {
-		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok":true,"bot":{"id":"B1","name":"deploybot","icons":{}}}`))
-		}))
-		defer srv.Close()
-		db := newTestDB(t)
-		watch := newResolvedWatch(1, nil)
-		r := newUserResolver("T1", slacktest.NewClient(t, srv), db, nil, watch.send, nil, nil)
-		store := newUserNameStore(nil)
-		r.names = store
-		r.RequestBot("B1", "")
-		<-watch.done
-		if name, ok := store.Get("B1"); !ok || name != "deploybot" {
-			t.Errorf("store B1 = (%q, %v); want (\"deploybot\", true)", name, ok)
-		}
-	})
+// TestResolve_CacheHitsMakeNoRequest: a user the cache names is
+// answered from it, with no edge call and no report (nothing changed).
+func TestResolve_CacheHitsMakeNoRequest(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.UpsertUser(cache.User{ID: "U1", WorkspaceID: "T1", Name: "ada", DisplayName: "Ada", AvatarURL: "https://a/1.png"}); err != nil {
+		t.Fatal(err)
+	}
+	batcher := &fakeBatcher{}
+	watch := newResolvedWatch(1, nil)
+	r := New("T1", db, batcher, nil, nil, watch.send)
+	got := r.Resolve(context.Background(), []string{"U1", "U1"})
+	if p := got["U1"]; len(got) != 1 || p.DisplayName != "Ada" || p.Handle != "ada" || p.AvatarURL != "https://a/1.png" {
+		t.Errorf("Resolve = %+v; want U1 as Ada from the cache", got)
+	}
+	if n := len(batcher.calls()); n != 0 {
+		t.Errorf("edge calls = %d; want 0 for a cached user", n)
+	}
+	if n := len(watch.messages()); n != 0 {
+		t.Errorf("reported %d profiles; want none for a cache hit", n)
+	}
+}
+
+// TestResolve_EdgeMissFallsBackPerUserBeforeReturning: Resolve is
+// synchronous end to end, so what edge does not return is resolved
+// through users.info before it returns.
+func TestResolve_EdgeMissFallsBackPerUserBeforeReturning(t *testing.T) {
+	db := newTestDB(t)
+	batcher := &fakeBatcher{res: []edge.User{edgeUserRecord("U001", "alice", "Alice", "", "T1", 1, false)}}
+	var profiles atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		profiles.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U002","name":"bob","team_id":"T9","profile":{"display_name":"Bob","image_72":"https://a/bob72.png"}}}`))
+	}))
+	defer srv.Close()
+
+	r := New("T1", db, batcher, slacktest.NewClient(t, srv), nil, nil)
+	got := r.Resolve(context.Background(), []string{"U001", "U002"})
+	if got["U001"].DisplayName != "Alice" || got["U002"].DisplayName != "Bob" {
+		t.Fatalf("Resolve = %+v; want Alice (edge) and Bob (users.info)", got)
+	}
+	if p := got["U002"]; !p.IsExternal || p.AvatarURL != "https://a/bob72.png" {
+		t.Errorf("U002 = %+v; want external (team T9) with the 72px image", p)
+	}
+	if n := profiles.Load(); n != 1 {
+		t.Errorf("users.info calls = %d; want 1, for the id edge missed", n)
+	}
+	if u, err := db.GetUser("U002"); err != nil || u.DisplayName != "Bob" {
+		t.Errorf("U002 cached as %+v (err %v); want Bob", u, err)
+	}
 }
