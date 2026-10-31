@@ -153,18 +153,20 @@ release:
 
     Verify downloads with `checksums.txt`.
 
-    **Please run it with debug logging on:**
+    **Please run slk-gio (built from source, see the README) with debug
+    logging on:**
 
     ```
-    SLK_DEBUG=1 slk
+    SLK_DEBUG=1 slk-gio 2>slk-gio.log
     ```
 
-    That writes `slk-debug.log` to the working directory. If anything looks
+    That writes slk-gio's diagnostics to `slk-gio.log`. If anything looks
     wrong, that file is what makes a report actionable -- especially the
-    request tally at the end of it:
+    request tallies in it, the boot's and the whole session's (printed when
+    slk-gio quits):
 
     ```
-    grep -A30 'shutdown API request tally' slk-debug.log
+    grep -A30 'boot requests\|requests this session' slk-gio.log
     ```
 
     Please report anything you find at

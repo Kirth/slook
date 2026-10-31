@@ -1,39 +1,49 @@
 # slk
 
-> **A blazingly fast Slack TUI.**
-> Keyboard-driven, beautifully themed, and under 20MB. One static binary. No Electron required.
+> **A fast, native Slack desktop client — and the CLI that signs it in.**
+> `slk-gio` is the client: each conversation in its own window, built with
+> [Gio](https://gioui.org), no Electron. `slk` is the command-line companion:
+> it signs your workspaces in from the Slack desktop app and exports channels
+> to Markdown.
 >
 > Marketing site: [getslk.sh](https://getslk.sh) · Docs: [Wiki](https://github.com/gammons/slk/wiki)
 
-![slk demo: navigating channels, live messages, a split window and switching workspaces](docs/assets/demo/hero.gif)
+slk began as a terminal client; that client was retired on 2026-10-31 in
+favour of `slk-gio`. The wiki's pages about terminal keybindings, terminal
+graphics and OSC 52 describe it and are kept for history.
 
-`slk` is a daily-driver replacement for the official Slack desktop client, built in Go with [bubbletea](https://github.com/charmbracelet/bubbletea) and [lipgloss](https://github.com/charmbracelet/lipgloss).
+## slk-gio
 
-## Why slk?
+- **One window per conversation**, plus a conversation list arranged like your
+  Slack sidebar (unread, starred, your sections, quiet ones folded away), a
+  quick switcher (`Ctrl+K`) and a tray icon that keeps it running.
+- **Real time** over Slack's own WebSocket: messages, edits, deletions,
+  reactions, typing and apps' "working" status, presence and do-not-disturb.
+- **Threads** in windows of their own, and a Threads window for the ones you
+  follow.
+- **Everything is cached** in SQLite and searchable offline with a small query
+  language (`from:ada in:#general "build failed" since:1w`); a slow, paced
+  backfill fills the cache for search.
+- **Compose** with @people, #channel, :emoji: and slash-command completion,
+  edit and delete your messages, upload files from the clipboard, a pasted
+  path or the file chooser.
+- **Join channels** you are not in, start DMs and group DMs, forward
+  messages, mark them unread, react, set your presence and snooze
+  notifications, press the buttons on an app's reply only you can see, open
+  links to messages in-app.
+- **Desktop notifications** for mentions, DMs and keywords, per conversation.
+- **Themes**: four palettes of its own, every slk theme, and your own.
+- **Signs in from the Slack desktop app**: no tokens to copy, no Slack App,
+  and it refreshes them from the desktop app at every start. It boots the way
+  Slack's web client does and never lists the workspace's conversations, the
+  request pattern that has got Enterprise Grid users signed out.
 
-- **Fast.** Cold start in milliseconds. Render-cached messages. SQLite-backed scrollback. Real-time over WebSocket.
-- **Tiny.** ~19 MB on disk. ~60 MB RSS for a live multi-workspace session vs. 500 MB–1.5 GB for the official client. No node_modules, no Chromium, no 1Gb RAM tax.
-- **Keyboard-first.** Vim-style modal editing. `j/k`, `h/l`, `i`, `Esc`.
-- **Pretty.** 59 built-in themes, lipgloss-styled panels, true-pixel avatars on kitty (half-block fallback elsewhere), emoji shortcodes, day separators, and pill-style reactions.
-- **Multi-workspace.** All your workspaces stay connected in parallel. `1`–`9` to instantly jump between them, with live unread badges in the rail.
-- **Yours.** TOML config, custom themes, custom channel sections via glob, XDG-compliant paths.
+The full description, feature by feature, is
+[gui/README.md](gui/README.md).
 
-## Highlights
+## Install
 
-- Real-time messages, edits, deletes, reactions, typing indicators, apps' "working" status
-- Inline images (kitty graphics / sixel / half-block fallback) with full-screen preview
-- Threads side panel + a workspace-wide threads view
-- Activity feed: mentions, thread replies, reactions, and DMs in one list, like Slack's Activity tab
-- Smart paste: clipboard images, file paths, or text — multiple attachments + caption in one send
-- Slack-native sidebar sections, kept live; or glob-based config sections
-- Automatic auth from the Slack desktop app — no tokens to copy, no Slack App required
-- Vim-style modal keybindings, fuzzy channel finder, workspace picker
-- 59 themes + drop-in custom themes, live theme switcher
-- OS desktop notifications on DMs, mentions, and configurable keywords
-
-Full feature breakdown: **[Features](https://github.com/gammons/slk/wiki/Features)**
-
-## Quick install
+### The `slk` CLI
 
 **Homebrew** (macOS and Linux):
 
@@ -53,7 +63,40 @@ yay -S slk
 go install -ldflags="-s -w" -trimpath github.com/gammons/slk/cmd/slk@latest
 ```
 
-For tarballs, `.deb` / `.rpm` / `.apk` packages, Windows, build-from-source, and the Homebrew formula→cask migration note, see the [Installation wiki page](https://github.com/gammons/slk/wiki/Installation).
+Release packages (tarballs, `.deb` / `.rpm` / `.apk`, Windows) carry the CLI
+only; see the [Installation wiki page](https://github.com/gammons/slk/wiki/Installation).
+
+### `slk-gio`
+
+`slk-gio` is built from source for now (Linux is what it is developed and
+tested on). It needs Go 1.26, a C compiler, `pkg-config`, and Gio's
+libraries:
+
+- **Debian/Ubuntu:**
+  ```bash
+  sudo apt-get install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev \
+    libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev \
+    libxcursor-dev libvulkan-dev
+  ```
+- **Nix / NixOS:** `nix-shell gui/shell.nix` provides Go and the libraries
+  (wayland, libxkbcommon, libGL, vulkan-headers, libX11, libXcursor,
+  libXfixes, libxcb). It uses your system's `<nixpkgs>` on purpose, so the
+  binary loads the same graphics driver your system does; for that reason
+  the flake has no `slk-gio` package.
+- **Other distributions:** the same libraries under their names; see
+  [Gio's Linux notes](https://gioui.org/doc/install/linux).
+
+```bash
+git clone https://github.com/gammons/slk.git
+cd slk
+make gui          # bin/slk-gio (inside gui/shell.nix when nix-shell is there)
+make build        # bin/slk, the CLI
+```
+
+At run time slk-gio uses, when present: `wl-paste` (wl-clipboard) on Wayland
+or `xclip` on X11 to paste pictures, `zenity`, `kdialog` or `yad` for the file
+chooser, `xdg-open` for links, and `flux-preview` to preview files. Try it
+without a Slack account: `bin/slk-gio -fake`.
 
 ## Setup
 
@@ -64,39 +107,46 @@ no tokens to copy. Make sure you're signed in to the desktop app, then:
 slk --add-workspace
 ```
 
-slk lists the workspaces you're signed in to; pick the ones you want and
-you're done.
+slk lists the workspaces you're signed in to; pick the ones you want, then
+start `slk-gio` (`slk-gio -team NAME` for another than the first).
 
 No desktop app (a server, a container, an SSH session)? `slk --add-workspace
 --browser` signs in from your browser session instead: in DevTools > Network,
 Copy as cURL any request to `/api/` on app.slack.com, and paste it. slk also
 offers this when it cannot read the desktop app's session.
 
+`slk --list-workspaces`, `slk --remove-workspace` and `slk export` (a
+channel's messages and threads for a date range, as Markdown) do what they
+say; `slk --help` lists everything.
+
 Full walkthrough: [Setup wiki page](https://github.com/gammons/slk/wiki/Setup).
 
 ## Debugging
 
-Set `SLK_DEBUG=1` to enable a comprehensive debug log written to
-`slk-debug.log` in the current working directory. The file is
-**truncated each run**, so reproduce the issue, quit slk, then copy
-the file before relaunching. Log lines are categorized
-(`[cache]`, `[imgfetch]`, `[imgrender]`, `[ws]`, `[general]`) so
-`grep '\[cache\]' slk-debug.log` slices to one focus area.
+- `SLK_DEBUG=1 slk-gio` writes diagnostics to stderr: the boot's Slack
+  requests by endpoint ("boot requests:"), how many conversations the boot had
+  to fill in ("gap size"), and the whole session's requests when it quits
+  ("requests this session:"). A "FALLING BACK" line (printed with or without
+  `SLK_DEBUG`) means the boot failed and slk-gio listed conversations the old
+  way; please report it.
+- `SLK_GIO_TRACE=1 slk-gio` prints how long each window took to open.
+- `SLK_DEBUG=1 slk …` (the CLI) writes `slk-debug.log` to the current
+  directory, truncated each run; its lines are categorized (`[cache]`,
+  `[general]`, …) so `grep '\[cache\]' slk-debug.log` slices to one area.
 
 ## Documentation
 
-Everything lives in the [**wiki**](https://github.com/gammons/slk/wiki):
-
-- [Installation](https://github.com/gammons/slk/wiki/Installation) — prebuilt binaries, Go install, build from source
-- [Setup](https://github.com/gammons/slk/wiki/Setup) — desktop-app auth, adding workspaces
-- [Features](https://github.com/gammons/slk/wiki/Features) — full feature breakdown
-- [Keybindings](https://github.com/gammons/slk/wiki/Keybindings) — every key, every mode
-- [Commands](https://github.com/gammons/slk/wiki/Commands) — `:` commands and slash commands
-- [Configuration](https://github.com/gammons/slk/wiki/Configuration) — `config.toml`, custom themes, XDG paths
-- [Terminal Compatibility](https://github.com/gammons/slk/wiki/Terminal-Compatibility) — what each terminal supports, including tmux setup (inline images, unread-title forwarding)
-- [Clipboard and OSC 52](https://github.com/gammons/slk/wiki/Clipboard-and-OSC-52) — copy/paste setup notes
-- [Tradeoffs and Non-Goals](https://github.com/gammons/slk/wiki/Tradeoffs-and-Non-Goals) — roadmap, caveats, TOS notice
-- [Architecture](https://github.com/gammons/slk/wiki/Architecture) — service layout, data layer
+- [gui/README.md](gui/README.md) — what slk-gio does and how
+- The [**wiki**](https://github.com/gammons/slk/wiki):
+  [Installation](https://github.com/gammons/slk/wiki/Installation),
+  [Setup](https://github.com/gammons/slk/wiki/Setup),
+  [Features](https://github.com/gammons/slk/wiki/Features),
+  [Configuration](https://github.com/gammons/slk/wiki/Configuration) (which
+  `config.toml` keys slk-gio reads),
+  [Tradeoffs and Non-Goals](https://github.com/gammons/slk/wiki/Tradeoffs-and-Non-Goals),
+  [Architecture](https://github.com/gammons/slk/wiki/Architecture)
+- For contributors: [AGENTS.md](AGENTS.md), and the design docs in
+  [docs/superpowers/specs](docs/superpowers/specs/README.md)
 
 ## Contributing
 
@@ -116,8 +166,9 @@ Contributions are welcome. A few ground rules:
   so we can agree on direction. Bug fixes and small improvements can go
   straight to a PR.
 - Whether human- or AI-written, **you are responsible for your PR.**
-  Understand the diff, make sure it builds and passes `go vet ./...` and
-  `go test ./...`, and be ready to explain your choices in review.
+  Understand the diff, make sure both modules (the root and `gui/`) build and
+  pass `go vet ./...` and `go test ./... -race`, and be ready to explain your
+  choices in review. Read [AGENTS.md](AGENTS.md) first.
 
 ## Disclaimer
 

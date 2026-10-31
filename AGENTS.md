@@ -7,204 +7,283 @@ defect in this codebase's history is not bugs, it is the same logic implemented
 a fourth time because the author did not know the first three existed. See
 [Shared code](#shared-code--check-here-before-writing-a-helper) below.
 
+slk is two programs over one set of shared packages: `slk`, a CLI that signs
+workspaces in and exports channels (`cmd/slk`), and `slk-gio`, the desktop
+client, built with [Gio](https://gioui.org) in its own Go module (`gui/`). The
+terminal client (the TUI) that slk started as was retired on 2026-10-31; its
+code is in git history (commit `44e6f30a`, "ui: retire the … TUI"), and
+`docs/superpowers/plans/2026-10-31-tui-sunset-log.md` records how it went.
+
 ## Build, test, lint
 
+Two Go modules: the root (`github.com/gammons/slk`: `cmd/slk` and every
+`internal/` package) and `gui/` (`github.com/gammons/slk/gui`, which imports the
+root through `replace github.com/gammons/slk => ../`). Run each command in both.
+
 ```
-go build ./...
-go test ./...                 # ~10s
-go test ./... -race           # ~47s; this is what CI runs
+go build ./...                # and: cd gui && go build ./...
+go test ./...                 # root ~4s,  gui ~3s
+go test ./... -race           # root ~33s, gui ~12s; this is what CI runs
 go vet ./...
-golangci-lint run             # v2.14.0, config in .golangci.yml
+golangci-lint run             # v2.14.0, config in .golangci.yml (CI: lint, lint-gui)
 gofmt -l .                    # must be empty; enforced in CI
+make gui                      # bin/slk-gio, built inside gui/shell.nix when Nix is there
 ```
 
-Those two timings are wall clock with `-count=1` and a warm build cache on an
-8-core Linux box, re-measured at the end of Phase 0 (they were `~21s`/`~44s`
-before it, on unrecorded hardware — treat them as a shape, not a target).
-The shape is what matters: under `-race`, four packages are ~95% of the run —
-`internal/ui` 32s, `cmd/slk` 29s, `internal/cache` 19s, `internal/ui/messages`
-16s (they overlap, hence a 47s wall). If you are iterating, run the one package
-you are changing; `internal/ui` alone is now longer under `-race` than the whole
-suite used to be.
+`gui/` needs cgo and Gio's libraries (Wayland, X11, xkbcommon, EGL/GLES,
+Vulkan headers): `gui/shell.nix` lists them, and CI's `gui` job installs the
+Debian names. On a machine without Go on `PATH`, run everything through
+`nix-shell gui/shell.nix --run '…'` (`cd gui && nix-shell shell.nix --run '…'`
+for the gui module); the root module builds there too. `golangci-lint` is not
+in that shell.
+
+Those timings are wall clock with `-count=1` and a warm build cache on an
+8-core Linux box, measured on 2026-10-31 after the TUI was removed (they were
+`~10s`/`~47s` for the root module while it still held the TUI). Treat them as
+a shape, not a target. Under `-race` one package is most of the root's run:
+`internal/cache` 31s (then `internal/msgsync` 8s, `internal/slack/resolve`
+6s); in `gui/`, `cmd/slk-gio` 11s and `backend` 5s. If you are iterating, run
+the one package you are changing.
 
 Tests are plain `testing.T`, stdlib only. No testify, no gomock, no golden
-libraries. White-box (`package ui`, not `package ui_test`) by convention.
+libraries. White-box (`package backend`, not `package backend_test`) by
+convention; an external test package only when the test must import a package
+that imports this one (`gui/backend/fake_domain_test.go` imports `gui/chat`).
 
 ## Architecture in one screen
 
 ```
-cmd/slk/                the `slk` CLI: --add-workspace, --remove-workspace,
-                        export, diagnostics. The TUI's composition root was
-                        removed on 2026-10-31; a few engine files stay until
-                        the TUI sunset's Phases 3/4 move them
-internal/core/          the ports (service interfaces) the TUI calls, and the
-                        values the TUI and cmd/slk exchange through them
-internal/ui/            bubbletea App: reducers, mode key handlers, view regions
-internal/ui/<widget>/   self-contained sub-models (messages, thread, sidebar,
-                        compose, and 14 modal packages)
-internal/bubbles/       self-contained components and the substrate they
-                        share (RFC #236), e.g. ansi, scrollbar, selection, and
-                        chrome, the substrate every dialog draws through. Never
-                        imports internal/ui; the TUI's I/O ban applies here too.
-                        Widgets move here from internal/ui/<widget>/ one at
-                        a time; confirmprompt is the first
-internal/slack/         Slack Web API + browser-protocol WebSocket client
-internal/slack/edge/    edgeapi: conditional revalidation, server-side search
-internal/bootstrap/     startup fetch orchestration
-internal/cache/         SQLite cache (a cache, not a source of truth)
-internal/config/        TOML config
-internal/demo/          fake workspaces + services behind the hidden
-                        `slk --demo` flag; for recording README GIFs only
+cmd/slk/                    the `slk` CLI: --add-workspace (desktop app or
+                            --browser), --remove-workspace, --list-workspaces,
+                            export, --dump-sections. Its interactive prompts
+                            (charm's huh) live only here
+internal/                   shared by both programs; no Gio, no terminal UI
+  core/                     plain values both sides exchange (MessageItem,
+                            Attachment, ThumbSpec, PendingAttachment, …);
+                            core/blocks: Block Kit and legacy-attachment values
+  slack/                    Slack Web API + browser-protocol WebSocket client
+    boot/                   the official client's boot calls (userBoot, counts,
+                            conversations.view, …)
+    edge/                   edgeapi: revalidation, channels/users info and search
+    resolve/                batched user-name resolution (edge, then users.info)
+    mrkdwn/                 composer text → rich_text
+    slacktest/              fake Slack HTTP server for tests
+    membership/             (no importer; backlog)
+  slackhttp/                browser-shaped transport, request envelope, counter
+  slackdesktop/             the Slack desktop app's session (cookie, tokens)
+  slackurl/, slackfmt/      permalinks; mrkdwn → plain text / CommonMark,
+                            mentions, date tokens, channel glyphs
+  blockkit/                 Block Kit / attachment parsing (data only)
+  datefmt/, theme/, text/   date separators; colour tables and user colours;
+                            case/accent folding
+  bootstrap/                the anti-scrape boot (bootstrap.Run)
+    adapt/                  bootstrap.Deps over a real client; conversation list
+  onboard/                  workspace sign-in and token re-mint, UI-free
+  config/                   TOML config; config/versionts: _x_version_ts upkeep
+  cache/                    SQLite cache (a cache, not a source of truth)
+  msgsync/                  the one writer of the message cache; backfill
+  threadsubs/, typing/      followed-thread sync; typing/app-status tracker
+  searchq/                  the search query language
+  service/                  section and mute stores
+  image/, avatar/, emoji/   image fetcher and disk cache; avatar keys and sized
+                            URLs; emoji tables, names, URLs
+  clipboard/, attach/,      desktop clipboard reads, attachments from paths and
+  filepick/, launch/        pictures, the file chooser, xdg-open
+  notify/, mention/,        notification rules; mention tests; usergroup helpers
+  usergroups/
+  export/, filedl/          Markdown export; file downloads
+  paths/, debuglog/         XDG paths; SLK_DEBUG log
+  ids/, version/            (one / no importer; backlog)
+gui/                        module github.com/gammons/slk/gui, binary slk-gio
+  backend/                  the Backend interface windows use; Slack (real)
+                            and Fake (-fake) implement it
+  chat/                     window state and rules without a display (timeline,
+                            thread, completion, presence, read gate, …)
+  search/                   query resolution, suggestions, highlighting
+  sidebar/                  how the conversation list is arranged
+  notifications/            desktop notifications (D-Bus, notify_command)
+  palette/                  the GUI's colour roles from theme tables
+  rich/                     a message's display form (styled blocks)
+  selection/, motion/,      text selection; small animations; readline edits
+  textedit/
+  internal/richtext/,       Gio text layout with per-rune positions
+  internal/styledtext/
+  cmd/slk-gio/              the windows: hub.go owns them and routes events;
+                            each window runs its own event loop
 ```
 
-**`wiki/Architecture.md` is stale by roughly 7× and describes a service layer
-that no longer exists. Do not trust it.** Current structural documentation:
+Current structural documentation:
 
-- `docs/superpowers/plans/2026-09-06-architecture-refactor.md` — the active
-  refactor: measured baseline, known problems, phase sequence
-- `docs/superpowers/plans/2026-05-23-app-go-solid-refactor.md` — the completed
-  `app.go` decomposition; establishes the patterns still in use
-- `docs/superpowers/specs/` — one design doc per feature
+- `wiki/Architecture.md` — the same layout, for users
+- `gui/README.md` — what slk-gio does, feature by feature, and its layout
+- `docs/superpowers/specs/README.md` — which design docs are still
+  authoritative protocol knowledge and which describe the retired TUI
+- `docs/superpowers/plans/2026-10-31-gui-feature-backlog.md` — TUI features
+  not ported, orphan packages, dead config keys, real-workspace checks owed
+- `docs/superpowers/plans/2026-10-31-tui-sunset-log.md` — the migration,
+  with every deviation and follow-up
 
 ### Invariants worth knowing
 
-- **`internal/ui` does no I/O of its own.** Slack, SQLite, the filesystem, the
-  clipboard, the external editor and launching apps all go through the service
-  ports in `internal/core`, which `cmd/slk` wires. No `internal/slack`,
-  `slackhttp`, `cache`, `config`, `filedl`, `export`, `editor`, `net/http` or
-  `os/exec`; `slack-go` only in `blockkit`, as the data it renders. `internal/ui/boundary_test.go`
-  enforces this. The boundary is deliberate; do not breach it. The same
-  rules cover `internal/bubbles`, with no `slack-go` exemption, and it may not
-  import `internal/ui` or anything under it: components are the app's building
-  blocks, not part of it (`TestBubblesReachTheAppOnlyThroughCore`, same file).
-- **`App.Update` routes through a reducer chain**, not a switch. Add behavior by
-  adding to a `reducer_*.go` file, not by extending `Update`. The only step
-  outside the chain is the thin `Update` wrapper that records `stackFront`
-  (which content pane — messages or thread — last had focus, for the stacked
-  thread layout) after every message; do not add other post-chain logic
-  there.
-- **Per-mode key handling is a table**, `modeHandlers` in
-  `internal/ui/mode_handlers.go`. One `mode_*.go` file per mode.
-- **SQLite is a cache.** Slack remains authoritative.
-- **A map shared across goroutines is never written.** Every map the UI holds
-  is either built for it (a copy, like `userNameStore.Snapshot()` or the
-  per-message `ExternalUsers` set) or published once and never mutated
-  again (swapped whole via `atomic.Pointer`). A copy handed to the UI is the UI's from then on: the
-  sender must not keep reading it (the UI writes it). The same goes for maps
-  captured by a `tea.Cmd` (`saveThreadToFile` clones them). A plain map
-  written while another goroutine reads it is a `fatal error: concurrent map
-  read and map write`, which bubbletea cannot recover from; it crashed slk on
-  2026-10-02 via the user-name map (see `cmd/slk/usernames.go`). Engine state
-  several goroutines write is locked (`userNameStore`) instead.
+- **The GUI never reaches the retired TUI or a terminal toolkit.**
+  `gui/boundary_test.go` fails on a direct import of any tree listed in its
+  `guiBannedImports`: the retired TUI's packages (none exist now; the test
+  keeps them from coming back), the charm terminal toolkit (`charm.land/…`,
+  `github.com/charmbracelet/…`) and the sixel encoder. The only users of the
+  charm toolkit left are `cmd/slk`'s prompts.
+- **`gui/backend.Backend` is the one port.** Windows reach Slack, the cache and
+  the desktop only through it (and the `internal/` readers it names). `Slack`
+  and `Fake` implement it; both are returned as a `backend.Backend` from
+  `openBackend` (`gui/cmd/slk-gio/main.go`), so the build fails when either
+  lacks a method. A feature is: a `Backend` method (and its event, with an
+  `isEvent()` line), the `Slack` implementation (a file per area under
+  `gui/backend/`, errors to stderr as `slk-gio: <area>:`), the `Fake` one
+  (`fake_<area>.go`), a test of each (`fake_test.go` style for the fake,
+  `slacktest` for the Slack side), and the window. Logic a window needs goes in
+  `gui/chat` (or `search`, `sidebar`) so it is tested without a display.
+- **A window is reached only through its inbox.** Each window runs its own
+  event loop; results from goroutines arrive as items through `inbox.post`
+  (`box.post(item)`) and are applied on that loop. The hub routes events
+  (`hub.dispatch`, `toChat`, `toThread`).
+- **Boot never enumerates.** slk-gio boots as Slack's web client does
+  (`client.userBoot`, `client.counts`, `conversations.view`, edge
+  revalidation) once per process; `users.conversations` is the loud fallback
+  when userBoot fails and nothing else. `TestRun_NeverEnumerates`
+  (`internal/bootstrap`), `TestSlackAPI_DeclaresNoWorkspaceEnumeration`
+  (`internal/slack`) and `TestConversations_BootsWithoutEnumerating`
+  (`gui/backend/boot_test.go`) hold it. That enumeration is what got Enterprise
+  Grid users signed out (`docs/superpowers/specs/2026-07-30-enterprise-grid-bootstrap-design.md`).
+  History sweeps stay paced (`msgsync.Backfill`, one request every eight
+  seconds) and honour `[cache] backfill_ignore`; nothing else fetches unasked.
+- **SQLite is a cache.** Slack remains authoritative. `internal/msgsync` is
+  the only writer of message rows.
+- **A map shared across goroutines is never written.** Every map handed to
+  another goroutine is either built for it (a copy, like
+  `userNameStore.Snapshot()` or the per-message `ExternalUsers` set) or
+  published once and never mutated again (swapped whole via
+  `atomic.Pointer`). A copy handed over belongs to the receiver from then on:
+  the sender must not keep reading it. A plain map written while another
+  goroutine reads it is a `fatal error: concurrent map read and map write`,
+  which no recover catches; it crashed slk on 2026-10-02 via the user-name
+  map. State several goroutines write is locked (`userNameStore`,
+  `backend.Slack`'s `mu`) instead.
 
 ## Shared code — check here before writing a helper
 
-If you are about to write text wrapping, box drawing, list windowing,
-scrollbars, date formatting, case folding, or ID formatting: it already exists.
+If you are about to write date formatting, case folding, mention parsing,
+mrkdwn conversion, a Slack request, a cache query or a popup: it probably
+already exists.
 
-### Text and rendering
+### Text and formatting
 
 | Need | Use |
 |---|---|
-| Word wrap to a width | `messages.WordWrap(s, limit)` |
-| Plain-text line segmentation (grapheme-correct) | `entrylist.PlainLines`, `entrylist.DisplayWidth`, `entrylist.SliceColumns` (`bubbles/entrylist`; `messages.PlainLines`/`DisplayWidthOfPlain`/`SliceColumns` delegate for existing callers) |
 | Case/accent-insensitive fold for matching | `text.Fold(s)` |
-| Slack mrkdwn → plain text | `slackfmt.FlattenMrkdwn`, `slackfmt.FlattenMrkdwnWithUserGroups` (`internal/slackfmt/flatten.go`; `messages.FlattenMrkdwn*` delegate for existing callers); the lossier notification form is `slackfmt.StripMarkup` |
-| Slack mrkdwn → CommonMark (the Markdown export) | `slackfmt.MrkdwnToCommonMark`, `slackfmt.MrkdwnToCommonMarkWithUserGroups` (`internal/slackfmt/commonmark.go`; `messages.SlackMrkdwnToCommonMark*` delegate) |
+| Slack mrkdwn → plain text | `slackfmt.FlattenMrkdwn`, `slackfmt.FlattenMrkdwnWithUserGroups` (`internal/slackfmt/flatten.go`); the lossier notification form is `slackfmt.StripMarkup` |
+| Slack mrkdwn → CommonMark (the Markdown export) | `slackfmt.MrkdwnToCommonMark`, `slackfmt.MrkdwnToCommonMarkWithUserGroups` (`internal/slackfmt/commonmark.go`) |
 | Expand `<!date^…>` tokens in text; render a date given as ts/format/fallback (a rich_text `date` element) by the same rule | `slackfmt.ExpandDateTokens(text)`, `slackfmt.FormatDateToken(ts, format, fallback)` (`internal/slackfmt/datetoken.go`; FORMAT in local time, FALLBACK only when the FORMAT is unusable; `FormatDateToken` returns "" when neither gives anything) |
-| Search-term highlighting (ANSI/OSC-safe) | `messages.HighlightSearchTerms`, `messages.SearchHighlightSGR` |
-| Re-assert a background (or background+foreground) after every SGR reset, so nested lipgloss renders don't drop it | `bubbles/ansi.ReapplyAfterResets(text, style)` — the one implementation; `messages.ReapplyBgAfterResets` delegates to it for existing callers. The theme's sequences come from `messages.BgANSI()` / `messages.FgANSI()` |
-| Extract links from message text | `messages.ExtractLinks` |
-| Every link a message offers to `o` (text links + Block Kit blocks + links in legacy attachment `text`/`pretext`/`title_link`/fields/nested blocks + permalinks of messages it shares, from attachment `from_url`) | `messages.MessageLinks(msg)` |
-| Does message text mention the current user? | `mention.InText(text, selfUserID)` |
-| Reaction pill rendering | `messages.ReactionPillText` |
-| Render one `MessageItem` (author line, body, Block Kit, attachments, reactions, hits) for a content pane | `messages.RenderMessage(msg, width, rc, opt)` with a `RenderContext` the pane builds (`renderContext()` in each pane) and `RenderOptions` for its differences; `messages.BlockkitContext(msg, rc)` for the Block Kit host context. Both panes; the thread pane's options are `thread.(*Model).renderMessage` |
-| Turn a `RenderedMessage` into list rows: fill, invisible/tinted left border, the long-timestamp selected variant, the plain-text mirror (the part of building an `entrylist.Entry` both panes share) | `messages.WrapRows(msg, rendered, width, messages.NewWrapStyles(focused))` returning `WrappedRows` (`Lines`, `Selected`, `Plain`, `ShortSrc`); the panes add ID/Ref/hits and (channel pane) the spacer rows. `WrapStyles.SelectedVariant` builds the short-timestamp variant for `EntryPayload.SelectedLines`. The thread parent row is not wrapped this way: it is re-rendered every frame |
-| Apply a reaction add/remove event idempotently; the reaction-pill cursor | `messages.ApplyReaction`, `messages.ReactionNav` |
-| A content pane's per-entry payload next to its `entrylist.Entry` (short-timestamp selected variant, kitty flushes, sixel rows), and the rows to draw for the cursor entry | `messages.EntryPayload`, `(*EntryPayload).SelectedLines`; the emoji-image context both panes take is `messages.EmojiContext` |
-| Date label from a Slack ts | `messages.DateFromTS`, `datefmt.DateSeparator` (`internal/datefmt`; test clock `datefmt.SetNow`; `messages.FormatDateSeparator` delegates, `messages.SetNowFunc` sets both clocks), `messages.FormatShortDate` (compact form for a message header: "Today", "Jan 2") |
-| Date-qualified timestamp for the selected message header | `messages.LongTimestamp(ts, short)`, `messages.SelectedHeader(rendered, header, ts, short, maxWidth)`; any other header timestamp swap that must fit the width budget: `messages.ReplaceHeaderTimestamp(rendered, header, short, replacement, maxWidth)` |
-| Clock layout `<!date` tokens render `{time}`/`{time_secs}` with | `slackfmt.SetDateTokenTimeLayout(layout)` (`messages.SetDateTokenTimeLayout` delegates) — seeded once at startup from `appearance.timestamp_format` (`cmd/slk/main.go`, `gui/cmd/slk-gio/main.go`); empty keeps the default `"3:04 PM"`. Package-level (like theme state) so every render path agrees |
-| mpdm channel name → human name | `slackfmt.FormatMPDMName` |
-| Channel-type glyph (`#` / `◆` / `●`) | `slackfmt.ChannelGlyph(chType)` (`messages.ChannelGlyph` delegates) |
-| Marker row for a message only the current user can see | `messages.EphemeralLabel()` — drawn above the author line in both panes |
-| A message's pressable legacy buttons (selects excluded) | `messages.ButtonActions(msg)`, `messages.HasButtonActions(msg)` |
-| The hint under an interactive message ("b to respond" for an ephemeral with buttons, else "open in Slack") | `messages.InteractiveHint(msg)`; both panes |
-| Open the action dialog for an ephemeral's buttons | `(*App).openActionPrompt(actionPromptRef)` (`internal/ui/action_prompt.go`); queueing and the interruption rule are `enqueueActionPrompt` / `tryOpenActionPrompt` |
-| Replace a pane's list with fetched history without erasing ephemerals already shown | `keepEphemerals(fetched, shown)` (`internal/ui/ephemeral_keep.go`); only for a fetch of the conversation already on screen |
-| Slack permalink parsing | `slackurl.Parse` |
-| Huddle deep link for a conversation (`https://app.slack.com/huddle/<TEAM>/<CHANNEL>`) | `slackurl.HuddleURL` |
-| The channel a user's huddle is in (users.info) | `slackclient.UserProfile.HuddleStateChannelID` (wraps `*slack.User`; `GetUserProfile`/`GetUserProfileContext` are hand-rolled POSTs because slack-go's `UserProfile` drops that field) |
+| Clock layout `<!date` tokens render `{time}`/`{time_secs}` with | `slackfmt.SetDateTokenTimeLayout(layout)` — seeded once at startup from `appearance.timestamp_format` (`gui/cmd/slk-gio/main.go`); empty keeps the default `"3:04 PM"`. Package-level so every render path agrees |
+| Date-separator label ("Today", "Yesterday", "Monday, Oct 27", …) | `datefmt.DateSeparator(dateStr)` (`internal/datefmt`; test clock `datefmt.SetNow`) |
 | Slack ts → `time.Time` (whole seconds, any timezone) | `export.TimeFromTS` |
 | A since/until/overlap date range in a timezone, and "is this ts in it?" | `export.NewWindow`, `export.Window.Contains` |
+| mpdm channel name → human name | `slackfmt.FormatMPDMName` |
+| Channel-type glyph (`#` / `◆` / `●`) | `slackfmt.ChannelGlyph(chType)` |
+| Slack permalink parsing | `slackurl.Parse` |
+| Huddle deep link for a conversation (`https://app.slack.com/huddle/<TEAM>/<CHANNEL>`) | `slackurl.HuddleURL` (no caller since the TUI; backlog) |
+| Emoji shortcode → glyph | `emoji.Sprint`, `emoji.CodeMap`, `emoji.StripSkinTone` / `StripSkinToneFromText`; the name Slack stores for a picked emoji is `emoji.CanonicalSlackName` |
+| A custom emoji's picture: its URL, and its key in the image cache | `emoji.BuildCustomEmojiURL`, `emoji.EmojiCacheKey(url)` (`internal/emoji/url.go`) |
+| Does message text mention the current user? One of the user's usergroups (`<!subteam^S…>`, bare or labelled)? | `mention.InText(text, selfUserID)`; `mention.InGroups(text, groupIDs)` (`InText` deliberately leaves usergroups out) |
+| User IDs mentioned in message text | `slackfmt.MentionedUserIDs(text)` |
+| Channel IDs mentioned in message text (`<#C…\|name>`), or each with its label | `slackfmt.MentionedChannelIDs(text)`; `slackfmt.MentionedChannels(text)` returns `ChannelMention{ID, Label}` |
+| Parse Block Kit blocks / legacy attachments into `core/blocks` values; mrkdwn back from a rich_text block; a message's body source (the rich_text reconstruction, else `Text`); does Block Kit already carry the body? | `internal/blockkit`: `Parse`, `ParseAttachments`, `RichTextToMrkdwn`, `MessageText(msg)`, `RendersBody(blocks)` (parse-only; `testdata/*.json` are real messages) |
+| A `slack.File`'s thumbnails as `core.ThumbSpec`s, smallest first | `blockkit.FileThumbs(f)` (`internal/blockkit/files.go`) |
+| Legacy attachment action ids slack-go drops | `slackclient.EphemeralMessage.ActionIDs` (decoded from the raw frame), or `slackclient.LegacyActionIDs(raw)` for any message JSON; applied with `blocks.ApplyActionIDs(atts, ids)` (`internal/core/blocks`) |
+| Usergroup map helpers; a usergroup's mention handle (its own, or its name slugified), and the ID → handle map for a `usergroups.list` result | `usergroups.Copy`, `usergroups.Equal`, `usergroups.Display`; `usergroups.Handle(g)`, `usergroups.Handles(groups)` (`internal/usergroups/handles.go`) |
+| The theme colour tables (built-in and custom TOML themes, lookup by name, the names list) and the per-user colour | `internal/theme`: `Colors`, `Resolve`, `ColorsByName`, `Names`, `LoadCustom(fsys)`, `RegisterCustom`, `UserColor(id)` / `UserPalette`; tests restore the registry with `SnapshotCustom` / `ClearCustom`. slk-gio loads `~/.config/slk/themes/` at startup |
+| A message's display form for a non-terminal frontend (blocks of styled spans from rich_text, mrkdwn, Block Kit, attachments, files) | `gui/rich`: `Body`, `FromRichText`, `FromMrkdwn`, `FromBlocks`, `FromAttachments`, `FromFiles` |
+| A message body as plain text for a one-line preview (search result) | `rich.PlainBlocks(blocks)` (`gui/rich`) |
+
+### Slack, the cache and sync
+
+| Need | Use |
+|---|---|
+| The channel a user's huddle is in (users.info) | `slackclient.UserProfile.HuddleStateChannelID` (wraps `*slack.User`; `GetUserProfile`/`GetUserProfileContext` are hand-rolled POSTs because slack-go's `UserProfile` drops that field). No caller since the TUI |
 | Sleep out a slack-go rate-limit error (ctx-aware) | `slackclient.WaitOutRateLimit` |
-| Page through all channel history in a ts range / a thread's replies in a ts range | `(*slackclient.Client).WalkHistory`, `GetRepliesBetween` |
-| Press a legacy attachment button (`chat.attachmentAction`, payload byte-identical to the web client's) | `(*slackclient.Client).AttachmentAction(ctx, AttachmentActionRequest)`, with `service_id` = the posting app's bot ID |
-| Press a legacy attachment button from the UI | `core.InteractionService.PressAttachmentAction` (App field `a.interactions`); nothing wires it since the TUI's composition root was removed (2026-10-31). The Gio frontend: `backend.Backend.PressAction` |
-| Run a slash command (`chat.command`, request shape copied from the web client; arguments as rich text via `mrkdwn.Convert`) | `(*slackclient.Client).RunCommand(ctx, CommandRequest)`; a refusal (`unknown_command`, …) is `*slackclient.CommandRejectedError` |
-| Is composer text a slash command, its name/args, and could it still become one (for a completion popup)? Word a command's failure | `slashcmd.Parse(text)`, `slashcmd.IsNamePrefix(text)`, `slashcmd.FailureText(name, err)` (`internal/slashcmd`); the TUI's `parseSlashCommand` / `commandFailureText` wrap them |
-| Every conversation's read state and newest-message ts in one request (`client.counts`) | `(*slackclient.Client).GetUnreadCountsContext(ctx)`; `UnreadInfo.Latest` is the newest message's ts |
+| Page through all channel history in a ts range / a thread's replies in a ts range | `(*slackclient.Client).WalkHistory`, `GetRepliesBetween` (`slk export`) |
+| Press a legacy attachment button (`chat.attachmentAction`, payload byte-identical to the web client's) | `(*slackclient.Client).AttachmentAction(ctx, AttachmentActionRequest)`, with `service_id` = the posting app's bot ID; from the GUI, `backend.Backend.PressAction` |
+| Run a slash command (`chat.command`, request shape copied from the web client; arguments as rich text via `mrkdwn.Convert`) | `(*slackclient.Client).RunCommand(ctx, CommandRequest)`; a refusal (`unknown_command`, …) is `*slackclient.CommandRejectedError`. From the GUI, `backend.Backend.RunCommand` (`*core.CommandError{Code}` on refusal) |
+| Is composer text a slash command, its name/args, and could it still become one (for a completion popup)? Word a command's failure | `slashcmd.Parse(text)`, `slashcmd.IsNamePrefix(text)`, `slashcmd.FailureText(name, err)` (`internal/slashcmd`); the Gio composer uses them (`gui/cmd/slk-gio/compose.go`) |
 | List the workspace's slash commands (name, usage, description, app, alias) for a picker | `(*slackclient.Client).AppCommands(ctx)` (`client.appCommands`, as the web client calls it) |
-| Run a slash command from the UI | `core.CommandService.Run` (App field `a.commandSvc`); nothing wires it since the TUI composition root was removed (2026-10-31). Slack's refusal arrives as `*core.CommandError{Code}` |
+| Every conversation's read state and newest-message ts in one request (`client.counts`) | `(*slackclient.Client).GetUnreadCountsContext(ctx)`; `UnreadInfo.Latest` is the newest message's ts |
 | A web-client `client_token` (`web-<unix ms>`) for any request that sends one | `newClientToken()` (`internal/slack`); the only generator |
-| Emoji shortcode → glyph | `emoji.Sprint`, `emoji.CodeMap`, `emoji.StripSkinTone` |
-| Does Block Kit already render the message body? | `blockkit.RendersBody(blocks)` (`internal/blockkit`), `messages.BlocksCarryBody(msg)` |
-| Parse Block Kit blocks / legacy attachments into `core/blocks` values; mrkdwn back from a rich_text block; a message's body source (the rich_text reconstruction, else `Text`) | `internal/blockkit`: `Parse`, `ParseAttachments`, `RichTextToMrkdwn`, `MessageText(msg)` (parse-only; the TUI's `internal/ui/messages/blockkit` delegates to it and keeps only the renderer, `messages.MessageTextSource` wraps `MessageText`) |
-| Current DND state from a Slack API result | `slack.DNDStateFromStatus` |
-| Persist a full Web API profile's custom status and huddle (including clears) | `(*cache.DB).UpdateUserStatus` after `UpsertUser` (as `resolve`'s users.info path does); `UpsertUser` alone deliberately preserves status on conflict |
-| Drop cached thread replies a complete `conversations.replies` response no longer contains (missed deletes, Slackbot ephemerals) | `(*cache.DB).PruneThreadReplies(channelID, threadTS, returnedTS, fetchStartUnix)`; soft-deletes, never touches the parent or rows cached after the fetch began |
-| Keep the message cache in step with Slack from any frontend: one history page (head, older, catch-up), a whole thread, a WebSocket frame, a reaction; the opt-in slow backfill | `internal/msgsync`: `Syncer{DB, Source, WorkspaceID}` with `Open`, `Older`, `CatchUp`, `Thread`, `ApplyEvent`, `ApplyReaction`, `Ingest`, `Backfill(ctx, Config)`; `Changed{Upserted, Deleted}` is what a view redraws. Fetches use `HistoryWithVersions` (official shape, 28/page). Nothing fetches unasked except `Backfill`, explained on `Config` (sign-out history: `docs/superpowers/specs/2026-07-30-enterprise-grid-bootstrap-design.md`; slk-gio runs it from startup, 90 days unless `[cache] backfill` says otherwise via `config.CacheConfig.BackfillOnStart` / `config.ParseBackfill`, paced and skipping `backfill_ignore`), and the bounded catch-up on connect, whose choice is `msgsync.Stale` (followed, changed, not ignored, capped) |
+| Forward a message: post its permalink, after an optional note, to another conversation | `(*slackclient.Client).ForwardMessage(ctx, src, ts, dst, comment)` (`internal/slack/forward.go`; the untried `from_url` alternative is a comment there) |
+| List a conversation's members with a page cap | `(*slackclient.Client).GetUsersInConversationMax` |
+| Current DND state from a Slack API result | `slackclient.DNDStateFromStatus` |
+| A WebSocket message frame whole (the decoded `slack.Message`, its raw JSON, and for `message_changed` the inner message with `reply_count`/`thread_ts`/`edited`) | implement `slackclient.MessageEventHandler` (`OnMessageEvent(MessageEvent)`) on your `EventHandler`; the dispatcher type-asserts it and then skips `OnMessage`/`OnMessageDeleted`. Ephemerals still go to `OnEphemeralMessage` |
+| Wake the serialized WebSocket event owner for local work | Implement `slackclient.PendingEventHandler` (`PendingEvents() <-chan struct{}`, `OnPendingEvents()`). The dispatcher selects the wake-up channel even on an idle socket and serializes the drain with Slack callbacks; nil disables it, and the channel must never close |
+| The workspace's usergroups with their members (to know the user's own) | `(*slackclient.Client).GetUserGroupsWithMembers(ctx)` (`include_users`, one request); `GetUserGroups` without members. A usergroup created or changed reaches a handler that implements the optional `slackclient.SubteamEventHandler` (`OnSubteamChanged`) |
+| Can the user post in an app DM? (`app_home.messages_tab_enabled` / `messages_tab_read_only_enabled`) | `boot.ConversationsInfo` (`return_app_home=true`) or `ConversationsView`, then `(*boot.AppHome).CanReceiveMessages()` (nil is true). Not wired in slk-gio (backlog) |
+| Boot a workspace the way Slack's web client does (client.userBoot, client.counts, conversations.view, edge revalidation; never an enumeration): the `bootstrap.Deps` for a real client, the conversation list from the result, the conversations `client.counts` names that userBoot left out (cache, then one edge `channels/info`), mutes from the boot prefs, first-sight cache rows, the conversation to open | `bootstrap.Run(ctx, deps)`; `internal/bootstrap/adapt`: `NewDeps(client, db, token, openChannelID, health, logf)`, `Conversations(res)`, `FillFromCounts(ctx, db, edgeClient, teamID, res, logf)`, `Muted{res}` (a `service.MutedChannelsClient`), `HydrateFirstSight(db, workspaceID, res, logf)`, `UserDisplayName(boot.User)`, `MostRecentlyVisited(visits)`; `DropClosedMPIMs` for a list from `users.conversations` |
+| userBoot IM → conversation metadata | `adapt.IMConversation(im)` (`internal/bootstrap/adapt`); callers decide whether an ordinary open IM or a closed starred IM is eligible |
+| Starred conversation membership / recover starred conversations the boot left out | `(*service.SectionStore).StarredConversationIDs()` (locked defensive copy); `adapt.MissingStarredConversations(ctx, knownIDs, starredIDs, ims, resolve)` (`internal/bootstrap/adapt/starred.go`; read-only metadata hydration) |
+| Name users the cache does not (DM peers at boot, message authors): cache first, then one edge `users/info` batch (80 ids a request), then `users.info` per id (8 at a time); edge skipped while boot has marked it degraded | `internal/slack/resolve`: `New(workspaceID, db, edgeClient, slackClient, health.Degraded, onResolved)`, `(*Resolver).Resolve(ctx, ids)` (synchronous, returns `map[id]Profile`), `Request(id)` (non-blocking, 200 ms coalescing window, reported through `onResolved`); `Resolver.Logf` for diagnostics |
+| Persist a full Web API profile's custom status and huddle (including clears) | `(*cache.DB).UpdateUserStatus` after `UpsertUser` (as `resolve`'s users.info path and `gui/backend/profiles.go` do); `UpsertUser` alone deliberately preserves status on conflict |
+| Workspace-relative cached external-user flags | `cache.DB.ExternalUsers(workspaceID)` returns a caller-owned map, derived from `User.HomeTeamID`; the legacy boolean is only a fallback within the row's original workspace. No caller since the TUI |
+| A user ID → display name cache, from any goroutine in `cmd/slk` (`slk export`'s) | `*userNameStore` (`cmd/slk/usernames.go`: `Get`/`Set`/`Snapshot`, a copy); `lookupUserCached` / `resolveUserCached` (`users.go`) add the SQLite fallback. Never hand out the map itself |
+| A fetched message's author ID and name from local sources (bot-ID fallback) | `cmd/slk/messageAuthor` (`users.go`), for `slk export` |
+| Keep the message cache in step with Slack from any frontend: one history page (head, older, catch-up), a whole thread, a WebSocket frame, a reaction; the slow backfill | `internal/msgsync`: `Syncer{DB, Source, WorkspaceID}` with `Open`, `Older`, `CatchUp`, `Thread`, `ApplyEvent`, `ApplyReaction`, `Ingest`, `Backfill(ctx, Config)`; `Changed{Upserted, Deleted}` is what a view redraws. Fetches use `HistoryWithVersions` (official shape, 28/page). Nothing fetches unasked except `Backfill`, explained on `Config` (sign-out history: `docs/superpowers/specs/2026-07-30-enterprise-grid-bootstrap-design.md`; slk-gio runs it from startup, 90 days unless `[cache] backfill` says otherwise via `config.CacheConfig.BackfillOnStart` / `config.ParseBackfill`, paced and skipping `backfill_ignore`), and the bounded catch-up on connect, whose choice is `msgsync.Stale` (followed, changed, not ignored, capped) |
 | Which ranges of a channel the cache holds completely (so a reader can tell "cached" from "some rows") | `message_spans`: `(*cache.DB).Spans`, `AddSpan` (merges overlapping), `ExtendLiveSpan`, `ClearLiveSpans`, `Covers` (`internal/cache/spans.go`); the bounds a page covers are `msgsync.Ingest`'s rule, documented there |
 | Write a history page's rows atomically, with `version` and `edited_at`; apply a `message_changed` without clobbering `subtype`/`reply_count`; count a live reply on its parent; soft-delete feed rows a page no longer returns | `(*cache.DB).UpsertMessages`, `ApplyEdit(channelID, ts, cache.Edit)`, `IncrementReplyCount`, `PruneChannelRange(channelID, oldest, latest, keep, insertedBefore)` (returns the pruned ts; `PruneThreadRepliesTS` is the thread twin); `GetMessagesBetween`, `OldestCachedTS` |
+| Drop cached thread replies a complete `conversations.replies` response no longer contains (missed deletes, Slackbot ephemerals) | `(*cache.DB).PruneThreadReplies(channelID, threadTS, returnedTS, fetchStartUnix)`; soft-deletes, never touches the parent or rows cached after the fetch began |
 | `{ts: version}` for the newest 28 cached messages, for `cached_latest_updates` | `msgsync.Versions(store, channelID)` (`internal/bootstrap/adapt`'s `boundedMessageVersions` wraps it) |
 | Threads whose cached parent says more replies than the cache holds | `(*cache.DB).ThreadsNeedingReplies(workspaceID, sinceTS, limit)` |
-| Search every cached message of a workspace (replies included), bounded, best match (bm25) or newest first | `(*cache.DB).SearchMessages(workspaceID, query, limit, order)` with `cache.SearchRelevance` / `SearchNewest` (FTS5; the LIKE fallback is always newest first); the per-channel feed-only form is `SearchChannelMessages` |
+| Search every cached message of a workspace (replies included), bounded, best match (bm25) or newest first | `(*cache.DB).SearchMessages(workspaceID, query, limit, order)` with `cache.SearchRelevance` / `SearchNewest` (FTS5; the LIKE fallback is always newest first); the per-channel feed-only form is `SearchChannelMessages` (no caller since the TUI) |
 | The same with structure: whole words (a trailing `*` a prefix), phrases, alternatives, exclusions, authors, conversations, mentions, a ts range, thread/reply/edited/link/file/reaction, emoji | `(*cache.DB).SearchMessagesSpec(workspaceID, cache.SearchSpec, limit, order)` (`SearchMessages` is it with every word required); the Gio backend's form is `backend.SearchQuery` (`Words(s)`, `Empty`, `Ranked`), mapped by `searchSpec`, matched in Go by the fake's `fakeMatches` (`TestSearchFakeMatchesCache` keeps them agreeing) |
 | Read a search query (`from:ada "a phrase" !not a \| b since:3d`): clauses with spans, the words it looks for, a time value as a span, the clause at the caret | `internal/searchq`: `Parse`, `Query.TextTerms` / `HasText` / `ClauseAt`, `ParseTime(v, now)` (`Span{Start, End, Relative}`), `Keys`, `IsValues`, `HasValues`, `TimeWords` |
+| What the cache holds, for a coverage view: every span of a workspace in one query; non-deleted rows per channel | `(*cache.DB).SpansForWorkspace(workspaceID)`, `(*cache.DB).MessageCounts(workspaceID)`; the GUI's `backend.SyncStatus` is built from them |
+| Follow a backfill run (phase, item in flight, counts, requests, paused, last error) | `msgsync.Config.OnProgress(msgsync.Progress)`; the GUI maps it onto `backend.BackfillStatus` (`gui/backend/sync_status.go`) and emits `backend.SyncChanged` |
+| Should the search backfill skip a conversation? (`[cache] backfill_ignore`, names or globs) | `config.CacheConfig.IgnoresBackfill(name)`; the GUI hands it to `(*backend.Slack).SetBackfillIgnore` |
+| Usergroups in the cache | `(*cache.DB).ReplaceUserGroups(workspaceID, groups)`, `ListUserGroups(workspaceID)` |
+| Every cached reaction on a page of messages, in first-added order, in one query | `(*cache.DB).ReactionsFor(channelID, ts)` |
+| Keep the cache's followed threads (`thread_subscriptions`) in step with `subscriptions.thread.getView`, at most once per half hour (up to ~60 requests a sweep) | `internal/threadsubs`: `Sync{Client, DB, WorkspaceID, Available}.Run`, `Gate{Window}` (`TryStart`, `Done`, `Running`), `Interval`; slk-gio runs them from `(*Slack).RefreshThreads` (`gui/backend/threads.go`) |
+| Who is typing where and which apps are working, with their expiries, and the words for it ("Ada is typing", "Claude is working") | `internal/typing`: `Tracker` (`Add`, `Done`, `Expire`, `Users`, `SetBotStatus`, `ClearBot`, `WorkingBots`, `ThreadBotStatuses`), `Text`, `Working`, `Row(typers, apps, end)`, `Expiry` / `BotExpiry` / `Throttle`. The Gio composer keeps one per window (`gui/cmd/slk-gio/typingline.go`) from the backend's `Typing` and `AppStatus` events, and sends the user's own with `backend.Backend.Typing` |
+| Download and cache an image (a file thumbnail, an avatar, a custom emoji) with the workspace's credentials, bounded concurrency and 429 back-off; choose the thumbnail for a size | `internal/image`: `NewCache(dir, maxMB)` (on-disk LRU), `NewFetcher(cache, client)`, `(*Fetcher).SetAuths`, `Fetch(ctx, FetchRequest)`; `PickThumb(thumbs, target)`. `gui/cmd/slk-gio/images.go` hands the decoded pictures to every window |
+| Slack original-avatar URL → sized CDN URL (e.g. 72px) | `avatar.SizedURL(orig, px)`; returns non-Slack-original URLs unchanged |
+| Disk-cache key for one user's avatar at one URL | `avatar.FetchKey(userID, url)` |
+| Download a Slack file (or any URL) to a path of your choosing, once: no-op if it is already there, atomic rename, Slack auth per workspace | `(*filedl.Downloader).Fetch(ctx, url, path)`; `filedl.SafeName(title)` for the file name. `Download` is the save-to-folder form with `-2` suffixes |
+
+### Workspace setup and config
+
+| Need | Use |
+|---|---|
+| slk's XDG directories (config, data with tokens and cache.db, cache with images) | `paths.Config()`, `paths.Data()`, `paths.Cache()` (`internal/paths`); `cmd/slk/paths.go`'s `xdg*` names wrap them |
+| Edit config.toml in place: the process-wide write lock, an atomic replace (temp file + rename, mode kept), a TOML basic string, a comment-safe line | `config.LockWrites()` (`defer config.LockWrites()()` across the whole read-modify-write), `config.WriteAtomic(path, data)`, `config.TOMLString(s)`, `config.SanitizeComment(s)` (`internal/config/write.go`) |
+| Keep `_x_version_ts` (Slack's build timestamp) current: seed the envelope from config.toml before the first request, refresh it from `client.shouldReload` after connecting and save it to the workspace's block; the block's TOML key for a team | `internal/config/versionts`: `Seed(client.Envelope(), cfg, teamID)` (before `Connect`), `Refresh(ctx, client, cfg, configPath, teamName, logf)` (a goroutine after `Connect`; 15 s bound; `configPath` "" applies without saving, for a config that did not load), `Save(configPath, tomlKey, teamID, teamName, ts)`, `TOMLKey(cfg, teamID)` |
+| Sign a workspace in without a terminal or window: desktop-app workspaces to offer (browser sessions not pre-selected), the tokens to save for the chosen ones, saving one (token + `[workspaces.<slug>]` block, never a second block for a team), a slackdesktop error as advice | `internal/onboard`: `DesktopChoices`, `BuildWorkspaceTokens`, `SaveWorkspace` (`SaveResult`), `UniqueSlug` / `ExistingSlugs` / `AppendWorkspaceConfigBlock`, `DesktopErrorMessage`. The terminal prompts are `cmd/slk/onboarding*.go` |
+| Refresh stored tokens from the Slack desktop app's live session at startup (desktop tokens first, mint as the fallback; browser-session tokens left alone; failures keep the stored token) | `onboard.Remint(ctx, store, slackclient.MintToken)`; the injectable core is `onboard.RemintTokens`. `slk-gio` calls `Remint` at startup (`remintStored`, `gui/cmd/slk-gio/main.go`); `slk export` calls `RemintTokens` |
+
+### Desktop integration
+
+| Need | Use |
+|---|---|
+| Copy text to the clipboard from a Gio window | `gtx.Execute(clipboard.WriteCmd{…})` (Gio; `msgactions.go`, `textselect.go`, `infopanel.go`) |
+| Read the desktop clipboard's image (PNG) or text outside any toolkit (Gio's `clipboard.ReadCmd` is text-only): `wl-paste` on Wayland, `xclip` on X11, nothing elsewhere (macOS has no reader yet) | `clipboard.ReadImage()`, `clipboard.ReadText()` (`internal/clipboard`); each runs a process, so off the UI goroutine |
+| Turn pasted text or an image into an upload: is the text a file path (`/…`, `~/…`, `./…`, `file://…`), the attachment for a file or a pasted PNG (`slk-paste-<time>.png`), the 10 MB limit, a size for people | `attach.ResolvePath`, `attach.FromPath` (`ErrNotAFile` means "treat it as text", `ErrEmpty`), `attach.FromImage(png, now)`, `attach.MaxSize`, `attach.HumanSize` ("812 B", "243 KB", "12.3 MB"; also the Gio file chips) (`internal/attach`) |
+| Let the user choose files with the desktop's chooser, without a toolkit dialog (zenity, else kdialog, else yad; Cancel is no files) | `filepick.Choose(ctx)`, `filepick.ErrNoChooser` (`internal/filepick`) |
+| Open a URL or file with the desktop's default handler | `launch.Open(target)` (`internal/launch`) |
+| Which messages notify (mentions, DMs, keywords, mutes, DND) | `notify.ShouldNotify` (`internal/notify`); slk-gio adds "no window focused" in `gui/notifications` |
+
+### The Gio frontend
+
+| Need | Use |
+|---|---|
 | Turn a parsed query into a `backend.SearchQuery` (names matched fuzzily, the best winning) and the line saying how it was read; what to offer at the caret | `search.Resolve(q, search.Sources, now)` returning `[]search.Chip`; `search.Suggest(query, caret, src, limit)` returning `search.Suggestion` (`gui/search/query.go`, `complete.go`) |
 | The person, usergroup or conversation a typed name fits best (prefix, word prefix, contains, then letters in order from three letters) | `chat.BestPerson`, `chat.BestGroup`, `chat.BestConversation` (`gui/chat/complete.go`); the ranking is `personRank`, which @-completion shares |
 | Draw a completion popup's rows (lit row, clicks) and a completion choice (avatar, glyph or emoji, label, detail) in a Gio window | `popupList`, `choiceRow` (`gui/cmd/slk-gio/commands.go`); the composer and the search window use both |
 | Show which words a search matched in a result's text, and cut a long text around the match | `search.Highlight(text, query)` (the query's text terms only, via `searchq`; whole words, or prefixes for terms ending in `*`, case- and accent-blind, as FTS5 matches), `search.Snippet(text, query, width)` (`gui/search/highlight.go`); a coverage bar's colour state is `search.StateOf` / `OverallState` |
-| What the cache holds, for a coverage view: every span of a workspace in one query; non-deleted rows per channel | `(*cache.DB).SpansForWorkspace(workspaceID)`, `(*cache.DB).MessageCounts(workspaceID)`; the GUI's `backend.SyncStatus` is built from them |
-| Follow a backfill run (phase, item in flight, counts, requests, paused, last error) | `msgsync.Config.OnProgress(msgsync.Progress)`; the GUI maps it onto `backend.BackfillStatus` (`gui/backend/sync_status.go`) and emits `backend.SyncChanged` |
-| A message body as plain text for a one-line preview (search result) | `rich.PlainBlocks(blocks)` (`gui/rich`) |
-| Should the search backfill skip a conversation? (`[cache] backfill_ignore`, names or globs) | `config.CacheConfig.IgnoresBackfill(name)`; the GUI hands it to `(*backend.Slack).SetBackfillIgnore` |
-| A WebSocket message frame whole (the decoded `slack.Message`, its raw JSON, and for `message_changed` the inner message with `reply_count`/`thread_ts`/`edited`) | implement `slackclient.MessageEventHandler` (`OnMessageEvent(MessageEvent)`) on your `EventHandler`; the dispatcher type-asserts it and then skips `OnMessage`/`OnMessageDeleted`. Ephemerals still go to `OnEphemeralMessage` |
-| Peer custom status, DND and huddle rendering | `ui/peerstatus` (`Status`, glyph/expiry/summary methods); `messages.AuthorStatusSuffix` for author headers |
-| Usergroup map helpers; a usergroup's mention handle (its own, or its name slugified), and the ID → handle map for a `usergroups.list` result | `usergroups.Copy`, `usergroups.Equal`, `usergroups.Display`; `usergroups.Handle(g)`, `usergroups.Handles(groups)` (`internal/usergroups/handles.go`) |
-| Does message text mention one of the user's usergroups (`<!subteam^S…>`, bare or labelled)? | `mention.InGroups(text, groupIDs)`; `mention.InText` deliberately leaves usergroups out |
-| The workspace's usergroups with their members (to know the user's own) | `(*slackclient.Client).GetUserGroupsWithMembers(ctx)` (`include_users`, one request); `GetUserGroups` without members. A usergroup created or changed reaches a handler that implements the optional `slackclient.SubteamEventHandler` (`OnSubteamChanged`) |
-| Usergroups in the cache | `(*cache.DB).ReplaceUserGroups(workspaceID, groups)`, `ListUserGroups(workspaceID)` |
 | Usergroups in the Gio frontend: names for mentions, the user's own, the hover card, completion | `backend.Backend.UserGroups` (no request; loaded from the cache at startup, refreshed per connect and on subteam events), event `backend.UserGroupsChanged{Mine}`, `backend.GroupProfile`; `hub.isMyGroup`, `richView.myGroup`; `chat.MatchPeople` takes the groups; `notifications.Center.SetGroups` |
-| A user ID → display name cache, from any goroutine in `cmd/slk` (`slk export`'s) | `*userNameStore` (`cmd/slk/usernames.go`: `Get`/`Set`/`Snapshot`, a copy); `lookupUserCached` / `resolveUserCached` (`users.go`) add the SQLite fallback. Never hand out the map itself |
-| User IDs mentioned in message text | `slackfmt.MentionedUserIDs(text)` |
-| Channel IDs mentioned in message text (`<#C…\|name>`), or each with its label | `slackfmt.MentionedChannelIDs(text)`; `slackfmt.MentionedChannels(text)` returns `ChannelMention{ID, Label}` |
-| Wake the serialized WebSocket event owner for local work | Implement `slackclient.PendingEventHandler` (`PendingEvents() <-chan struct{}`, `OnPendingEvents()`). The dispatcher selects the wake-up channel even on an idle socket and serializes the drain with Slack callbacks; nil disables it, and the channel must never close |
-| Name users the cache does not (DM peers at boot, message authors): cache first, then one edge `users/info` batch (80 ids a request), then `users.info` per id (8 at a time); edge skipped while boot has marked it degraded | `internal/slack/resolve`: `New(workspaceID, db, edgeClient, slackClient, health.Degraded, onResolved)`, `(*Resolver).Resolve(ctx, ids)` (synchronous, returns `map[id]Profile`), `Request(id)` (non-blocking, 200 ms coalescing window, reported through `onResolved`); `Resolver.Logf` for diagnostics |
-| userBoot IM → conversation metadata | `adapt.IMConversation(im)` (`internal/bootstrap/adapt`); callers decide whether an ordinary open IM or a closed starred IM is eligible |
-| Starred conversation membership / recover missing sidebar rows | `SectionStore.StarredConversationIDs()` (locked defensive copy); `adapt.MissingStarredConversations(ctx, knownIDs, starredIDs, ims, resolve)` (`internal/bootstrap/adapt/starred.go`; read-only metadata hydration) |
-| Boot a workspace the way Slack's web client does (client.userBoot, client.counts, conversations.view, edge revalidation; never an enumeration): the `bootstrap.Deps` for a real client, the conversation list from the result, the conversations `client.counts` names that userBoot left out (cache, then one edge `channels/info`), mutes from the boot prefs, first-sight cache rows, the conversation to open | `internal/bootstrap/adapt`: `NewDeps(client, db, token, openChannelID, health, logf)` for `bootstrap.Run`; `Conversations(res)`, `FillFromCounts(ctx, db, edgeClient, teamID, res, logf)`, `Muted{res}` (a `service.MutedChannelsClient`), `HydrateFirstSight(db, workspaceID, res, logf)`, `UserDisplayName(boot.User)`, `MostRecentlyVisited(visits)`; `DropClosedMPIMs` for a list from `users.conversations` |
-| Workspace-relative cached external-user flags | `cache.DB.ExternalUsers(workspaceID)` returns a caller-owned map, derived from `User.HomeTeamID`; the legacy boolean is only a fallback within the row's original workspace |
-| A fetched message's author ID and name from local sources (bot-ID fallback) | `cmd/slk/messageAuthor` (`users.go`), for `slk export` |
-| Legacy attachment action ids slack-go drops | `slackclient.EphemeralMessage.ActionIDs` (decoded from the raw frame), or `slackclient.LegacyActionIDs(raw)` for any message JSON; applied with `blocks.ApplyActionIDs(atts, ids)` (`internal/core/blocks`) |
-| Slack original-avatar URL → sized CDN URL (e.g. 72px) | `avatar.SizedURL(orig, px)`; returns non-Slack-original URLs unchanged |
-| Download a Slack file (or any URL) to a path of your choosing, once: no-op if it is already there, atomic rename, Slack auth per workspace | `(*filedl.Downloader).Fetch(ctx, url, path)`; `filedl.SafeName(title)` for the file name. `Download` is the TUI's save-to-folder with `-2` suffixes |
-| Copy text to the clipboard | `App.clipboardWrite` / `SetClipboardWriter` (TUI; nothing wires it since 2026-10-31); reading it (an image, or text) is `internal/clipboard` |
-| Read the desktop clipboard's image (PNG) or text outside any toolkit (Gio's `clipboard.ReadCmd` is text-only): `wl-paste` on Wayland, `xclip` on X11, nothing elsewhere | `clipboard.ReadImage()`, `clipboard.ReadText()` (`internal/clipboard`); each runs a process, so off the UI goroutine |
-| Turn pasted text or an image into an upload: is the text a file path (`/…`, `~/…`, `./…`, `file://…`), the attachment for a file or a pasted PNG (`slk-paste-<time>.png`), the 10 MB limit, a size for people | `attach.ResolvePath`, `attach.FromPath` (`ErrNotAFile` means "treat it as text", `ErrEmpty`), `attach.FromImage(png, now)`, `attach.MaxSize`, `attach.HumanSize` ("812 B", "243 KB", "12.3 MB"; also the Gio file chips) (`internal/attach`) |
-| Let the user choose files with the desktop's chooser, without a toolkit dialog (zenity, else kdialog, else yad; Cancel is no files) | `filepick.Choose(ctx)`, `filepick.ErrNoChooser` (`internal/filepick`) |
-| slk's XDG directories (config, data with tokens and cache.db, cache with images) | `paths.Config()`, `paths.Data()`, `paths.Cache()` (`internal/paths`); `cmd/slk/paths.go`'s `xdg*` names wrap them |
-| Edit config.toml in place: the process-wide write lock, an atomic replace (temp file + rename, mode kept), a TOML basic string, a comment-safe line | `config.LockWrites()` (`defer config.LockWrites()()` across the whole read-modify-write), `config.WriteAtomic(path, data)`, `config.TOMLString(s)`, `config.SanitizeComment(s)` (`internal/config/write.go`) |
-| Keep `_x_version_ts` (Slack's build timestamp) current: seed the envelope from config.toml before the first request, refresh it from `client.shouldReload` after connecting and save it to the workspace's block; the block's TOML key for a team | `internal/config/versionts`: `Seed(client.Envelope(), cfg, teamID)` (before `Connect`), `Refresh(ctx, client, cfg, configPath, teamName, logf)` (a goroutine after `Connect`; 15 s bound; `configPath` "" applies without saving, for a config that did not load), `Save(configPath, tomlKey, teamID, teamName, ts)`, `TOMLKey(cfg, teamID)` |
-| Sign a workspace in without a terminal or window: desktop-app workspaces to offer (browser sessions not pre-selected), the tokens to save for the chosen ones, saving one (token + `[workspaces.<slug>]` block, never a second block for a team), a slackdesktop error as advice | `internal/onboard`: `DesktopChoices`, `BuildWorkspaceTokens`, `SaveWorkspace` (`SaveResult`), `UniqueSlug` / `ExistingSlugs` / `AppendWorkspaceConfigBlock`, `DesktopErrorMessage`. The huh/lipgloss prompts are `cmd/slk/onboarding*.go` |
-| Refresh stored tokens from the Slack desktop app's live session at startup (desktop tokens first, mint as the fallback; browser-session tokens left alone; failures keep the stored token) | `onboard.Remint(ctx, store, slackclient.MintToken)`; the injectable core is `onboard.RemintTokens`. `slk-gio` calls `Remint` at startup (`remintStored`, `gui/cmd/slk-gio/main.go`); `slk export` calls `RemintTokens` |
-| Open a URL or file with the desktop's default handler | `launch.Open(target)` (`internal/launch`) |
-| A `slack.File`'s thumbnails as `core.ThumbSpec`s, smallest first | `blockkit.FileThumbs(f)` (`internal/blockkit/files.go`) |
-| Disk-cache key for one user's avatar at one URL (shared by both frontends) | `avatar.FetchKey(userID, url)` |
-| A message's display form for a non-terminal frontend (blocks of styled spans from rich_text, mrkdwn, Block Kit, attachments, files) | `gui/rich`: `Body`, `FromRichText`, `FromMrkdwn`, `FromBlocks`, `FromAttachments`, `FromFiles` |
 | A thread for the Gio frontend: read it (cache first, then one `conversations.replies` fetch arriving as a `HistoryUpdated` with `ThreadTS` set), reply (optionally broadcast), mark it read | `backend.Backend.Thread`, `SendReply`, `MarkThreadRead` (`gui/backend`); `RunCommand` takes a thread ts |
 | Reactions in the Gio frontend: apply an add/remove idempotently (the socket's echo of the user's own change is a no-op), list emoji for the picker (common set, prefix-ranked, one per glyph, customs included), toggle one, say who reacted | `chat.ApplyReaction`, `chat.MatchEmoji`, `chat.Reactors` (`gui/chat`); `backend.Backend.React` (shows the change at once, takes it back if Slack refuses or does not answer within `reactTimeout`; `reactWith`), event `backend.ReactionChanged`; pills, picker and the who-reacted card on `msgView` (`gui/cmd/slk-gio/reactions.go`). A picked name goes through `emoji.CanonicalSlackName` before it is sent (Slack keeps `+1`, not `thumbsup`) |
-| Every cached reaction on a page of messages, in first-added order, in one query | `(*cache.DB).ReactionsFor(channelID, ts)` |
 | Draw over a span of rich text in the Gio frontend (a custom emoji's picture over a placeholder) | `richtext.SpanStyle.Inline` (`gui/internal/richtext`); `(*richView).customEmoji(name)` resolves and loads a custom emoji's picture, `emojiPicture` draws it |
 | Edit, delete, link to a message from the Gio frontend; the text an edit starts from; the user's last message (for Up-to-edit) | `backend.Backend.Edit` (optimistic, built from the cached row so files survive), `Delete`, `Permalink`; `chat.EditableText`, `chat.LastOwn` (`gui/chat/actions.go`); the composer's edit mode is `composeBox.beginEdit` / `endEdit` (`gui/cmd/slk-gio/compose.go`), the menu `msgMenu` and its dialogs `confirmDialog` (`msgactions.go`; `msgView.deleteDialog` is the delete confirmation) |
 | Mark a conversation or thread unread from a message in the Gio frontend, and keep the window from reading it again until the user leaves it or something newer arrives | `backend.Backend.MarkUnread(ctx, channelID, threadTS, boundaryTS)` (`gui/backend/read.go`; mentions after the boundary counted from the cache); `chat.UnreadBoundary`, `chat.ThreadUnreadBoundary`, `chat.ReadGate` (`gui/chat/readgate.go`); `msgView.markUnread` offers the menu item, `markUnreadFrom` / `focusChanged` in `chatwin.go` and `threadwin.go` |
@@ -214,13 +293,12 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | The user's own presence and do-not-disturb in the Gio frontend: read it, set away/active, snooze, end a snooze or DND (optimistic, taken back on refusal); the menu's choices and the header's words for it | `backend.Backend.SelfStatus`, `SetPresence`, `Snooze`, `EndSnooze`, `EndDND`, event `SelfPresenceChanged` (`gui/backend/presence.go`; the socket's own presence and `dnd_updated` arrive there too); `chat.PresenceItems`, `chat.SelfText`, `chat.MinutesUntilTomorrowMorning` (`gui/chat/presence.go`); `hub.setPresence`, `hub.selfStatus`; `presenceMenu` (`gui/cmd/slk-gio/presencemenu.go`, opened through `headerSpec.OnLeading`), `trayPresenceItems`; a popup menu's row is `menuRowAt` |
 | Whether a Gio message starts a new group (its author line and avatar) or a new day (a date separator) | `chat.StartsGroup`, `chat.NewDay`, `chat.SameDay`, `chat.GroupGap` (`gui/chat/group.go`); the list's spacing is the `groupTop`/`lineTop`/`dateTop` constants in `gui/cmd/slk-gio/chatwin.go` |
 | A caption centered between two thin rules (date separator) | `ruledCaption` (`gui/cmd/slk-gio/msgview.go`) |
-| The Gio frontend's colours (default `hadal`): the shipped palettes, a TUI theme mapped onto the palette's colour roles, `[gui.theme]` overrides, contrast and luminance | `gui/palette` (`Resolve`, `Presets`, `Keys`, `Contrast`, `IsDark`); applied once at startup by `applyPalette` (`gui/cmd/slk-gio/theme.go`) into the `col*` variables. Colour literals live only in `theme.go` (`TestColorsComeFromThePalette`). A named theme's colors: `theme.ColorsByName` |
+| The Gio frontend's colours (default `hadal`): the shipped palettes, an slk theme (`internal/theme`) mapped onto the palette's colour roles, `[gui.theme]` overrides, contrast and luminance | `gui/palette` (`Resolve`, `Presets`, `Keys`, `Contrast`, `IsDark`); applied once at startup by `applyPalette` (`gui/cmd/slk-gio/theme.go`) into the `col*` variables. Colour literals live only in `theme.go` (`TestColorsComeFromThePalette`). A named theme's colors: `theme.ColorsByName` |
 | An overlay in the Gio frontend (switcher, hover card, menu, picker, dialog) | `overlayFrame` (lifted `colOverlay` surface, edge, `cardRadius`, shadow via `lifted`) in `gui/cmd/slk-gio/theme.go`; highlight rows inside with `colControl` |
 | A small transition in the Gio frontend: a value gliding to a new target, an overlay's entrance, a highlight's rise and fall | `gui/motion` (`Tween`, `Enter`, `Pulse`, `EaseOut`); `enter(gtx, since, w)` (`gui/cmd/slk-gio/theme.go`) slides and fades an overlay in. Ask for the next frame (`op.InvalidateCmd{}`) only while something moves |
 | Desktop notifications in the Gio frontend: which messages notify (internal/notify's `ShouldNotify` plus "no window focused"), their text, and showing them (D-Bus with click-to-open and one per conversation, or `notify_command`/beeep) | `gui/notifications` (`Center`, `NewSink`, `Title`, `Body`); wired in `hub.dispatch` (`h.notes`), cleared by `ReadChanged` and window focus, clicks reach `hub.openNote`. The user's own ID is `backend.Backend.Self` |
 | A conversation's details in the Gio frontend: who is in it (cache first, else at most 5 pages of `conversations.members`), its creator, creation date and rich topic/description; which info-panel tabs a conversation has, filtering its members, the "Created by" line | `backend.Backend.Members`, `backend.Details` (`TopicBody`, `PurposeBody`, `Created`, `Creator`); `chat.InfoTabs`, `chat.FilterMembers`, `chat.CreatedLine` (`gui/chat/info.go`); the panel is `infoPanel` (`gui/cmd/slk-gio/infopanel.go`), opened from the title through `headerSpec.OnTitle`. List members with a page cap: `(*slackclient.Client).GetUsersInConversationMax` |
 | A conversation's own desktop-notification level in the Gio frontend (default, every message, nothing), kept in slk's cache and never sent to Slack | `backend.NotifyLevel` on `Conversation.Notify`, set with `backend.Backend.SetNotify` (event `NotifyChanged`), stored with `(*cache.DB).SetNotifyLevel` / `NotifyLevels`; applied by `notifications.Center.Message` |
-| Keep the cache's followed threads (`thread_subscriptions`) in step with `subscriptions.thread.getView`, at most once per half hour (up to ~60 requests a sweep) | `internal/threadsubs`: `Sync{Client, DB, WorkspaceID, Available}.Run`, `Gate{Window}` (`TryStart`, `Done`, `Running`), `Interval`; the TUI wraps them in `ensureWorkspaceThreadSubs` (`cmd/slk/thread_subscriptions.go`) |
 | Followed threads in the Gio frontend: the list, refreshing it, read state, the unread count, a parent's "new replies" mark | `backend.Backend.Threads` (cache, no request), `RefreshThreads` (the gate above), `MarkThreadRead`; events `ThreadState`, `ThreadsUnread` (client.counts' aggregate until a sync this session, then the cache's count), `ThreadsChanged`; `Message.ThreadUnread`; `chat.ThreadMeta`, `chat.UnreadThreads`; the window is `threadsWindow` (`gui/cmd/slk-gio/threadswin.go`), the list's row `listWindow.threadsLine` |
 | The Gio frontend's conversation list and boot: Slack's own boot once per run (no enumeration; `users.conversations` only as the loud fallback when `client.userBoot` fails), then the list rebuilt from state with no request; read state kept current from the socket; the boot's `client.counts` reused by the first connect's catch-up | `(*Slack).Conversations` → `bootOnce` (`gui/backend/slack.go`, over `internal/bootstrap` + `adapt`), `noteRead` / `noteActivity`, `afterConnect`; names through `resolveAll` (a `resolve.Resolver`); `ConnectOptions` carries the config for `versionts`. `SLK_DEBUG=1` prints "boot requests:" (`slackhttp.DefaultCounter.Report()`) and the session's on exit (`reportRequests`, `gui/cmd/slk-gio/main.go`). Tests: `gui/backend/boot_test.go` over `slacktest` |
 | A conversation the user newly has, in the Gio frontend (a DM started, a channel joined, or one a message came from that the list did not know) | `(*Slack).conversationOfLocked` (the one Slack-channel → `Conversation` conversion), `(*Slack).opened`, `backend.Backend.Conversation` (one `conversations.info`), event `ConversationOpened`; the hub asks once per unknown channel (`askUnknownLocked`), the list buffers its activity until it arrives; `upsertConv` |
@@ -237,136 +315,82 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Keep slk-gio running with no window open, and bring a running one's list forward from a second launch | `startTray` (`gui/cmd/slk-gio/tray_linux.go`, `fyne.io/systray`; only when a StatusNotifierWatcher has a host), `lastWindowClosed` (the hub's `onLast`, `main.go`), `claimInstance` (`instance_linux.go`, a session-bus name per workspace); off with `config.GUIConfig.Tray`. Stubs elsewhere than Linux |
 | Draw a list of messages in a Gio window (rows, hover card, previews, the lit jump target, thread affordances via `onThread`), and its composer (slash-command popup, send or reply, broadcast box) | `msgView` (`gui/cmd/slk-gio/msgview.go`) and `composeBox` (`compose.go`), embedded by `chatWindow` and `threadWindow`. Which thread windows an event reaches: `threadTargets` (`hub.go`) |
 
-### UI chrome
-
-| Need | Use |
-|---|---|
-| Scrollbar gutter on a rendered pane | `bubbles/scrollbar.Overlay`, `bubbles/scrollbar.Visible` |
-| Lay out a wrapping row of labelled controls (buttons, select labels) with positions for hit-testing | `internal/bubbles/buttonrow` (`Layout`, `Rows`, `RowsFunc`); used by Block Kit actions and the confirm prompt |
-| Draw a dialog: its box, title / filter / body / footer layout, filter line, list window, selected-row marker, scrollbar gutter, and the composer popups' box and marker | `bubbles/chrome` (`Frame`, `Box`, `FilterInput`, `Window`, `List`, `Marker`, `BodyTop`, `Popup`, `PopupMarker`), drawn with `messages.ChromeStyles()` called per draw. A dialog keeps its own fields, matching and row content; see the package doc |
-| A scrollbar thumb's rows, for a gutter you draw yourself | `bubbles/scrollbar.Thumb` (the one formula; `Overlay` and `chrome.List` use it) |
-| Centered modal over a dimmed backdrop | `ui/overlay.DimmedOverlay` |
-| Prompt modal with N buttons (title, wrapped body of up to 8 lines, buttons; yes/no is `Open`, any buttons via `OpenChoice(confirmprompt.Choice)`, `Button.Then` for a follow-up step) | `bubbles/confirmprompt` (`New`, `Open`, `OpenChoice`, `Update`, `PressHighlighted`, `View`, `SetStyles`, `SetWidth`; options `WithStyles`/`WithKeyMap`/`WithWidth`; `KeyMap` field). In the App, open it with `App.openConfirmPrompt` (`internal/ui/confirm.go`), which also maps the theme onto its styles and composites it |
-| Text selection ranges and anchors | `bubbles/selection` (`Range`, `Anchor`, `LessOrEqual`) |
-| A scrollable, selectable list of pre-rendered rows: line offsets, scroll offset and snapping, the visible window, text selection and copy, clickable-rect translation, the scrollbar | `bubbles/entrylist` (`New` with options, `SetHeight`, `SetEntries`, `Layout`, `Compose`). The channel and thread panes are its two owners; each divergence between them is an `entrylist` option, documented on the option |
-| The theme mapped onto a content pane's entrylist styles (padding, scrollbar, selection highlight); the thread pane calls it; the channel pane uses the unexported `themeListStyles` it wraps | `messages.ThemeListStyles()` (`internal/ui/messages/pane_list.go`) |
-| Do something to whichever message pane (channel or thread) is focused or named by a panel, without a messages/thread branch | the `contentPane` interface, `(*App).contentPaneFor(panel)` and `(*App).focusedContentPane()` (returns the pane and its channel ID) in `internal/ui/content_pane.go`; both panes are asserted against it at compile time. Built on it: `handleReactionNav`, `openReactionPicker`, `toggleReactionOnSelected` (`app.go`) and the click hit tests `toggleReactionAt` (reaction pill) and `openImagePreviewAt` (inline image, via `HitTestImage`) (`reducer_mouse.go`), each taking the pane and its channel ID |
-| Theme colors and styles | `ui/styles` (`Username`, `SelectionStyle`, `SearchHighlightStyle`, `MentionBadgeStyle`, `UserColor`) |
-| The theme colour tables (built-in and custom TOML themes, lookup by name, the names list) and the per-user colour, for any frontend | `internal/theme`: `Colors`, `Resolve`, `ColorsByName`, `Names`, `LoadCustom(fsys)`, `RegisterCustom`, `UserColor(id)` / `UserPalette`; tests restore the registry with `SnapshotCustom` / `ClearCustom`. `styles.ThemeColors` / `ThemeNames` / `LoadCustomThemes` / `UserColor` delegate (the last keeps the empty-ID → `Primary` fallback) |
-| Change the theme inside the App | `App.applyTheme(name)` (`internal/ui/theme.go`): applies it, invalidates render caches and pushes fresh styles to components that snapshot them. A component that holds a style snapshot (anything in `internal/bubbles`) gets its push added there, not at each call site. `entrylist` is the exception: its owners (the channel and thread panes) call `SetStyles` at the top of every `View`, so `applyTheme` only invalidates for them. `styles.CurrentTheme()` names the applied one |
-| Status-bar toast that clears itself | `toastWithClear(a, text, d)` (`internal/ui/reducer_io.go`); `toastUntilReplaced(a, text)` only for a toast a later one replaces on purpose (upload progress). Set toasts on the Update goroutine, never inside a `tea.Cmd`; `statusbar.ToastSeq()` identifies the toast showing, so a clear tick leaves a newer toast alone. `TestToastsGoThroughToastSetters` fails on a direct `statusbar.SetToast` with text |
-| Window tree geometry | `ui/wintree` |
-| Sidebar selection across item/filter reorders | Capture `sidebar.Model.currentCursorKey()` **before** mutation, then `rebuildNavWithCursor`; `rebuildNavPreserveCursor` is only safe while old nav indices still identify the same items |
-| Modal geometry / row hit-testing | `chrome.Boxed`, `chrome.Clickable` (list rows; declared in `internal/bubbles/chrome`, asserted by each dialog package) and `pointClickable` (a single glyph, e.g. the profile dialog's 📋; `internal/ui/reducer_modal_click.go`) |
-| Channel/DM destination picker for forwarding | `channelfinder.Model.OpenForForwarding()` (joined conversations only); `Open()` restores the normal switcher |
-| Render a thread from cache on open, before the fetch lands | `cachedThreadRepliesCmd(threads, chID, threadTS)` (`internal/ui/app.go`); yields a `FromCache` `ThreadRepliesLoadedMsg`, which renders but never marks the thread read — only the fetched result does |
-| Bind a composer to the conversation its draft belongs to | `(*compose.Model).SetDraftContext(teamID, channelID, threadTS)` — an empty channel detaches (saves the prior conversation's draft, clears the visible input). `SetActiveChannel` sets only mention context; it does not move draft storage |
-| Put text into a conversation's draft without overwriting anything newer (visible composer or stored draft) | `(*compose.Model).OfferDraft(teamID, channelID, threadTS, text)`; false when that conversation already has text or attachments. Used to give back a slash command that did not run (via `offerTypedBack`) and for `/msg`'s pre-fill |
-| Name a navigable position (workspace, channel, message, thread reply) | `ui.Location`; `(*App).currentLocation` / `currentPosition` snapshot where the user is |
-| Navigate to a `Location` (history walk, mark jump, permalink) | `(*App).applyLocation(loc, fromHistory)` (`internal/ui/reducer_links.go`); goes through `pendingLinkNav`, so it waits for the channel and thread to load, and refuses while an upload is in flight |
-| Persistent marks in the cache | `(*cache.DB).UpsertMark` / `ListMarks` / `DeleteMark`, keyed by workspace and letter |
-
-### App state and actions
-
-| Need | Use |
-|---|---|
-| Selected message or reply in the focused pane (channel, TS, text, author, panel) | `App.selectedMessageContext()` (`internal/ui/app.go`) |
-| Switch the active workspace from the UI | `App.switchWorkspace(teamID)` (`internal/ui/app.go`). Always use it: it saves a theme a cycle left pending, so a switch back to that workspace reads the new theme |
-| Save a per-workspace theme | `settings.SaveTheme(teamID, name, scope)` with the workspace on screen (`a.activeTeamID`), never the backend's active one: a switch moves that first |
-| Set the user's own presence or DND from the UI (optimistic cache + status bar, then the service) | `(*App).applyPresenceAction(action, snoozeMinutes)` (`internal/ui/presence_action.go`); the presence menu, custom snooze and the `/away` family use it |
-| Switch to a channel, joining it first if the user is not a member | `(*App).openChannel(channelfinder.ChannelResult)` (`internal/ui/open_channel.go`); the channel finder and `/open` use it |
-| Open (or find) a DM / group DM and switch to it, optionally pre-filling its draft | `(*App).openConversation(userIDs, msgPrefill)` (`internal/ui/open_conversation.go`); the new-message picker and `/msg` use it. Request IDs come from a counter that never resets; a `/msg` pre-fill whose open fails, is cancelled or is superseded is given back by `abandonMsgPrefill`, and `/msg` refuses while `openingConversation()` |
-| Is composer text a slash command, and its name/args? | `parseSlashCommand(text)` (`internal/ui/slash_command.go`); `(*App).trySlashCommand(panel, c, channelID, threadTS)` runs it from either Enter branch. The result is `commandRanMsg`, reduced in `reducer_slash_command.go`; `commandFailureText` words the toast |
-| Give a slash command's typed text back to the composer it came from (a built-in that refuses, a failed remote run, a failed `/msg` open), with a toast | `commandOrigin{teamID, channelID, threadTS, typed}` (`slash_command.go`), which `trySlashCommand` puts on `commandArgs.Origin`; `(*App).refuseCommand(origin, text)` is the toast plus the give-back, `(*App).offerTypedBack(origin)` the give-back alone (thread composer if the origin has a threadTS, else the channel composer; never over a newer draft). Every built-in refusal goes through `refuseCommand` |
-| Add a command | `:` commands: an entry in `commands` (`internal/ui/command.go`); slash built-ins slk runs itself: an entry in `slashCommands` (`internal/ui/slash_command.go`). Both are `commandFunc(a, commandArgs{Fields, Rest, Origin})`, dispatched by `dispatchCommand` (a slash command by `splitCommandLine` + `runCommand`, so `Origin` can be set); a slash name not in the table runs through `chat.command` |
-| Who is typing where and which apps are working, with their expiries, and the words for it ("Ada is typing", "Claude is working"), for either frontend | `internal/typing`: `Tracker` (`Add`, `Done`, `Expire`, `Users`, `SetBotStatus`, `ClearBot`, `WorkingBots`, `ThreadBotStatuses`), `Text`, `Working`, `Row(typers, apps, end)`, `Expiry` / `BotExpiry` / `Throttle`. The TUI's `typingTracker` embeds it; the Gio composer keeps one per window (`gui/cmd/slk-gio/typingline.go`) from the backend's `Typing` and `AppStatus` events, and sends the user's own with `backend.Backend.Typing` |
-| An app's "working" status on a thread (Slack's `ai_assistant_status`, from `assistant.threads.setStatus`) | Arrives as `BotStatusMsg`; state on `a.typing` (`internal/ui/typing.go`, an `internal/typing.Tracker`): `SetBotStatus` (empty clears), `ClearBot` (the app replied), read with `WorkingBots(channel)` for the channel typing row and `ThreadBotStatuses(channel, thread)` for the thread pane. Lapses after `botStatusExpiry` (2 min, Slack's timeout) on the typing tick |
-| Can the user post in an app DM? (`app_home.messages_tab_enabled` / `messages_tab_read_only_enabled`) | `boot.ConversationsInfo` (`return_app_home=true`) or `ConversationsView`, then `(*boot.AppHome).CanReceiveMessages()` (nil is true); `cmd/slk/probeMessagingCapability` wires both, fail-open, behind `core.ChannelService.MessagingCapability`. A send refused with `restricted_action_read_only*` marks the conversation (`App.readOnlyChannels`, `sendFailedCmd` in `internal/ui/read_only.go`); both set `App.composeDisabled` |
-
 ### Test helpers
 
-Everything here is unexported and lives in a `_test.go` file, so it is
-reachable only from the package that declares it (all of these are
-`package ui` unless noted). They are listed because the failure mode this
-file exists to prevent — writing a sixteenth ad-hoc test-app builder — is
-exactly what happened before Phase 0 consolidated them. Symbols are
-greppable by name; no line numbers, because these files move.
+Unexported helpers live in `_test.go` files, so each is reachable only from
+the package that declares it. Symbols are greppable by name; no line numbers,
+because these files move.
 
 | Need | Use |
 |---|---|
-| Build an `App` for a test or benchmark | `newTestApp(t, opts...)` (`internal/ui/testapp_test.go`) |
-| The same without a `testing.TB` | `buildTestApp(opts...)` — only for the four legacy builders whose signatures must not change: `newPanelAtApp`, `sixelTestApp`, `makeBenchApp`, `makeWideScrollApp` |
-| Size the App | `withSize(w, h)` (direct field assign) / `withWindowSize(w, h)` (real `tea.WindowSizeMsg` resize path). **Not interchangeable** — only the latter sets `forceSixelRepaint`. Mutually last-wins |
-| Seed panes and data | `withMessages`, `withChannels`, `withWorkspaces`, `withThreadsView`, `withChannelFinderOpen` |
-| Seed App-level state | `withMode`, `withView`, `withActiveChannel`, `withActiveTeam`, `withChannelService`, `withWindowSplit`. **`withActiveChannel` assigns only `a.activeChannelID`** — nothing derives a *name* from an ID, so the messages-pane header renders as a bare `#`, the statusbar as `#`, and the compose placeholder as `Message #...`. A test that asserts on any of those must push the name through the production trio itself; `newGoldenApp` does it via `nameGoldenActiveChannel` (`internal/ui/golden_test.go`) |
-| Populate `a.layout` bands / pane caches (needed for mouse hit-testing) | `withRender()` |
-| N plain message fixtures | `testMessageItems(n)` |
-| A golden for a dialog or composer popup over the standard fixture | `dialogGoldens()` / `renderDialogGolden(t, d)` (`internal/ui/golden_dialogs_test.go`); add a scenario there for a new dialog |
-| Compare or bless a full-screen frame against `testdata/golden/<name>.ansi` | `compareGolden(t, name, got)` (`internal/ui/golden_test.go`) |
-| Prove two ANSI screens look identical even when their bytes differ (re-encoded SGR), or that every golden is cell-identical to a baseline directory | `cellDiff(want, got)` and `SLK_GOLDEN_BASELINE=<dir> go test ./internal/ui -run TestGoldenCellsMatchBaseline` (`internal/ui/goldencells_test.go`) |
-| Re-bless goldens | the package-local `-update` flag: `go test ./internal/ui -run TestGolden -update`. It is not defined repo-wide, so `go test ./... -update` fails |
-| An `App` with every render nondeterminism pinned (theme, emoji mode, clock) | `newGoldenApp(t, opts...)`, with `goldenMessages()` / `goldenChannels()` as the fixtures |
-| Drive a message through the real `Update` chain and render one frame | `updateAndRender(t, a, msg)` (`internal/ui/thread_breadcrumb_test.go`) |
-| Run a command the way the runtime does (batch members concurrently, ticks on their real timers) and take the message it delivers | `deliveredMsgs[T](t, cmds...)` (`internal/ui/cmdmsgs_test.go`). Use it, not a hand-built tick message, to show what a real tick carries |
-| An App at a given width, resized via `WindowSizeMsg`, channel focused, for thread-layout tests | `stackedApp(t, w, extra...)` (`internal/ui/thread_stacked_test.go`) |
-| Assert which of channel / thread the last frame drew | `assertFront(t, a, wantChannel, wantThread)` (same file) |
-| Fake one service method on an `App` | `a.setChannelFetcherForTest(fn)` and its siblings, `setUploaderForTest`, `setClipboardReaderForTest`, `setReadStateReaderForTest`, `setDesktopForTest(func(*core.DesktopServiceFuncs))`, `setCommandRunnerForTest(fn)`, `setFilesystemForTest()`, `setEditorForTest()`, `setProfileFetcherForTest(fn)` (`internal/ui/services_helpers_test.go`). Calls for sibling methods of one service compose instead of replacing each other |
-| Table-drive a mode handler's keys | `runKeyCases(t, mode, []keyCase{...})` (`internal/ui/modekeys_test.go`). Calls `dispatchModeKey` directly, so it **bypasses** the reducer chain and the `ctrl+c` / bootstrap / scroll-flush gates ahead of it |
-| Build a key message for such a table | `keyPress(r)` printable rune, `keyCode(c)` special key, `keyMod(c, mod)` modified key |
-| Count the rows a finder-style modal is showing | `modalRows(bs)` (`internal/ui/mode_workspace_finder_test.go`) — `h - 7`; floors at 1, and is **not** valid for `newmessagepicker` |
-| Read the highlighted (`▌`) row out of a rendered modal box | `modalHighlightedRow(t, box)` (same file) |
-| Compare two `color.Color` without `==` panicking on a non-comparable dynamic type | `colorEqual(a, b)` (`internal/ui/mode_theme_switcher_test.go`; `package styles` has its own twin in `styles/styles_test.go`) |
-| Observe a status-bar toast (no getter exists) | `statusbarText(a)` (`internal/ui/mode_presence_snooze_test.go`) |
-| Record status-setter invocations | the `statusCall` struct (same file) |
-| A fixture with real unread channels either side of the active one | `unreadOpts()` + `seedUnreads(t, a)` (`internal/ui/mode_normal_keys_test.go`) |
-| Establish a focused pane with an asserted selection | `focusMessages(t, a)`, `focusThreadPanel(t, a)` (same file) |
-| Park the message viewport at an exact `yOffset` | `scrollTo(off)` (same file) |
-| Make nav-history entries resolvable | `navLookupOpt()` (same file) |
-| An `App` with the main composer mid-upload, a thread open with its own draft, and workspaces T1/T2, counting uploader and workspace-switcher calls | `uploadGuardApp(t)` (`internal/ui/conversation_drafts_safety_test.go`) |
-| Observe a compose cursor position or blur state (no getter exists) | `afterKeyValue(c, r)` (`internal/ui/mode_insert_keys_test.go`) |
-| An `App` on `C1` showing given messages, whose attachment-button presses are recorded (and answered with an error you choose) | `actionApp(t, err, msgs...)` (`internal/ui/action_prompt_test.go`), returning the `*[]pressCall` log |
-| Slackbot's "not in this channel" ephemeral with Add Them / Dismiss / Don't Show Again buttons | `mentionEphemeral(ts)` (`internal/ui/action_prompt_test.go`) |
-| Deliver a message to the App through the real `Update` chain and get the messages its commands produced | `arrive(t, a, msg)` (`internal/ui/action_prompt_queue_test.go`) |
-| Send a key and feed every resulting command's message back through `Update` | `pressKey(t, a, k)` (`internal/ui/action_prompt_test.go`) |
-| The toast text among such messages | `toastText(msgs)` (`internal/ui/action_prompt_test.go`) |
-| Is the confirm prompt visible and does its view contain some text? | `dialogShows(a, text)` (`internal/ui/action_prompt_queue_test.go`) |
-| Click the cell where some text is drawn inside the open confirm prompt | `clickConfirmText(t, a, text)` (`internal/ui/confirm_click_test.go`) |
-| An `App` with a normal message and then a given ephemeral in `C1`, the ephemeral selected in a focused messages pane | `selectedEphemeralApp(t, msg)` (`internal/ui/ephemeral_keys_test.go`) |
-| An `App` in T1 for jump tests: every channel resolves, C1–C3 have fresh cached messages | `jumpMarkTestApp(t)` (`internal/ui/jump_mark_test.go`) |
-| An `App` in T1 on C1 for set-mark tests, with no cache wired | `setMarkTestApp(t)` (`internal/ui/set_mark_test.go`) |
-| Record a mark directly in T1's store | `seedMark(t, app, letter, loc)` (`internal/ui/jump_mark_test.go`) |
-| Press a mark chord through `App.Update` | `pressJumpChord(app, letter)`, `pressBackJump(app)` (`internal/ui/jump_mark_test.go`), `pressMarkChord(app, letter)` (`internal/ui/set_mark_test.go`) |
-| Feed a jump's `ChannelSelectedMsg` back through `Update` | `driveJump(app, cmd)` (`internal/ui/jump_mark_test.go`) |
-| A marks table backed by an in-memory cache, or one whose every call fails | `marksPersistForTest(t)` (`internal/ui/marks_test.go`), `failingMarksPersist()` (`internal/ui/command_marks_test.go`) |
-| List a workspace's marks, failing the test on a read error | `mustListMarks(t, store, teamID)` (`internal/ui/marks_test.go`) |
-| An 80x24 `App` with the marks list open over marks a (C2) and b (C3), and the box's top-left screen cell | `marksClickApp(t)` (`internal/ui/marks_mode_test.go`) |
-| An `App` with given per-channel caches and an optional fetch-around, for history tests | `navFixtureApp(t, caches, fetchAround)` (`internal/ui/navhistory_test.go`) |
-| Drive a history walk through the whole pipeline | `walkAndUpdate(t, app, cmd)`; `walkToCompletion(t, app, cmd)` also returns the selection and toasts (same file) |
-| A nav stack's entries as channel IDs | `navEntryChannelIDs(entries)` (`internal/ui/app_test.go`) |
-| An `App` in insert mode on C1/T1 whose slash-command runs are recorded and answered with an error you choose; press Enter through `Update` | `slashApp(t, err)`, `pressEnter(a)`, the `runCall` record (`internal/ui/slash_command_test.go`) |
-| Register a slash built-in for one test (restored on cleanup) | `withSlashBuiltin(t, name, fn)` (`internal/ui/slash_command_test.go`) |
-| A slashApp with the status setter recorded and a cached presence for T1 | `presenceSlashApp(t, presence)`, returning the App and the `*[]statusCall` log (`internal/ui/slash_builtins_test.go`) |
-| A slashApp whose channel finder holds joined general (C1) and random (C2), whose server channel search answers with unjoined design (C9), and whose joins and searches are recorded | `openSlashApp(t)`, returning the App and the `*[]runCall`, joins and searches logs (`internal/ui/slash_builtins_test.go`) |
-| A slashApp whose conversations.open is recorded and answers with DM D9 | `msgSlashApp(t)`, returning the App, the `*[]runCall` log and the `*[][]string` OpenConversation log (`internal/ui/slash_builtins_test.go`); `failOpenConversation(a)` then makes that open answer `NewMessageFailedMsg` |
-| The draft of a conversation in T1, read by switching the composer to it (changes the composer's draft context) | `draftIn(a, channelID)` (`internal/ui/slash_builtins_test.go`) |
+| A whole made-up workspace behind `backend.Backend` (conversations, people, threads, usergroups, unjoined channels C20–C22, a `/standup` app with buttons, uploads, presence) | `backend.NewFake(time.Unix(1_700_000_000, 0))` (`gui/backend/fake.go`, areas in `fake_<area>.go`); set `f.Interval = 0` so nothing is posted on a timer, then `go f.Run(ctx, emit)`. The same backend runs `slk-gio -fake` |
+| Take the next `MessagePosted` the fake emitted (skipping connection and presence events) | `nextPosted(t, got)` (`gui/backend/fake_test.go`); a followed thread's parent: `fakeThreadParent(t, f)` (`fake_thread_test.go`) |
+| A fake Slack HTTP server: canned bodies per path, every request recorded (form and raw body, since edgeapi posts JSON as `text/plain`), and a real `*slackclient.Client` pointed at it (through `BrowserTransport.Inner`, so the request counter and envelope stay in the path) | `internal/slack/slacktest`: `NewServer(t, map[path]body)`, `NewClient(t, srv.Server)`, `(*Server).RequestTo(t, path)`, `Requests(path)`, `Paths()`, `Count(path)`; `UserBootBody` is a minimal `client.userBoot` answer |
+| A `backend.Slack` over a slacktest server with an empty in-memory cache, signed in, not booted (warnings captured) | `bootSlack(t, srv)` (`gui/backend/boot_test.go`); the boot's canned bodies `bootBodies()`, its requests without the background `client.shouldReload` `bootPaths(srv)`. Every Slack-side test in `gui/backend` (`actions_test`, `channels_test`, `dm_test`, `forward_test`, `presence_test`, `read_test`, `upload_test`) builds on it |
+| An in-memory cache | `cache.New(":memory:")`; `newTestDB(t)` in `internal/bootstrap/adapt` and `internal/slack/resolve` tests |
+| A real hub over the fake whose read marks are recorded, with windows built (`newChatWindow`, `newThreadWindow`) but never run, to test a window's logic headless | `gateTestHub(t)` and `wantMark(t, marks, want)` (`gui/cmd/slk-gio/readgate_test.go`: `TestChatWindowKeepsAMarkUnreadUntilBlurOrNewMessage`, `TestThreadWindowKeepsAMarkUnreadUntilBlurOrNewReply`); a menu's items `hasMenuItem` |
+| A composer without a window: attach, upload, refuse, carry through `moveHere`, run slash commands | `newComposeBox(nil, nil, nil, "C1", "")` (or `&hub{ctx: ctx, be: f}` for one that reaches the fake), as in `TestComposer*` (`gui/cmd/slk-gio/attach_test.go`, `compose_test.go`); `pngAttachment(name)` |
+| A search window over the fake with people loaded, and waiting for its searches | `searchTestWindow(t)`, `settle(t, s)` (`gui/cmd/slk-gio/searchwin_test.go`) |
+| Event tags of popups that must differ (scrim vs panel) | `TestPopupTagsAreDistinct` (`gui/cmd/slk-gio/popuptags_test.go`): add a new popup type there |
 | Compare a request this repo builds with a scrubbed web-client capture (`{method, form, response}` JSON in `testdata/`) | `capturedForm(t, name)` (the capture's form minus `token` and the `_x_*` envelope) and `assertFormMatchesCapture(t, got, name)` (same fields and values, nothing extra; `client_token` checked for shape) (`internal/slack/command_test.go`, `package slackclient`) |
-| A fake Slack (TLS server answering a fixed body per path, every request recorded with its form, raw body, query and headers) and a real `*slackclient.Client` whose requests all land on it, `BrowserTransport` (headers, envelope, `DefaultCounter`) still in the path | `internal/slack/slacktest` (exported, so `gui/` tests use it too): `NewServer(t, bodies)`, `NewClient(t, srv.Server)` (any `httptest.NewTLSServer` works), `(*Server).RequestTo(t, path)`, `Requests(path)`, `Paths()`, `Count(path)`, the `UserBootBody` fixture. Web API paths are `/api/<method>`, edgeapi `/cache/<team>/<endpoint>` |
 | Load a config from a TOML string | `loadConfigString(t, body)` (`internal/config/config_test.go`, `package config`) |
+
+Anything that needs a Gio `layout.Context` is not unit-tested: put the logic
+in `gui/chat` (or `search`, `sidebar`, `rich`) and test it there.
+
+### Manual checks that cannot reach the user's desktop
+
+The user runs their own `slk-gio` from `bin/slk-gio` alongside your work.
+Never stop it, never `make gui` over it, and never let a check draw on their
+screen, take their pointer, read or write their clipboard, or show a
+notification or dialog there: one run left zenity dialogs on the user's
+screen because GTK's file chooser went through the desktop portal. The recipe
+the TUI-sunset executors used:
+
+```
+SCRATCH=<your scratchpad>
+cd gui && go build -o $SCRATCH/slk-gio ./cmd/slk-gio     # never into bin/
+mkdir -p $SCRATCH/{config/slk,data,cache}
+printf '[gui]\ntray = false\n[notifications]\nenabled = false\n' > $SCRATCH/config/slk/config.toml
+printf '#!/bin/sh\necho "xdg-open $*" >> %s/opened.log\n' $SCRATCH > $SCRATCH/xdg-open; chmod +x $SCRATCH/xdg-open
+nix-shell -p xvfb --run 'Xvfb :97 -screen 0 1600x1000x24' &      # a private X server
+env -u WAYLAND_DISPLAY DISPLAY=:97 \
+    DBUS_SESSION_BUS_ADDRESS=unix:path=$SCRATCH/no-bus \
+    GDK_DEBUG=no-portals \
+    XDG_CONFIG_HOME=$SCRATCH/config XDG_DATA_HOME=$SCRATCH/data XDG_CACHE_HOME=$SCRATCH/cache \
+    PATH=$SCRATCH:$PATH \
+    $SCRATCH/slk-gio -fake -fake-every 0 &
+DISPLAY=:97 xdotool search --name general windowfocus key ctrl+k type sre       # drive it
+ffmpeg -f x11grab -i :97 -frames:v 1 $SCRATCH/frame.png                          # look at it
+xclip -display :97 -selection clipboard -t image/png -i shot.png                 # its clipboard
+pkill -f "^$SCRATCH/slk-gio -fake"; pkill -f "Xvfb :97"                          # stop only yours
+```
+
+- The dead session bus keeps the run off the user's tray, notification
+  service, portal and single-instance name (`claimInstance`); `GDK_DEBUG=no-portals`
+  keeps zenity's chooser on `:97`. The scratch XDG directories keep the user's
+  config, tokens, cache and images untouched, and `tray = false` /
+  `enabled = false` say the same thing in config.
+- The stub `xdg-open` records what would have opened in a browser.
+- `xdotool` clicks on `:97` do not move the user's pointer; `windowfocus` moves
+  the keyboard between windows. `xdotool windowclose` on a chat window makes
+  the process exit with an X `BadWindow` error; close windows from inside.
+- `-fake -fake-every 0` stops the made-up messages arriving every four
+  seconds. Nothing in a `-fake` run talks to Slack; anything that must be seen
+  against a real workspace is listed for the user in the backlog instead.
 
 ### Known duplication — do not add to it
 
-These are tracked in the refactor plan and are being consolidated. Do not copy
-them as templates:
-
-- **`messages.Model` and `thread.Model`** share `bubbles/entrylist` (scroll,
-  selection, window, scrollbar) and `messages.RenderMessage` (one message
-  renderer); their differences are `entrylist` options and `RenderOptions`
-  fields, each documented where it is declared. Do not add a pane-specific
-  copy of either.
-- **The message cache has one writer, `internal/msgsync`.** The TUI's own
-  writers (`cmd/slk/history.go`, `rtmEventHandler.OnMessage`) were removed
-  with its composition root on 2026-10-31. Do not add another: route new
-  code through `msgsync`.
+- **The message cache has one writer, `internal/msgsync`.** Do not add
+  another: route new code through `msgsync`.
+- **`slk export` enumerates.** `cmd/slk/export_command.go` resolves a channel
+  name with `client.GetChannels` (`users.conversations`). Acceptable for a
+  one-shot, user-initiated CLI export; do not copy it into anything that runs
+  at startup or on a timer.
+- **Fake and Slack must agree.** The fake's search matcher (`fakeMatches`)
+  re-implements the cache's FTS rules; `TestSearchFakeMatchesCache` keeps them
+  in step. Any other fake behaviour that mirrors a Slack rule needs the same
+  kind of test.
 
 ## Conventions
 
@@ -375,34 +399,20 @@ unlisted helper gets re-implemented. When this file and the code disagree, the
 code is right and this file is a bug — fix it.
 
 **Two implementations that must stay parallel?** Express it as an interface with
-a compile-time assertion (`var _ Chrome = (*Model)(nil)`) or a lockstep test.
-Not a comment. The comment that used to sit at the top of
-`internal/ui/thread/model.go` — "this shape mirrors
-`internal/ui/messages.viewEntry` exactly; keeping them in lockstep means…" —
-was the counter-example: prose asking humans to maintain a 377-line invariant
-by hand. Phase 0 pinned it with a lockstep test, and Phase 3 replaced both with
-structure. The `contentPane` interface (`internal/ui/content_pane.go`), which
-both panes are asserted against at compile time, covers what the App calls on
-either pane. Every behavioural difference between them is an `entrylist` option
-(`WithEagerClamp`, `WithCursorFollowsScroll`, …) or a `RenderOptions` field,
-documented where it is declared (the `entrylist` options are tested per
-setting in `entrylist_test.go`). Do the same: when you find a comment standing
-in for a check, replace it with the check.
+a compile-time assertion (`var _ I = (*T)(nil)`), a lockstep test
+(`TestSearchFakeMatchesCache`), or a test that walks the source
+(`TestColorsComeFromThePalette`, `TestLabelsUseTheTypeScale`,
+`gui/boundary_test.go`). Not a comment asking humans to keep two things in step
+by hand. When you find a comment standing in for a check, replace it with the
+check.
 
 **Extract the substrate, not the widget.** Share the uniform part; leave the
 divergent part alone. Forcing genuinely different behavior into a common shape
 is worse than the duplication it removes.
 
-**Refactoring?** Moving functions is free — two phases of the prior refactor
-moved ~3,000 lines with zero test changes. Moving *state* is not: `internal/ui`
-test files make **2,905 references to 142 distinct unexported `App` fields and
-methods** (type-checked count, not a grep; measured at the end of Phase 0, up
-from 1,995 / 121 before it — Phase 0's characterization tests added ~910 of
-them). Budget roughly **220 mechanical test-line edits per 10 extractions**, and
-expect five members to dominate: `messagepane` (243), `compose` (204),
-`focusedPanel` (146), `mode` (129) and `activeChannelID` (125) are 847 of the
-total between them. Method and per-member breakdown:
-`docs/superpowers/plans/2026-09-06-architecture-refactor.md`, Phase 0 "Achieved".
+**Refactoring?** Moving functions is free; moving state is not. Keep moves and
+behaviour changes in separate commits, and move files with `git mv` whole so
+history follows them.
 
 **Found a bug while refactoring?** Record it, annotate it, raise it separately.
 A refactor commit that also changes behavior cannot be reviewed.
@@ -411,7 +421,8 @@ A refactor commit that also changes behavior cannot be reviewed.
 
 Per the README: brainstorm the design first, write tests, then implement.
 Designs go to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`,
-implementation plans to `docs/superpowers/plans/`.
+implementation plans to `docs/superpowers/plans/`. Add a design doc to
+`docs/superpowers/specs/README.md`.
 
-Before opening a PR: `go build ./...`, `go vet ./...`, `go test ./... -race`,
-`gofmt -l .` empty.
+Before opening a PR, in both modules: `go build ./...`, `go vet ./...`,
+`go test ./... -race`, `gofmt -l .` empty.

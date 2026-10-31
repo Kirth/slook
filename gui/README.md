@@ -1,8 +1,9 @@
-# slk-gio (prototype)
+# slk-gio
 
-A graphical frontend for slk, built with [Gio](https://gioui.org). Each
+slk's desktop client, built with [Gio](https://gioui.org). Each
 conversation opens in its own window; the conversation list is one more
-window.
+window. Workspaces are signed in with the `slk` CLI (`slk --add-workspace`);
+slk's terminal client was retired on 2026-10-31.
 
 On Linux slk-gio puts an icon in the desktop's tray (StatusNotifierItem)
 and keeps running when its last window closes: the socket, notifications
@@ -28,7 +29,7 @@ Changes show at once and are taken back if Slack refuses them; changes
 made in another Slack client show here too.
 
 At startup slk-gio refreshes the stored tokens from the Slack desktop
-app's session (as `slk` used to at each launch), so an expired token
+app's session (as slk's terminal client did at each launch), so an expired token
 renews itself while the desktop app stays signed in; when that cannot be
 read the stored token is used and the reason goes to stderr.
 
@@ -96,9 +97,11 @@ Colours come from `[gui.theme]` in slk's `config.toml`. `preset` (or
 - `ink`: ink-blue with an amber accent.
 - `light`.
 
-Any slk TUI theme name also works ("nord", "gruvbox dark", …), mapped
-onto the GUI's colours, and so does a custom theme from a `.toml` file
-in slk's `themes` directory (`~/.config/slk/themes/`, the TUI's format). Single colours can be overridden by key, in
+Any slk theme name also works ("nord", "gruvbox dark", …, the tables in
+`internal/theme`), mapped onto the GUI's colours, and so does a custom
+theme from a `.toml` file in slk's `themes` directory
+(`~/.config/slk/themes/`, read at startup; the format is on the wiki's
+Configuration page). Single colours can be overridden by key, in
 the block itself or under `[gui.theme.colors]`. `-theme NAME` picks a
 palette for one run.
 
@@ -117,7 +120,8 @@ takes `#rrggbbaa`; its alpha is the shadow's strength.
 
 While no slk-gio window has the keyboard, mentions, direct messages
 and `on_keyword` matches raise a desktop notification. These follow
-`[notifications]` in `config.toml`, as the TUI does, and muted
+`[notifications]` in `config.toml` (`enabled`, `on_mention`, `on_dm`,
+`on_keyword`, `notify_command`), and muted
 conversations stay silent. On Linux with a notification service,
 clicking a notification opens the conversation at the message (a
 thread reply opens its thread). Each conversation shows one
@@ -327,7 +331,7 @@ message. Typing filters every conversation, quiet ones included: names
 starting with the text first, then the most recently active; Enter opens
 the first, or click a row. Viewing a conversation (its window has the
 keyboard) marks it read in Slack, as Slack's own clients do. Visits are
-kept in slk's cache, which the TUI's channel finder also orders by.
+kept in slk's cache.
 
 The list comes from the boot Slack's own web client makes, once per
 run (`internal/bootstrap`): `client.userBoot` (the conversations, the
@@ -390,10 +394,11 @@ them). From readline:
 Ctrl+K stays the conversation switcher, so readline's kill-to-end is not
 there; Ctrl+B and Ctrl+F are left free for bold and the like.
 
-It is a separate Go module so Gio's cgo dependencies stay out of slk's
-build, CI and the flake's `vendorHash`. The TUI is not a constraint in
-this fork: helpers it needs are moved into `internal/` packages the GUI
-can import, not copied.
+It is a separate Go module so Gio's cgo dependencies stay out of the
+`slk` CLI's build, its release packages and the flake's `vendorHash`.
+Helpers it shares with the CLI live in the root module's `internal/`
+packages; `boundary_test.go` keeps the retired terminal client's packages
+and the terminal toolkits out of this module.
 
 ## What a message shows
 
@@ -427,8 +432,8 @@ can import, not copied.
   while the picture loads or when there is none.
 
 Pictures and avatars download with the workspace's credentials through
-`internal/image`, into the same `~/.cache/slk/images` the TUI uses and
-under the same keys, so the two share what they have fetched.
+`internal/image`, into `~/.cache/slk/images` (200 MB, least recently used
+first out).
 
 Fonts come from fontconfig (`fonts.go`): the text font in each style,
 monospace, a CJK font and the emoji font, loaded explicitly. Gio's own
@@ -456,7 +461,7 @@ conversation the cache has never seen is fetched first, so the first
 open still shows Slack's current state. Live messages, edits, deletions
 and reactions from the socket are written through as they arrive, and
 the cache records which ranges of each conversation it holds completely
-(`message_spans`), which is what a local search will stand on. The
+(`message_spans`), which the search window's coverage view reads. The
 plumbing is `internal/msgsync`; the design is
 `docs/superpowers/specs/2026-10-29-message-cache-sync-design.md`.
 
@@ -520,14 +525,23 @@ with `GIORENDERER=opengl` and without.
   rich_text elements, Block Kit, attachments and files. No Gio import, so
   it is tested without a display.
 - `backend/` — the `Backend` interface the windows use, with `Slack`
-  (real, through `internal/slack`) and `Fake`. A stopgap: `internal/core`'s
-  ports push `internal/ui` message types, so they cannot serve a second
-  frontend until those move into `core`.
-- `chat/` — a chat window's message state (`Timeline`), testable without
-  a display.
+  (real, through `internal/slack`, `internal/bootstrap` and the cache) and
+  `Fake` (`-fake`). Every feature is a method here, implemented by both.
+- `chat/` — a window's state and rules without a display: the
+  conversation and thread timelines, completion, the read gate,
+  presence, recipients, attachments, links.
+- `search/` — the search window's query resolution, suggestions and
+  highlighting.
 - `sidebar/` — how the conversation list is arranged (`Arrange`,
   `Search`), testable without a display.
+- `notifications/` — desktop notifications (D-Bus, or `notify_command`).
+- `palette/` — the colour roles, from the shipped palettes, slk's
+  themes and `[gui.theme]`.
+- `selection/`, `motion/` — text selection over drawn text; small
+  animations.
 - `textedit/` — readline's editing commands on text and a caret.
+- `internal/richtext/`, `internal/styledtext/` — Gio text layout that
+  reports where each rune was drawn.
 - `cmd/slk-gio/` — the windows. `hub.go` owns them and routes events; each
   window runs its own event loop and is reached only through its `inbox`.
   `richview.go` draws `rich` blocks, `images.go` hands decoded pictures
