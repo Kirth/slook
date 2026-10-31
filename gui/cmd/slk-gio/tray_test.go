@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"image/png"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/gammons/slk/gui/backend"
 )
 
 func TestTrayIconIsAPNG(t *testing.T) {
@@ -54,5 +58,38 @@ func TestLastWindowClosed(t *testing.T) {
 				t.Fatalf("exit %d, want %d", got, c.wantExit)
 			}
 		})
+	}
+}
+
+func TestTrayPresenceItems(t *testing.T) {
+	now := time.Date(2026, 10, 28, 15, 0, 0, 0, time.UTC)
+	labels := func(st backend.SelfStatus) (out []string, cur []string) {
+		for _, it := range trayPresenceItems(st, now) {
+			out = append(out, it.Label)
+			if it.Current {
+				cur = append(cur, it.Label)
+			}
+		}
+		return out, cur
+	}
+	got, cur := labels(backend.SelfStatus{Away: true})
+	if strings.Join(got, "|") != "Active|Away|Snooze for 1 hour" || strings.Join(cur, "|") != "Away" {
+		t.Fatalf("away: %q, current %q", got, cur)
+	}
+	snoozed := backend.SelfStatus{DND: true, DNDUntil: now.Add(time.Hour)}
+	got, _ = labels(snoozed)
+	if strings.Join(got, "|") != "Active|Away|Snooze for 1 hour|End do not disturb" {
+		t.Fatalf("snoozed: %q", got)
+	}
+	for _, it := range trayPresenceItems(snoozed, now) {
+		if it.Label == "Snooze for 1 hour" && (!it.Snooze || it.Minutes != 60) {
+			t.Fatalf("snooze item %+v", it)
+		}
+	}
+	if tip := trayTooltip("Demo", snoozed, now); tip != "slk — Demo · Do not disturb until 16:00" {
+		t.Fatalf("tooltip %q", tip)
+	}
+	if tip := trayTooltip("Demo", backend.SelfStatus{}, now); tip != "slk — Demo" {
+		t.Fatalf("tooltip %q", tip)
 	}
 }

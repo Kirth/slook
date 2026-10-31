@@ -530,6 +530,8 @@ func (b *composeBox) submit(raw string) {
 	case "/msg", "/dm":
 		b.composer.SetText("")
 		go b.openNamed(text, args, "dm")
+	case "/away", "/active", "/status":
+		b.presenceCommand(name, args)
 	case "/leave", "/close", "/part":
 		// Slack's web client does these itself; chat.command refuses them.
 		b.sendErr = name + " isn't supported in slk-gio yet"
@@ -537,6 +539,26 @@ func (b *composeBox) submit(raw string) {
 		b.composer.SetText("")
 		go b.runCommand(text, name, b.mentions.Wire(args))
 	}
+}
+
+// presenceCommand is /away (away, or back when away already), /active
+// and /status away|active, which Slack's web client runs itself
+// (presence.set): they set the user's presence as the presence menu
+// does. Any other /status (a custom status) is refused, its text left
+// in the composer.
+func (b *composeBox) presenceCommand(name, args string) {
+	away := false // /active
+	switch f := strings.Fields(strings.ToLower(args)); {
+	case name == "/away":
+		away = !b.h.selfStatus().Away
+	case name == "/status" && len(f) == 1 && (f[0] == "away" || f[0] == "active"):
+		away = f[0] == "away"
+	case name == "/status":
+		b.sendErr = "/status isn't supported in slk-gio yet"
+		return
+	}
+	b.composer.SetText("")
+	b.h.setPresence(chat.PresenceItem{Away: away}, b.box)
 }
 
 func (b *composeBox) runCommand(typed, name, args string) {

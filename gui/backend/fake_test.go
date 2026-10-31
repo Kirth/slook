@@ -129,7 +129,7 @@ func nextPosted(t *testing.T, got <-chan Event) MessagePosted {
 		switch ev := ev.(type) {
 		case MessagePosted:
 			return ev
-		case PresenceChanged, UserGroupsChanged, Typing, ConversationOpened, ProfileChanged, ThreadsUnread, ThreadState, ThreadsChanged:
+		case PresenceChanged, SelfPresenceChanged, UserGroupsChanged, Typing, ConversationOpened, ProfileChanged, ThreadsUnread, ThreadState, ThreadsChanged:
 		default:
 			t.Fatalf("got %#v, want a message", ev)
 		}
@@ -716,5 +716,47 @@ func TestFakeMarkUnreadThread(t *testing.T) {
 	}
 	if n := nextOf[ThreadsUnread](t, got); n.Count != 2 {
 		t.Fatalf("%d unread threads, want 2", n.Count)
+	}
+}
+
+func TestFakePresenceAndSnooze(t *testing.T) {
+	f := NewFake(time.Unix(1_700_000_000, 0))
+	f.Interval = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan Event, 64)
+	go f.Run(ctx, func(ev Event) { got <- ev })
+	if st := nextOf[SelfPresenceChanged](t, got).Status; st != (SelfStatus{}) {
+		t.Fatalf("starts %+v, want active", st)
+	}
+
+	if err := f.SetPresence(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if st := nextOf[SelfPresenceChanged](t, got).Status; !st.Away || st.DND {
+		t.Fatalf("after away: %+v", st)
+	}
+	before := time.Now()
+	if err := f.Snooze(ctx, 20); err != nil {
+		t.Fatal(err)
+	}
+	st := nextOf[SelfPresenceChanged](t, got).Status
+	if !st.Away || !st.DND || st.DNDUntil.Before(before.Add(19*time.Minute)) || st.DNDUntil.After(time.Now().Add(21*time.Minute)) {
+		t.Fatalf("after a 20 minute snooze: %+v", st)
+	}
+	if got, _ := f.SelfStatus(ctx); got != st {
+		t.Fatalf("SelfStatus %+v, want %+v", got, st)
+	}
+	if err := f.EndDND(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := nextOf[SelfPresenceChanged](t, got).Status; st.DND || !st.DNDUntil.IsZero() {
+		t.Fatalf("after ending it: %+v", st)
+	}
+	if err := f.SetPresence(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if st := nextOf[SelfPresenceChanged](t, got).Status; st != (SelfStatus{}) {
+		t.Fatalf("back to active: %+v", st)
 	}
 }

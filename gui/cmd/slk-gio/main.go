@@ -165,6 +165,7 @@ func main() {
 			}
 		}
 		h.showList()
+		go h.loadSelf() // the list's own presence, once
 		go func() {
 			if err := be.Run(ctx, h.dispatch); err != nil {
 				fmt.Fprintln(os.Stderr, "slk-gio:", err)

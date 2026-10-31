@@ -7,12 +7,25 @@ window.
 On Linux slk-gio puts an icon in the desktop's tray (StatusNotifierItem)
 and keeps running when its last window closes: the socket, notifications
 and backfill carry on, a click on the icon opens the list again, and
-its menu opens the list, Threads or Search, or quits. `[gui] tray =
-false` in `config.toml` turns it off. Without a tray host (GNOME needs
+its menu opens the list, Threads or Search, sets your presence (below),
+or quits. `[gui] tray = false` in `config.toml` turns it off. Without a tray host (GNOME needs
 the AppIndicator extension) or elsewhere than Linux, the program exits
 when the last window closes. Launching slk-gio again for a workspace
 that already has one running brings that one's list forward instead of
 starting a second (`-fake` runs count as a workspace of their own).
+
+Your own presence shows on the list's header tile: a green dot while
+active, a grey ring while away, a paused bell during do-not-disturb, and
+the header's second line says "Away" or "Do not disturb until 17:00".
+Click the tile for the presence menu: Active, Away, snooze
+notifications for 20 minutes up to 24 hours or until 09:00 the next
+weekday, and while do-not-disturb is on, End do not disturb. The
+tray's menu has Active, Away, Snooze for 1 hour and End do not disturb,
+and its tooltip says when you are away or not to be disturbed. In any
+composer `/away` sets you away (or back, when you are), and `/active`
+and `/status away|active` set it; a custom `/status` is not there yet.
+Changes show at once and are taken back if Slack refuses them; changes
+made in another Slack client show here too.
 
 At startup slk-gio refreshes the stored tokens from the Slack desktop
 app's session (as `slk` used to at each launch), so an expired token

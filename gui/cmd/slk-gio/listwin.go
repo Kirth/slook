@@ -75,8 +75,9 @@ type listWindow struct {
 	joins    map[string]*widget.Clickable
 	note     string
 	// newMsg is the new-message picker the header's compose button
-	// opens.
+	// opens; pres is the user's presence menu, from the header's tile.
 	newMsg newMessagePicker
+	pres   presenceMenu
 }
 
 // listState is what the list hands to its replacement when it moves to
@@ -312,6 +313,8 @@ func (l *listWindow) apply() {
 			l.w.Perform(system.ActionRaise)
 		case moveHere:
 			l.moveHere()
+		case backend.SelfPresenceChanged:
+			// The header reads it from the hub; the post woke the window.
 		case backend.PresenceChanged:
 			l.presence[v.UserID] = presenceAway
 			if v.Active {
@@ -456,7 +459,13 @@ func (l *listWindow) layout(gtx C) {
 	// times on the right stay true.
 	gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(time.Minute)})
 
-	spec := l.headerSpec()
+	if pick, closed := l.pres.update(gtx); closed {
+		gtx.Execute(key.FocusCmd{Tag: &l.filter})
+		if pick != nil {
+			l.h.setPresence(*pick, &l.box)
+		}
+	}
+	spec := l.headerSpec(gtx)
 	l.hdr.update(gtx, l.w, l.cfg, spec)
 
 	layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -503,15 +512,24 @@ func (l *listWindow) layout(gtx C) {
 		}),
 	)
 	l.newMsg.layout(gtx, l.th, &l.view)
+	l.pres.layout(gtx, l.th)
 }
 
-// headerSpec is the list's header: the workspace and how much is
-// waiting to be read.
-func (l *listWindow) headerSpec() headerSpec {
+// headerSpec is the list's header: the workspace, how much is waiting
+// to be read, and the user's own presence and do-not-disturb on the
+// tile, which opens the presence menu.
+func (l *listWindow) headerSpec(gtx C) headerSpec {
 	name := l.h.be.Workspace()
+	self := l.h.selfStatus()
+	at := image.Pt(gtx.Dp(12), gtx.Dp(headerHeight)-gtx.Dp(4))
 	spec := headerSpec{
-		Title:   name,
-		Leading: func(gtx C) D { return tile(gtx, l.th, leadingSize, tint(colAccent), nil, initial(name)) },
+		Title: name,
+		Leading: func(gtx C) D {
+			return withSelf(gtx, func(gtx C) D {
+				return tile(gtx, l.th, leadingSize, tint(colAccent), nil, initial(name))
+			}, self, colHeader)
+		},
+		OnLeading: func() { l.pres.show(self, at, time.Now()) },
 		Actions: []headerAction{
 			{icon: iconCompose, onClick: l.newMsg.show, active: l.newMsg.open},
 			{icon: iconSearch, onClick: l.h.showSearch},
@@ -534,6 +552,9 @@ func (l *listWindow) headerSpec() headerSpec {
 		spec.Subtitle = "1 unread conversation"
 	default:
 		spec.Subtitle = strconv.Itoa(n) + " unread conversations"
+	}
+	if s := chat.SelfText(self, gtx.Now); s != "" && l.connected {
+		spec.Subtitle += " · " + s
 	}
 	return spec
 }

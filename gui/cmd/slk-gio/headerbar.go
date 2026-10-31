@@ -19,6 +19,8 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 	"golang.org/x/exp/shiny/materialdesign/icons"
+
+	"github.com/gammons/slk/gui/backend"
 )
 
 // Icons used across the windows (Material Design, drawn by Gio).
@@ -100,6 +102,9 @@ type headerSpec struct {
 	// it rather than in it.
 	OnTitle  func()
 	Expanded float32
+	// OnLeading, when set, makes Leading a button (the list's own
+	// presence menu).
+	OnLeading func()
 }
 
 // headerBar is a window's title bar, drawn by the app: the window's
@@ -110,6 +115,7 @@ type headerBar struct {
 	deco    widget.Decorations
 	actions []widget.Clickable
 	title   widget.Clickable
+	leading widget.Clickable
 }
 
 // update performs what was clicked since the last frame: window
@@ -122,6 +128,9 @@ func (h *headerBar) update(gtx C, w *app.Window, cfg app.Config, spec headerSpec
 	}
 	if h.title.Clicked(gtx) && spec.OnTitle != nil {
 		spec.OnTitle()
+	}
+	if h.leading.Clicked(gtx) && spec.OnLeading != nil {
+		spec.OnLeading()
 	}
 	actions := spec.Actions
 	for i := range actions {
@@ -156,7 +165,22 @@ func (h *headerBar) layout(gtx C, th *material.Theme, spec headerSpec, cfg app.C
 			if spec.Leading == nil {
 				return D{Size: image.Pt(gtx.Dp(14), 0)}
 			}
-			return layout.Inset{Left: unit.Dp(12), Right: unit.Dp(10)}.Layout(gtx, spec.Leading)
+			leading := spec.Leading
+			if spec.OnLeading != nil {
+				// The button goes over the tile, not around it: a
+				// Clickable clips what it wraps, and a presence dot
+				// reaches past the tile's edge.
+				leading = func(gtx C) D {
+					dims := spec.Leading(gtx)
+					gtx.Constraints = layout.Exact(dims.Size)
+					h.leading.Layout(gtx, func(gtx C) D {
+						pointer.CursorPointer.Add(gtx.Ops)
+						return D{Size: gtx.Constraints.Min}
+					})
+					return dims
+				}
+			}
+			return layout.Inset{Left: unit.Dp(12), Right: unit.Dp(10)}.Layout(gtx, leading)
 		}),
 		// The title area moves the window when dragged.
 		layout.Flexed(1, func(gtx C) D {
@@ -413,6 +437,28 @@ func withPresence(gtx C, avatar layout.Widget, p presence, ring color.NRGBA) D {
 		in := gtx.Dp(2)
 		paint.FillShape(gtx.Ops, ring, clip.Ellipse(dot.Inset(in)).Op(gtx.Ops))
 	}
+	return dims
+}
+
+// withSelf draws the user's own tile with their presence dot, or
+// during do-not-disturb a small paused-bell badge in its place.
+func withSelf(gtx C, tile layout.Widget, st backend.SelfStatus, ring color.NRGBA) D {
+	if !st.DND {
+		p := presenceActive
+		if st.Away {
+			p = presenceAway
+		}
+		return withPresence(gtx, tile, p, ring)
+	}
+	dims := tile(gtx)
+	d := max(gtx.Dp(12), dims.Size.X*4/10)
+	at := dims.Size.Sub(image.Pt(d-gtx.Dp(3), d-gtx.Dp(3)))
+	r := gtx.Dp(2)
+	outer := image.Rectangle{Min: at.Sub(image.Pt(r, r)), Max: at.Add(image.Pt(d+r, d+r))}
+	paint.FillShape(gtx.Ops, ring, clip.Ellipse(outer).Op(gtx.Ops))
+	defer op.Offset(at).Push(gtx.Ops).Pop()
+	gtx.Constraints = layout.Exact(image.Pt(d, d))
+	iconDND.Layout(gtx, colMuted)
 	return dims
 }
 

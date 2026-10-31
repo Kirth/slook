@@ -238,6 +238,20 @@ type PresenceChanged struct {
 	Active bool
 }
 
+// SelfStatus is the user's own presence and do-not-disturb: Away when
+// they set themselves away (else Slack decides, "auto"), DND while a
+// snooze or a scheduled do-not-disturb is on, until DNDUntil (zero when
+// unknown).
+type SelfStatus struct {
+	Away     bool
+	DND      bool
+	DNDUntil time.Time
+}
+
+// SelfPresenceChanged is the user's own presence or do-not-disturb
+// changing: set here (at once, and back if Slack refuses) or elsewhere.
+type SelfPresenceChanged struct{ Status SelfStatus }
+
 // UserGroup is one of the workspace's usergroups: the @team behind a
 // <!subteam^S…> mention. Mine says the user is a member.
 type UserGroup struct {
@@ -493,25 +507,26 @@ type HistoryUpdated struct {
 	ThreadTS string
 }
 
-func (MessagePosted) isEvent()      {}
-func (MessageDeleted) isEvent()     {}
-func (ConnectionChanged) isEvent()  {}
-func (ReadChanged) isEvent()        {}
-func (SectionsChanged) isEvent()    {}
-func (MutesChanged) isEvent()       {}
-func (NotifyChanged) isEvent()      {}
-func (UserGroupsChanged) isEvent()  {}
-func (Typing) isEvent()             {}
-func (ConversationOpened) isEvent() {}
-func (ProfileChanged) isEvent()     {}
-func (ThreadState) isEvent()        {}
-func (ThreadsUnread) isEvent()      {}
-func (ThreadsChanged) isEvent()     {}
-func (AppStatus) isEvent()          {}
-func (PresenceChanged) isEvent()    {}
-func (HistoryUpdated) isEvent()     {}
-func (ReactionChanged) isEvent()    {}
-func (SyncChanged) isEvent()        {}
+func (MessagePosted) isEvent()       {}
+func (MessageDeleted) isEvent()      {}
+func (ConnectionChanged) isEvent()   {}
+func (ReadChanged) isEvent()         {}
+func (SectionsChanged) isEvent()     {}
+func (MutesChanged) isEvent()        {}
+func (NotifyChanged) isEvent()       {}
+func (UserGroupsChanged) isEvent()   {}
+func (Typing) isEvent()              {}
+func (ConversationOpened) isEvent()  {}
+func (ProfileChanged) isEvent()      {}
+func (ThreadState) isEvent()         {}
+func (ThreadsUnread) isEvent()       {}
+func (ThreadsChanged) isEvent()      {}
+func (AppStatus) isEvent()           {}
+func (PresenceChanged) isEvent()     {}
+func (SelfPresenceChanged) isEvent() {}
+func (HistoryUpdated) isEvent()      {}
+func (ReactionChanged) isEvent()     {}
+func (SyncChanged) isEvent()         {}
 
 // Backend is one workspace.
 type Backend interface {
@@ -648,6 +663,19 @@ type Backend interface {
 	// Presence reports whether a person is active now. Changes for the
 	// people the user has DMs with arrive through Run.
 	Presence(ctx context.Context, userID string) (active bool, err error)
+	// SelfStatus asks Slack for the user's own presence and
+	// do-not-disturb (users.getPresence, dnd.info). Changes arrive
+	// through Run as SelfPresenceChanged.
+	SelfStatus(ctx context.Context) (SelfStatus, error)
+	// SetPresence sets the user away, or back to active (Slack's
+	// "auto"). Snooze turns do-not-disturb on for minutes; EndSnooze
+	// ends a snooze; EndDND ends a snooze and a scheduled
+	// do-not-disturb both. Each is optimistic: the change is reported
+	// through Run at once and taken back if Slack refuses it.
+	SetPresence(ctx context.Context, away bool) error
+	Snooze(ctx context.Context, minutes int) error
+	EndSnooze(ctx context.Context) error
+	EndDND(ctx context.Context) error
 	// Download makes sure an image or file is on disk, at
 	// AttachmentPath(a), and returns that path. Asking again is free.
 	Download(ctx context.Context, a Attachment) (path string, err error)

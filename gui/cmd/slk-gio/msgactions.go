@@ -266,7 +266,7 @@ func (v *msgView) menuLayout(gtx C) {
 		dims := popupFrame(cgtx, func(gtx C) D {
 			rows := make([]layout.FlexChild, 0, len(items))
 			for i, it := range items {
-				rows = append(rows, layout.Rigid(func(gtx C) D { return v.menuRow(gtx, &mm.items[i], it) }))
+				rows = append(rows, layout.Rigid(func(gtx C) D { return menuRowAt(gtx, v.th, &mm.items[i], it.label, it.danger, false) }))
 			}
 			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
 		})
@@ -288,7 +288,9 @@ func popupFrame(gtx C, content layout.Widget) D {
 	})
 }
 
-func (v *msgView) menuRow(gtx C, cl *widget.Clickable, it menuItem) D {
+// menuRowAt is one line of a popup menu: label, red when danger, with
+// a check mark after it when current (the state the user is in).
+func menuRowAt(gtx C, th *material.Theme, cl *widget.Clickable, label string, danger, current bool) D {
 	return cl.Layout(gtx, func(gtx C) D {
 		pointer.CursorPointer.Add(gtx.Ops)
 		bg := colOverlay
@@ -298,11 +300,21 @@ func (v *msgView) menuRow(gtx C, cl *widget.Clickable, it menuItem) D {
 		return rounded(gtx, bg, unit.Dp(5), func(gtx C) D {
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
 			return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(6), Left: unit.Dp(10), Right: unit.Dp(10)}.Layout(gtx, func(gtx C) D {
-				lbl := secondaryLabel(v.th, it.label)
-				if it.danger {
+				lbl := secondaryLabel(th, label)
+				if danger {
 					lbl.Color = colError
 				}
-				return lbl.Layout(gtx)
+				if !current {
+					return lbl.Layout(gtx)
+				}
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Flexed(1, lbl.Layout),
+					layout.Rigid(func(gtx C) D {
+						mark := secondaryLabel(th, "✓")
+						mark.Color = colAccent
+						return mark.Layout(gtx)
+					}),
+				)
 			})
 		})
 	})

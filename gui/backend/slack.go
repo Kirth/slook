@@ -127,6 +127,8 @@ type Slack struct {
 	// asked of Slack (profiles.go).
 	dnd      map[string]dndState
 	dndAsked map[string]bool
+	// self is the user's own presence and do-not-disturb (presence.go).
+	self SelfStatus
 	// threads is the followed threads' unread count (threads.go).
 	threads   threadsState
 	peers     []string          // DM partners, whose presence the socket reports
@@ -1785,6 +1787,8 @@ func (s *Slack) Run(ctx context.Context, emit func(Event)) error {
 				emit(ConnectionChanged{Connected: now})
 			case rawPresence:
 				emit(PresenceChanged{UserID: v.user, Active: v.presence == "active"})
+			case rawSelfPresence, rawSelfDND, rawSelfSet:
+				emit(SelfPresenceChanged{Status: s.applySelf(v)})
 			case rawMarked:
 				s.noteRead(slackclient.UnreadInfo{ChannelID: v.channelID, LastRead: v.ts, HasUnread: v.unread > 0, MentionCount: v.mentions})
 				emit(ReadChanged{ChannelID: v.channelID, LastRead: v.ts, Unread: v.unread > 0, Mentions: v.mentions})
@@ -2004,7 +2008,5 @@ func (h socketHandler) OnConnect()    { h.queue <- rawConnected(true) }
 func (h socketHandler) OnDisconnect() { h.queue <- rawConnected(false) }
 
 func (socketHandler) OnViewOpened(string)           {}
-func (socketHandler) OnSelfPresenceChange(string)   {}
-func (socketHandler) OnDNDChange(bool, int64)       {}
 func (socketHandler) OnMemberJoined(string, string) {}
 func (socketHandler) OnMemberLeft(string, string)   {}

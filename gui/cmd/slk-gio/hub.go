@@ -12,6 +12,7 @@ import (
 	"gioui.org/app"
 
 	"github.com/gammons/slk/gui/backend"
+	"github.com/gammons/slk/gui/chat"
 	"github.com/gammons/slk/gui/notifications"
 )
 
@@ -69,6 +70,10 @@ type hub struct {
 	openingThreads map[threadKey]bool // thread windows being built
 	windows        int
 	connected      bool
+	// self is the user's own presence and do-not-disturb; onSelf, when
+	// set (the tray), hears every change of it, off the hub's lock.
+	self   backend.SelfStatus
+	onSelf func(backend.SelfStatus)
 }
 
 func newHub(ctx context.Context, be backend.Backend, onLast func(error)) *hub {
@@ -196,6 +201,7 @@ func (h *hub) anyFocused() bool {
 func (h *hub) dispatch(ev backend.Event) {
 	h.mu.Lock()
 	var to []*inbox
+	var after func()
 	switch ev := ev.(type) {
 	case backend.MessagePosted:
 		m := ev.Message
@@ -312,6 +318,15 @@ func (h *hub) dispatch(ev backend.Event) {
 		if h.list != nil {
 			to = append(to, &h.list.box)
 		}
+	case backend.SelfPresenceChanged:
+		h.self = ev.Status
+		if h.list != nil {
+			to = append(to, &h.list.box)
+		}
+		if h.onSelf != nil {
+			onSelf := h.onSelf
+			after = func() { onSelf(ev.Status) } // in order, off the lock
+		}
 	case backend.PresenceChanged:
 		for _, c := range h.chats {
 			to = append(to, &c.box)
@@ -360,6 +375,9 @@ func (h *hub) dispatch(ev backend.Event) {
 	h.mu.Unlock()
 	for _, b := range to {
 		b.post(ev)
+	}
+	if after != nil {
+		after()
 	}
 }
 
@@ -443,6 +461,56 @@ func (h *hub) showList() {
 	h.windows++
 	go l.run()
 	go l.load()
+}
+
+// selfStatus is the user's own presence and do-not-disturb as last
+// heard.
+func (h *hub) selfStatus() backend.SelfStatus {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.self
+}
+
+// loadSelf asks the backend for the user's own status once, at start;
+// changes after it arrive as SelfPresenceChanged.
+func (h *hub) loadSelf() {
+	st, err := h.be.SelfStatus(h.ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "slk-gio: presence:", err)
+		return
+	}
+	h.dispatch(backend.SelfPresenceChanged{Status: st})
+}
+
+// setPresence makes a presence menu choice: active, away, a snooze, or
+// the end of do-not-disturb. It returns at once; the change shows
+// through SelfPresenceChanged, and a failure is reported to from as a
+// note (from nil: to the list, if it is open).
+func (h *hub) setPresence(it chat.PresenceItem, from *inbox) {
+	go func() {
+		var err error
+		switch {
+		case it.End:
+			err = h.be.EndDND(h.ctx)
+		case it.Snooze:
+			err = h.be.Snooze(h.ctx, it.Minutes)
+		default:
+			err = h.be.SetPresence(h.ctx, it.Away)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio: presence:", err)
+			if from == nil { // the tray: the list says it, when open
+				h.mu.Lock()
+				if h.list != nil {
+					from = &h.list.box
+				}
+				h.mu.Unlock()
+			}
+			if from != nil {
+				from.post(sendFailed{note: "Could not change presence: " + err.Error()})
+			}
+		}
+	}()
 }
 
 // openChat opens a conversation's window, or brings it here if it is

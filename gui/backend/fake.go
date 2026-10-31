@@ -56,6 +56,8 @@ type Fake struct {
 	// change, with timed posts on), DND until adaDNDUntil.
 	adaChanged  bool
 	adaDNDUntil time.Time
+	// self is the user's own presence and do-not-disturb.
+	self SelfStatus
 	// bf is the pretend backfill: it walks the conversations on a
 	// timer so the search window has progress to show.
 	bf struct {
@@ -888,6 +890,10 @@ func (f *Fake) Send(ctx context.Context, channelID, text string) error {
 
 func (f *Fake) Run(ctx context.Context, emit func(Event)) error {
 	emit(ConnectionChanged{Connected: true})
+	f.mu.Lock()
+	self := f.self
+	f.mu.Unlock()
+	emit(SelfPresenceChanged{Status: self})
 	emit(UserGroupsChanged{Mine: []string{"S1"}})
 	f.mu.Lock()
 	emit(f.threadsUnreadLocked())
