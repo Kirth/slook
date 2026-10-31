@@ -40,7 +40,7 @@ type msgMenu struct {
 	focus  bool // take the keyboard next frame, for Escape
 	target backend.Message
 	at     image.Point // where it was opened, in window pixels
-	items  [6]widget.Clickable
+	items  [8]widget.Clickable
 	// scrim takes clicks outside the menu (closing it), panel the ones
 	// on it between items.
 	// They are bytes, not struct{}: two zero-size fields side by side
@@ -87,6 +87,11 @@ func (v *msgView) menuItems(m backend.Message) []menuItem {
 		{label: "Copy link", act: func() { v.permalink(m, false) }},
 		{label: "Open in Slack", act: func() { v.permalink(m, true) }},
 	}...)
+	if v.markUnread != nil && !m.Ephemeral {
+		if act := v.markUnread(m); act != nil {
+			items = append(items, menuItem{label: "Mark unread from here", act: act})
+		}
+	}
 	if m.FromSelf && v.onEdit != nil {
 		items = append(items,
 			menuItem{label: "Edit message", act: func() { v.onEdit(m) }},

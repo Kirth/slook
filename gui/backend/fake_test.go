@@ -624,3 +624,97 @@ func TestFakeUploadPostsFilesWithCaption(t *testing.T) {
 		t.Fatalf("thread upload %#v, want a reply under %s", r, parent)
 	}
 }
+
+// nextOf reads events until one of type T, skipping the rest.
+func nextOf[T Event](t *testing.T, got <-chan Event) T {
+	t.Helper()
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case ev := <-got:
+			if v, ok := ev.(T); ok {
+				return v
+			}
+		case <-timeout:
+			var zero T
+			t.Fatalf("no %T arrived", zero)
+			return zero
+		}
+	}
+}
+
+func TestFakeMarkUnreadChannel(t *testing.T) {
+	f := NewFake(time.Unix(1_700_000_000, 0))
+	f.Interval = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan Event, 64)
+	go f.Run(ctx, func(ev Event) { got <- ev })
+
+	// In a DM every message after the boundary counts.
+	dm, _ := f.History(ctx, "D1")
+	boundary := dm[len(dm)-4].TS
+	if err := f.MarkUnread(ctx, "D1", "", boundary); err != nil {
+		t.Fatal(err)
+	}
+	rc := nextOf[ReadChanged](t, got)
+	if rc.ChannelID != "D1" || !rc.Unread || rc.Mentions != 3 || rc.LastRead != boundary {
+		t.Fatalf("got %#v, want D1 unread with 3 mentions from %s", rc, boundary)
+	}
+
+	// In a channel only mentions of the user count.
+	f.mu.Lock()
+	f.appendLocked("C1", "Ada Lovelace", "<!here> standup in five")
+	f.appendLocked("C1", "Grace Hopper", "on my way")
+	f.mu.Unlock()
+	feed, _ := f.History(ctx, "C1")
+	if err := f.MarkUnread(ctx, "C1", "", feed[len(feed)-3].TS); err != nil {
+		t.Fatal(err)
+	}
+	rc = nextOf[ReadChanged](t, got)
+	if rc.ChannelID != "C1" || !rc.Unread || rc.Mentions != 1 {
+		t.Fatalf("got %#v, want C1 unread with 1 mention", rc)
+	}
+	convs, _ := f.Conversations(ctx)
+	for _, c := range convs {
+		if c.ID == "C1" && (!c.Unread || c.Mentions != 1) {
+			t.Fatalf("list has %#v", c)
+		}
+	}
+	if err := f.MarkUnread(ctx, "C99", "", "0"); err == nil {
+		t.Fatal("an unknown conversation was marked unread")
+	}
+}
+
+func TestFakeMarkUnreadThread(t *testing.T) {
+	f := NewFake(time.Unix(1_700_000_000, 0))
+	f.Interval = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan Event, 64)
+	go f.Run(ctx, func(ev Event) { got <- ev })
+	if n := nextOf[ThreadsUnread](t, got); n.Count != 1 {
+		t.Fatalf("seeded with %d unread threads, want 1", n.Count)
+	}
+
+	threads, _ := f.Threads(ctx)
+	var read ThreadSummary
+	for _, th := range threads {
+		if !th.Unread {
+			read = th
+		}
+	}
+	if read.ThreadTS == "" {
+		t.Fatal("no read thread to mark unread")
+	}
+	if err := f.MarkUnread(ctx, "C1", read.ThreadTS, read.ThreadTS); err != nil {
+		t.Fatal(err)
+	}
+	st := nextOf[ThreadState](t, got)
+	if st.ThreadTS != read.ThreadTS || !st.Unread {
+		t.Fatalf("got %#v, want %s unread", st, read.ThreadTS)
+	}
+	if n := nextOf[ThreadsUnread](t, got); n.Count != 2 {
+		t.Fatalf("%d unread threads, want 2", n.Count)
+	}
+}

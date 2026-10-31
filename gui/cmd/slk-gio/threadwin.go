@@ -58,9 +58,12 @@ type threadWindow struct {
 	list      widget.List
 	focused   bool // the composer has been given the keyboard
 	// winFocused is whether the window has the keyboard; while it does,
-	// the thread is read. marked is the ts last marked read.
+	// the thread is read. marked is the ts last marked read (or the
+	// boundary of a mark unread); gate holds reading off after a mark
+	// unread.
 	winFocused bool
 	marked     string
+	gate       chat.ReadGate
 	cfg        app.Config
 	header     headerBar
 	sizeDp     image.Point
@@ -97,6 +100,7 @@ type threadState struct {
 	profiles  map[string]*profileEntry
 	cmds      []backend.Command
 	marked    string
+	gate      chat.ReadGate
 	draft     string
 	broadcast bool
 	position  layout.Position
@@ -123,6 +127,13 @@ func newThreadWindow(h *hub, conv backend.Conversation, ts string, connected boo
 	t.composeBox = newComposeBox(h, th, &t.box, conv.ID, ts)
 	t.composeBox.deliver = func(item any) { h.toThread(t.key, item) }
 	t.onEdit, t.notify = t.composeBox.beginEdit, t.composeBox.note
+	t.markUnread = func(m backend.Message) func() {
+		b, ok := chat.ThreadUnreadBoundary(t.key.ts, t.thread.Replies(), m.TS)
+		if !ok {
+			return nil
+		}
+		return func() { t.markUnreadFrom(b) }
+	}
 	t.composeBox.people, t.composeBox.convs, t.composeBox.rv = h.people, h.cachedConversations, &t.msgView.view
 	t.composeBox.groups = h.be.UserGroups
 	t.onEditLast = func() (backend.Message, bool) {
@@ -148,7 +159,7 @@ func newThreadWindow(h *hub, conv backend.Conversation, ts string, connected boo
 func newThreadWindowFrom(h *hub, st threadState) *threadWindow {
 	t := newThreadWindow(h, st.conv, st.ts, st.connected)
 	t.thread, t.loading, t.loadErr = st.thread, st.loading, st.loadErr
-	t.profiles, t.marked, t.jump = st.profiles, st.marked, st.jump
+	t.profiles, t.marked, t.jump, t.gate = st.profiles, st.marked, st.jump, st.gate
 	t.popup.cmds = st.cmds
 	t.composer.SetText(st.draft)
 	t.broadcast.Value = st.broadcast
@@ -177,7 +188,7 @@ func (t *threadWindow) moveHere(text, jumpTS string) {
 	}
 	t.h.adoptThread(threadState{
 		conv: t.conv, ts: t.key.ts, connected: t.connected, thread: t.thread, loading: t.loading,
-		loadErr: t.loadErr, profiles: t.profiles, cmds: t.popup.cmds, marked: t.marked, draft: draft,
+		loadErr: t.loadErr, profiles: t.profiles, cmds: t.popup.cmds, marked: t.marked, gate: t.gate, draft: draft,
 		broadcast: t.broadcast.Value, position: t.list.Position, sizeDp: t.sizeDp, jump: jump,
 		upload: t.uploadState(),
 	})
@@ -226,9 +237,7 @@ func (t *threadWindow) run() {
 		case app.ConfigEvent:
 			t.cfg = e.Config
 			if e.Config.Focused != t.winFocused {
-				t.winFocused = e.Config.Focused
-				t.h.setFocused(t.key.focusKey(), t.winFocused)
-				t.markRead()
+				t.focusChanged(e.Config.Focused)
 			}
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
@@ -290,7 +299,12 @@ func (t *threadWindow) apply() {
 			t.thread.Apply(v)
 			delete(t.widgets, v.TS)
 			t.deleted(v.TS)
+		case unreadFailed:
+			t.unreadFailed(v)
 		case backend.Event:
+			if p, ok := v.(backend.MessagePosted); ok && p.Message.ThreadTS == t.key.ts && p.Message.TS != t.key.ts && !p.Message.Ephemeral {
+				t.gate.Arrived(p.Message.TS) // a new reply to read
+			}
 			if t.thread.Apply(v) {
 				t.markRead()
 			}
@@ -346,16 +360,14 @@ func (t *threadWindow) row(ts string) (int, bool) {
 
 // markRead marks the thread read up to its newest reply while the
 // window has the keyboard. Ephemeral replies are not in Slack's thread.
+//
+// After "Mark unread from here" the gate holds it off until the window
+// loses the keyboard or a newer reply arrives.
 func (t *threadWindow) markRead() {
-	if !t.winFocused {
+	if !t.winFocused || !t.gate.Open() {
 		return
 	}
-	replies := t.thread.Replies()
-	for i := len(replies) - 1; i >= 0; i-- {
-		if replies[i].Ephemeral {
-			continue
-		}
-		ts := replies[i].TS
+	if ts := t.newestKept(); ts != "" {
 		if t.marked == "" || chat.Later(ts, t.marked) {
 			t.marked = ts
 			go func() {
@@ -364,8 +376,54 @@ func (t *threadWindow) markRead() {
 				}
 			}()
 		}
-		return
 	}
+}
+
+// newestKept is the newest reply that Slack keeps (not an ephemeral);
+// "" for none.
+func (t *threadWindow) newestKept() string {
+	replies := t.thread.Replies()
+	for i := len(replies) - 1; i >= 0; i-- {
+		if !replies[i].Ephemeral {
+			return replies[i].TS
+		}
+	}
+	return ""
+}
+
+// focusChanged is chatWindow.focusChanged for the thread.
+func (t *threadWindow) focusChanged(on bool) {
+	t.winFocused = on
+	t.h.setFocused(t.key.focusKey(), on)
+	if !on {
+		t.gate.Blur()
+	}
+	t.markRead()
+}
+
+// markUnreadFrom is chatWindow.markUnreadFrom for the thread: its read
+// mark goes back to boundary (see chat.ThreadUnreadBoundary).
+func (t *threadWindow) markUnreadFrom(boundary string) {
+	newest := t.newestKept()
+	t.gate.Hold(newest)
+	t.marked = boundary
+	k := t.key
+	go func() {
+		if err := t.h.be.MarkUnread(t.h.ctx, k.channelID, k.ts, boundary); err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio: mark thread unread:", err)
+			t.h.toThread(k, unreadFailed{err: err, restore: newest})
+		}
+	}()
+}
+
+// unreadFailed is chatWindow.unreadFailed for the thread.
+func (t *threadWindow) unreadFailed(v unreadFailed) {
+	t.gate.Blur()
+	if v.restore != "" && (t.marked == "" || chat.Later(v.restore, t.marked)) {
+		t.marked = v.restore
+	}
+	t.failed(sendFailed{note: "Could not mark unread: " + v.err.Error()})
+	t.markRead()
 }
 
 func (t *threadWindow) layout(gtx C) {

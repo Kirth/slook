@@ -79,6 +79,10 @@ type msgView struct {
 	// hover, a caption on a broadcast reply. The thread window leaves
 	// it nil.
 	onThread func(threadTS string)
+	// markUnread is "Mark unread from here" for m: the action, or nil
+	// when m cannot be marked unread from (an ephemeral, a thread's
+	// parent). Nil offers it for nothing.
+	markUnread func(m backend.Message) func()
 }
 
 func newMsgView(h *hub, th *material.Theme, box *inbox, busy func(backend.Attachment) bool) msgView {

@@ -167,7 +167,12 @@ workspace takes its chips, and an upload in flight, with it.
 Every message has an actions menu: "⋯" among the actions shown while
 the pointer is over it, or a right-click anywhere on it. Copy text and
 Copy link put the message or its permalink on the clipboard, and Open
-in Slack opens the permalink. For your own messages there is also Edit
+in Slack opens the permalink. Mark unread from here makes that message
+and everything after it unread again, in Slack too (in a thread window,
+the thread from that reply on); the list shows it unread, with its
+mentions counted, and the window does not read it again while you stay
+in it: it is read once you leave the window and come back, or when a new
+message arrives. For your own messages there is also Edit
 message and Delete message…. Edit puts the message in the composer:
 Enter saves, and Escape or Cancel puts back what you were writing. Up
 in an empty composer edits your last message there. Delete asks first:

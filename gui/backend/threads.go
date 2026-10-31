@@ -137,8 +137,26 @@ func (s *Slack) threadMarked(v rawThreadMarked, emit func(Event)) {
 	if err := s.db.UpdateThreadLastReadIfExists(s.client.TeamID(), v.channelID, v.threadTS, v.lastRead); err != nil {
 		fmt.Fprintln(os.Stderr, "slk-gio: cache thread read:", err)
 	}
-	emit(ThreadState{ChannelID: v.channelID, ThreadTS: v.threadTS, Unread: false})
+	// Usually a read up to the newest reply; but another client (or
+	// this one) marking the thread unread echoes as thread_marked too,
+	// with the read mark before a reply.
+	emit(ThreadState{ChannelID: v.channelID, ThreadTS: v.threadTS, Unread: s.repliesAfter(v.channelID, v.threadTS, v.lastRead)})
 	s.recountThreads(emit)
+}
+
+// repliesAfter reports whether the cache holds a reply in the thread,
+// not the user's own, later than lastRead.
+func (s *Slack) repliesAfter(channelID, threadTS, lastRead string) bool {
+	rows, err := s.db.GetThreadReplies(channelID, threadTS)
+	if err != nil {
+		return false
+	}
+	for _, r := range rows {
+		if r.TS != threadTS && r.UserID != s.client.UserID() && tsAfter(r.TS, lastRead) {
+			return true
+		}
+	}
+	return false
 }
 
 // threadFollowed records a thread followed or left, on the loop.

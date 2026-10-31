@@ -61,9 +61,12 @@ type chatWindow struct {
 	list      widget.List
 	focused   bool
 	// winFocused is whether the window has the keyboard; while it does,
-	// what it shows is read. marked is the ts last marked read.
+	// what it shows is read. marked is the ts last marked read (or the
+	// boundary of a mark unread); gate holds reading off after a mark
+	// unread.
 	winFocused bool
 	marked     string
+	gate       chat.ReadGate
 	// cfg is the window's last configuration (mode, focus, whether the
 	// compositor decorates it); header draws the title bar.
 	cfg     app.Config
@@ -151,6 +154,7 @@ type chatState struct {
 	profiles  map[string]*profileEntry
 	cmds      []backend.Command
 	marked    string
+	gate      chat.ReadGate
 	draft     string
 	position  layout.Position
 	peer      presence
@@ -166,6 +170,7 @@ func newChatWindowFrom(h *hub, st chatState) *chatWindow {
 	c := newChatWindow(h, st.conv, st.connected)
 	c.tl, c.loading, c.loadErr = st.tl, st.loading, st.loadErr
 	c.details, c.profiles, c.marked, c.peer = st.details, st.profiles, st.marked, st.peer
+	c.gate = st.gate
 	c.popup.cmds = st.cmds
 	c.composer.SetText(st.draft)
 	c.list.Position = st.position
@@ -199,7 +204,7 @@ func (c *chatWindow) moveHere(text, jumpTS string) {
 	}
 	c.h.adoptChat(chatState{
 		conv: c.conv, connected: c.connected, tl: c.tl, loading: c.loading, loadErr: c.loadErr,
-		details: c.details, profiles: c.profiles, cmds: c.popup.cmds, marked: c.marked,
+		details: c.details, profiles: c.profiles, cmds: c.popup.cmds, marked: c.marked, gate: c.gate,
 		draft: draft, position: c.list.Position, peer: c.peer, sizeDp: c.sizeDp, jump: jump,
 		pager: c.pager, upload: c.uploadState(),
 	})
@@ -222,6 +227,13 @@ func newChatWindow(h *hub, conv backend.Conversation, connected bool) *chatWindo
 	c.box.w = c.w
 	c.msgView = newMsgView(h, th, &c.box, func(a backend.Attachment) bool { return c.downloading[backend.AttachmentPath(a)] })
 	c.onThread = func(ts string) { h.openThread(c.conv, ts, "") }
+	c.markUnread = func(m backend.Message) func() {
+		b, ok := chat.UnreadBoundary(c.tl.Messages(), m.TS)
+		if !ok {
+			return nil
+		}
+		return func() { c.markUnreadFrom(b) }
+	}
 	c.composeBox = newComposeBox(h, th, &c.box, conv.ID, "")
 	c.composeBox.deliver = func(item any) { h.toChat(conv.ID, item) }
 	c.onEdit, c.notify = c.composeBox.beginEdit, c.composeBox.note
@@ -367,9 +379,7 @@ func (c *chatWindow) run() {
 			}
 			c.cfg = e.Config
 			if e.Config.Focused != c.winFocused {
-				c.winFocused = e.Config.Focused
-				c.h.setFocused(c.conv.ID, c.winFocused)
-				c.markRead()
+				c.focusChanged(e.Config.Focused)
 			}
 		case app.FrameEvent:
 			if !c.shown {
@@ -459,7 +469,12 @@ func (c *chatWindow) apply() {
 				delete(c.widgets, ts)
 				c.deleted(ts)
 			}
+		case unreadFailed:
+			c.unreadFailed(v)
 		case backend.Event:
+			if p, ok := v.(backend.MessagePosted); ok && p.Message.ChannelID == c.conv.ID && !p.Message.Ephemeral && !p.Message.InThreadOnly {
+				c.gate.Arrived(p.Message.TS) // something new to read
+			}
 			c.tl.Apply(c.conv.ID, v)
 			c.markRead()
 		case raiseWindow:
@@ -774,16 +789,14 @@ func replyCount(n int) string {
 // markRead marks the conversation read up to its newest message while
 // the window has the keyboard, as viewing it in Slack does. Ephemeral
 // messages are not in Slack's history, so they are not marked.
+//
+// After "Mark unread from here" the gate holds it off until the window
+// loses the keyboard or a newer message arrives.
 func (c *chatWindow) markRead() {
-	if !c.winFocused {
+	if !c.winFocused || !c.gate.Open() {
 		return
 	}
-	msgs := c.tl.Messages()
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Ephemeral {
-			continue
-		}
-		ts := msgs[i].TS
+	if ts := c.newestKept(); ts != "" {
 		if c.marked == "" || chat.Later(ts, c.marked) {
 			c.marked = ts
 			go func() {
@@ -792,6 +805,62 @@ func (c *chatWindow) markRead() {
 				}
 			}()
 		}
-		return
 	}
+}
+
+// newestKept is the newest message shown that Slack keeps (not an
+// ephemeral): what reading the window marks read up to; "" for none.
+func (c *chatWindow) newestKept() string {
+	msgs := c.tl.Messages()
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if !msgs[i].Ephemeral {
+			return msgs[i].TS
+		}
+	}
+	return ""
+}
+
+// focusChanged records the window gaining or losing the keyboard.
+// Losing it opens the read gate: coming back is reading again.
+func (c *chatWindow) focusChanged(on bool) {
+	c.winFocused = on
+	c.h.setFocused(c.conv.ID, on)
+	if !on {
+		c.gate.Blur()
+	}
+	c.markRead()
+}
+
+// unreadFailed is Slack refusing a mark unread.
+type unreadFailed struct {
+	err error
+	// restore is the read mark to go back to: the newest message when
+	// the user asked, which Slack still has as read.
+	restore string
+}
+
+// markUnreadFrom makes the conversation unread after boundary (see
+// chat.UnreadBoundary) and keeps the window from reading it again
+// until the user leaves it or something new arrives.
+func (c *chatWindow) markUnreadFrom(boundary string) {
+	newest := c.newestKept()
+	c.gate.Hold(newest)
+	c.marked = boundary
+	id := c.conv.ID
+	go func() {
+		if err := c.h.be.MarkUnread(c.h.ctx, id, "", boundary); err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio: mark unread:", err)
+			c.h.toChat(id, unreadFailed{err: err, restore: newest})
+		}
+	}()
+}
+
+// unreadFailed puts the read state back as Slack has it, and says why.
+func (c *chatWindow) unreadFailed(v unreadFailed) {
+	c.gate.Blur()
+	if v.restore != "" && (c.marked == "" || chat.Later(v.restore, c.marked)) {
+		c.marked = v.restore
+	}
+	c.failed(sendFailed{note: "Could not mark unread: " + v.err.Error()})
+	c.markRead()
 }

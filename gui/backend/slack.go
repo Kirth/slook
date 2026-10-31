@@ -1697,6 +1697,8 @@ func (s *Slack) Run(ctx context.Context, emit func(Event)) error {
 				emit(ConversationOpened{Conv: s.opened(lctx, v.ch)})
 			case rawThreadMarked:
 				s.threadMarked(v, emit)
+			case rawThreadUnread:
+				s.threadUnread(v, emit)
 			case rawThreadSub:
 				s.threadFollowed(v, emit)
 			case rawThreadsRecount:

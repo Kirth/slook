@@ -570,6 +570,13 @@ type Backend interface {
 	RefreshThreads()
 	// MarkThreadRead marks a thread read up to ts in Slack.
 	MarkThreadRead(ctx context.Context, channelID, threadTS, ts string) error
+	// MarkUnread moves the read mark of a conversation (threadTS empty)
+	// or of the thread under threadTS back to boundaryTS: the message
+	// before the first one to read again; "0" for a conversation's
+	// start, the parent's ts for a thread's first reply. The new state
+	// comes back through Run as a ReadChanged (Unread, with the mentions
+	// after the boundary counted) or a ThreadState (Unread).
+	MarkUnread(ctx context.Context, channelID, threadTS, boundaryTS string) error
 	// Typing tells Slack the user is typing in a conversation; callers
 	// throttle it (typing.Throttle). Best-effort: a failure is dropped.
 	Typing(channelID string)
