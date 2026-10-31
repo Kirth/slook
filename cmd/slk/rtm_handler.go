@@ -10,6 +10,7 @@ import (
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/core/blocks"
 	"github.com/gammons/slk/internal/debuglog"
 	"github.com/gammons/slk/internal/notify"
 	slackclient "github.com/gammons/slk/internal/slack"
@@ -436,7 +437,7 @@ func (h *rtmEventHandler) OnEphemeralMessage(m slackclient.EphemeralMessage) {
 	}
 	authorID := h.messageAuthor(m.UserID, m.BotID, m.Username)
 	item := h.messageItemFromEvent(authorID, m.UserID, m.Username, m.TS, m.Text, m.ThreadTS, m.Subtype, false, nil, m.Blocks, m.Attachments)
-	applyActionIDs(item.LegacyAttachments, m.ActionIDs)
+	blocks.ApplyActionIDs(item.LegacyAttachments, m.ActionIDs)
 	item.Ephemeral = true
 	item.BotID = m.BotID
 	debuglog.Cache("OnEphemeralMessage: team=%s channel=%s ts=%s thread_ts=%s decision=dispatched_to_app",

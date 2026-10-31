@@ -16,7 +16,6 @@ import (
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/ui"
-	"github.com/gammons/slk/internal/ui/messages/blockkit"
 	"github.com/gammons/slk/internal/ui/sidebar"
 	"github.com/slack-go/slack"
 )
@@ -988,22 +987,4 @@ func TestOnEphemeralMessage_InactiveWorkspaceDrops(t *testing.T) {
 	if sent != 0 {
 		t.Errorf("sent %d messages for an inactive workspace, want 0", sent)
 	}
-}
-
-// Ids are positional and best-effort: a frame with fewer or more ids
-// than parsed actions must not panic or shift ids onto the wrong button.
-func TestApplyActionIDs_Misaligned(t *testing.T) {
-	atts := []blockkit.LegacyAttachment{
-		{Actions: []blockkit.LegacyAction{{Name: "a"}, {Name: "b"}}},
-		{Actions: []blockkit.LegacyAction{{Name: "c"}}},
-	}
-	applyActionIDs(atts, [][]string{{"1"}})
-	if atts[0].Actions[0].ID != "1" || atts[0].Actions[1].ID != "" || atts[1].Actions[0].ID != "" {
-		t.Errorf("short ids: %+v", atts)
-	}
-	applyActionIDs(atts, [][]string{{"1", "2", "3"}, {"4", "5"}, {"6"}})
-	if atts[0].Actions[1].ID != "2" || atts[1].Actions[0].ID != "4" {
-		t.Errorf("long ids: %+v", atts)
-	}
-	applyActionIDs(nil, [][]string{{"1"}}) // must not panic
 }
