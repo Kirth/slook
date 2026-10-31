@@ -413,7 +413,7 @@ func TestSyncOnReconnect_KicksThreadSubscriptionSync(t *testing.T) {
 	}
 }
 
-// The kick is a trigger, not a fetch: threadSubsGate inside
+// The kick is a trigger, not a fetch: threadsubs.Gate inside
 // ensureThreadSubscriptions decides whether a sweep actually runs.
 // A reconnect flap that passes the 30 s dedupe must still cost zero
 // getView requests when the last sync was recent — but the wiring

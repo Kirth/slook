@@ -254,6 +254,7 @@ func (c *chatWindow) load() {
 		}
 	}()
 	if c.conv.PeerID != "" {
+		c.h.be.WatchDND(c.conv.PeerID) // the header's do-not-disturb, once
 		go func() {
 			if active, err := c.h.be.Presence(c.h.ctx, c.conv.PeerID); err == nil {
 				c.box.post(presenceLoaded{active})
@@ -305,6 +306,8 @@ func (c *chatWindow) headerSpec(gtx C) headerSpec {
 			hc.icon = iconNight
 		case chat.ChipMuted:
 			hc.icon = iconMuted
+		case chat.ChipDND:
+			hc.icon = iconDND
 		}
 		if ch.Tone == chat.ToneWarn {
 			hc.col = colOffline
@@ -389,12 +392,14 @@ func (c *chatWindow) apply() {
 			}
 			continue
 		}
-		if c.infoApply(item) {
+		if c.infoApply(item) || c.typingApply(item) {
 			continue
 		}
 		switch v := item.(type) {
 		case backend.NotifyChanged:
 			c.conv.Notify = v.Level
+		case backend.ThreadState:
+			c.tl.Apply(c.conv.ID, v) // not activity: nothing to mark read
 		case backend.UserGroupsChanged:
 			if !c.loading {
 				go c.resync() // bodies again, with the groups' names
@@ -597,7 +602,7 @@ func (c *chatWindow) layout(gtx C) {
 	// any widget also reach it (Gio routes events to the hit widget and
 	// its enclosing areas, not to areas beside it).
 	defer c.trackPointer(gtx).Pop()
-	c.authorHover = ""
+	c.authorHover, c.pillHover = "", nil
 	c.infoUpdate(gtx)
 	if !c.focused {
 		gtx.Execute(key.FocusCmd{Tag: &c.composer})

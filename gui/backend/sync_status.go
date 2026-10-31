@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
-	"strings"
+	"strconv"
 	"time"
 
 	"github.com/gammons/slk/internal/cache"
@@ -426,19 +426,19 @@ func (s *Slack) SyncStatus(context.Context) (SyncStatus, error) {
 	return st, nil
 }
 
-// Search finds cached messages matching query, newest first.
-func (s *Slack) Search(ctx context.Context, query string, limit int, order SearchOrder) ([]SearchHit, error) {
+// Search finds cached messages matching q.
+func (s *Slack) Search(ctx context.Context, q SearchQuery, limit int, order SearchOrder) ([]SearchHit, error) {
 	if s.db == nil {
 		return nil, errors.New("no cache to search")
 	}
-	if strings.TrimSpace(query) == "" {
+	if q.Nothing {
 		return nil, nil
 	}
 	cacheOrder := cache.SearchRelevance
 	if order == Newest {
 		cacheOrder = cache.SearchNewest
 	}
-	rows, err := s.db.SearchMessages(s.client.TeamID(), query, limit, cacheOrder)
+	rows, err := s.db.SearchMessagesSpec(s.client.TeamID(), searchSpec(q), limit, cacheOrder)
 	if err != nil {
 		return nil, err
 	}
@@ -449,4 +449,23 @@ func (s *Slack) Search(ctx context.Context, query string, limit int, order Searc
 	}
 	// fromCache keeps the rows' order, which is the order asked for.
 	return hits, nil
+}
+
+// searchSpec is q as the cache takes it: times as Slack ts.
+func searchSpec(q SearchQuery) cache.SearchSpec {
+	ts := func(t time.Time) string {
+		if t.IsZero() {
+			return ""
+		}
+		return strconv.FormatInt(t.Unix(), 10)
+	}
+	return cache.SearchSpec{
+		All: q.All, None: q.None,
+		Users: q.Users, NotUsers: q.NotUsers, Channels: q.Channels, NotChannels: q.NotChannels,
+		Mentions: q.Mentions, NotMentions: q.NotMentions,
+		Since: ts(q.Since), Until: ts(q.Until),
+		Thread: cache.Tri(q.Thread), Reply: cache.Tri(q.Reply), Edited: cache.Tri(q.Edited),
+		Link: cache.Tri(q.Link), File: cache.Tri(q.File), Reaction: cache.Tri(q.Reaction),
+		Emoji: q.Emoji, NotEmoji: q.NotEmoji,
+	}
 }

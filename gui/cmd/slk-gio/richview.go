@@ -21,7 +21,9 @@ import (
 	"gioui.org/widget/material"
 
 	"github.com/gammons/slk/gui/backend"
+	"github.com/gammons/slk/gui/chat"
 	"github.com/gammons/slk/gui/internal/richtext"
+	"github.com/gammons/slk/gui/internal/styledtext"
 	"github.com/gammons/slk/gui/rich"
 	"github.com/gammons/slk/internal/avatar"
 	"github.com/gammons/slk/internal/emoji"
@@ -70,6 +72,9 @@ type msgWidgets struct {
 	// after them. Pointers, so growing the slice keeps their state.
 	pills   []*widget.Clickable
 	addPill widget.Clickable
+
+	// tsel is the message's text selection (textselect.go).
+	tsel textSel
 }
 
 // openClick is a clickable that launches a URL, or previews one of the
@@ -288,16 +293,44 @@ func (v *richView) text(gtx C, w *msgWidgets, spans []rich.Span, size unit.Sp, c
 	if len(spans) == 0 {
 		return D{}
 	}
-	return richtext.Text(w.text(), v.th.Shaper, v.spanStyles(spans, size, col)...).Layout(gtx)
+	st := richtext.Text(w.text(), v.th.Shaper, v.spanStyles(spans, size, col)...)
+	if !w.tsel.on {
+		return st.Layout(gtx)
+	}
+	// Selectable: note where each piece of text went, and draw the
+	// selection behind it.
+	var segs []styledtext.Segment
+	st.Segments = &segs
+	m := op.Record(gtx.Ops)
+	dims := st.Layout(gtx)
+	call := m.Stop()
+	w.tsel.drawn(gtx, segs)
+	call.Add(gtx.Ops)
+	return dims
 }
 
 // blocks lays out blocks one under another.
 func (v *richView) blocks(gtx C, w *msgWidgets, bs []rich.Block) D {
-	children := make([]layout.FlexChild, 0, len(bs))
-	for _, b := range bs {
-		children = append(children, layout.Rigid(func(gtx C) D { return v.block(gtx, w, b) }))
+	return stack(gtx, w, len(bs), func(gtx C, i int) D { return v.block(gtx, w, bs[i]) })
+}
+
+// stack lays out n children one under another, as a vertical Flex of
+// Rigids does, keeping the selection's idea of where each child is
+// drawn (w.tsel.origin) in step.
+func stack(gtx C, w *msgWidgets, n int, child func(gtx C, i int) D) D {
+	y, width := 0, 0
+	for i := range n {
+		cgtx := gtx
+		cgtx.Constraints.Min = image.Point{}
+		cgtx.Constraints.Max.Y = max(0, gtx.Constraints.Max.Y-y)
+		off := op.Offset(image.Pt(0, y)).Push(gtx.Ops)
+		var dims D
+		w.tsel.at(image.Pt(0, y), func() { dims = child(cgtx, i) })
+		off.Pop()
+		y += dims.Size.Y
+		width = max(width, dims.Size.X)
 	}
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+	return D{Size: gtx.Constraints.Constrain(image.Pt(width, y))}
 }
 
 func (v *richView) block(gtx C, w *msgWidgets, b rich.Block) D {
@@ -305,7 +338,7 @@ func (v *richView) block(gtx C, w *msgWidgets, b rich.Block) D {
 	case rich.Paragraph:
 		return v.text(gtx, w, b.Spans, textSize, colFg)
 	case rich.Heading:
-		return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
+		return insetSel(gtx, w, layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(2)}, func(gtx C) D {
 			spans := make([]rich.Span, len(b.Spans))
 			for i, s := range b.Spans {
 				s.Bold = true
@@ -314,8 +347,8 @@ func (v *richView) block(gtx C, w *msgWidgets, b rich.Block) D {
 			return v.text(gtx, w, spans, headingSize, colFg)
 		})
 	case rich.Quote:
-		return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
-			return v.barred(gtx, colBorder, func(gtx C) D { return v.blocks(gtx, w, b.Blocks) })
+		return insetSel(gtx, w, layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2)}, func(gtx C) D {
+			return v.barredSel(gtx, w, colBorder, func(gtx C) D { return v.blocks(gtx, w, b.Blocks) })
 		})
 	case rich.CodeBlock:
 		// Code in the monospace face, on its tint inside a 1 dp rule.
@@ -349,18 +382,22 @@ func (v *richView) block(gtx C, w *msgWidgets, b rich.Block) D {
 			return v.file(gtx, w, b)
 		})
 	case rich.Fields:
-		return v.fields(gtx, w, b)
+		// Fields and context sit side by side: not selectable (their
+		// places are not tracked).
+		return w.tsel.without(func() D { return v.fields(gtx, w, b) })
 	case rich.Context:
-		return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
-			return v.context(gtx, w, b)
+		return w.tsel.without(func() D {
+			return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
+				return v.context(gtx, w, b)
+			})
 		})
 	case rich.Buttons:
 		return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
 			return v.buttons(gtx, b.Labels)
 		})
 	case rich.Card:
-		return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx C) D {
-			return v.barred(gtx, cardColor(b.Color), func(gtx C) D {
+		return insetSel(gtx, w, layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}, func(gtx C) D {
+			return v.barredSel(gtx, w, cardColor(b.Color), func(gtx C) D {
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 					layout.Rigid(func(gtx C) D { return v.blocks(gtx, w, b.Blocks) }),
 					layout.Rigid(func(gtx C) D {
@@ -378,6 +415,25 @@ func (v *richView) block(gtx C, w *msgWidgets, b rich.Block) D {
 		})
 	}
 	return D{}
+}
+
+// barredSel is barred keeping the selection's origin in step.
+func (v *richView) barredSel(gtx C, w *msgWidgets, col color.NRGBA, content layout.Widget) D {
+	shift := gtx.Dp(unit.Dp(4)) + gtx.Dp(unit.Dp(10))
+	return v.barred(gtx, col, func(gtx C) D {
+		var dims D
+		w.tsel.at(image.Pt(shift, 0), func() { dims = content(gtx) })
+		return dims
+	})
+}
+
+// insetSel is in.Layout keeping the selection's origin in step.
+func insetSel(gtx C, w *msgWidgets, in layout.Inset, content layout.Widget) D {
+	return in.Layout(gtx, func(gtx C) D {
+		var dims D
+		w.tsel.at(image.Pt(gtx.Dp(in.Left), gtx.Dp(in.Top)), func() { dims = content(gtx) })
+		return dims
+	})
 }
 
 // barred draws content with a vertical stripe on its left, as tall as
@@ -399,27 +455,39 @@ func (v *richView) barred(gtx C, col color.NRGBA, content layout.Widget) D {
 }
 
 func (v *richView) list(gtx C, w *msgWidgets, l rich.List) D {
-	children := make([]layout.FlexChild, 0, len(l.Items))
-	for i, item := range l.Items {
+	return stack(gtx, w, len(l.Items), func(gtx C, i int) D {
 		marker := "•"
 		if l.Ordered {
 			marker = strconv.Itoa(l.Start+i+1) + "."
 		}
-		children = append(children, layout.Rigid(func(gtx C) D {
-			return layout.Inset{Left: unit.Dp(16 * float32(l.Indent))}.Layout(gtx, func(gtx C) D {
-				return layout.Flex{Alignment: layout.Baseline}.Layout(gtx,
-					layout.Rigid(func(gtx C) D {
-						gtx.Constraints.Min.X = gtx.Dp(unit.Dp(22))
-						lbl := bodyLabel(v.th, marker)
-						lbl.Color = colMuted
-						return lbl.Layout(gtx)
-					}),
-					layout.Flexed(1, func(gtx C) D { return v.text(gtx, w, item, textSize, colFg) }),
-				)
-			})
-		}))
-	}
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+		indent := gtx.Dp(unit.Dp(16 * float32(l.Indent)))
+		// The marker, at least 22 dp wide, then the item's text.
+		mgtx := gtx
+		mgtx.Constraints.Min = image.Pt(gtx.Dp(unit.Dp(22)), 0)
+		mm := op.Record(gtx.Ops)
+		lbl := bodyLabel(v.th, marker)
+		lbl.Color = colMuted
+		md := lbl.Layout(mgtx)
+		mcall := mm.Stop()
+		tx := indent + md.Size.X
+		tgtx := gtx
+		tgtx.Constraints.Min = image.Point{}
+		tgtx.Constraints.Max.X = max(0, gtx.Constraints.Max.X-tx)
+		tm := op.Record(gtx.Ops)
+		var td D
+		w.tsel.at(image.Pt(tx, 0), func() { td = v.text(tgtx, w, l.Items[i], textSize, colFg) })
+		tcall := tm.Stop()
+		// Same font and size: aligned at the top, the marker sits on
+		// the first line's baseline.
+		my := 0
+		off := op.Offset(image.Pt(indent, my)).Push(gtx.Ops)
+		mcall.Add(gtx.Ops)
+		off.Pop()
+		off = op.Offset(image.Pt(tx, 0)).Push(gtx.Ops)
+		tcall.Add(gtx.Ops)
+		off.Pop()
+		return D{Size: image.Pt(tx+td.Size.X, max(td.Size.Y, my+md.Size.Y))}
+	})
 }
 
 // fields lays out short fields two to a row and the rest full width.
@@ -696,8 +764,11 @@ func (v *richView) profileCard(gtx C, name string, p *backend.Profile, err error
 							line("@"+p.Handle, captionSize, colMuted, false)
 						}
 						line(p.Title, textSize, colFg, false)
-						if p.StatusText != "" || p.StatusEmoji != "" {
-							line(strings.TrimSpace(emoji.Sprint(p.StatusEmoji)+" "+p.StatusText), textSize, colFg, false)
+						if status := chat.StatusText(*p, time.Now()); status != "" || p.StatusEmoji != "" && p.StatusExpires.IsZero() {
+							line(strings.TrimSpace(emoji.Sprint(p.StatusEmoji)+" "+status), textSize, colFg, false)
+						}
+						if p.DND && (p.DNDUntil.IsZero() || time.Now().Before(p.DNDUntil)) {
+							line(chat.DNDText(p.DNDUntil, time.Now()), captionSize, colOffline, false)
 						}
 						if p.HasTZ {
 							local := time.Now().UTC().Add(time.Duration(p.TZOffset) * time.Second)

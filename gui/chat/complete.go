@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/gammons/slk/gui/backend"
 	"github.com/gammons/slk/gui/sidebar"
@@ -191,7 +192,8 @@ func groupRank(q string, g backend.UserGroup) int {
 }
 
 // personRank is how well q matches p's names: 0 a name starts with it,
-// 1 a word of one does, 2 one contains it, -1 no match.
+// 1 a word of one does, 2 one contains it, 3 one has its letters in
+// order (three letters or more: "adlv" is Ada Lovelace), -1 no match.
 func personRank(q string, p backend.Person) int {
 	if q == "" {
 		return 0
@@ -210,6 +212,8 @@ func personRank(q string, p backend.Person) int {
 			r = 1
 		case strings.Contains(n, q):
 			r = 2
+		case subsequence(n, q):
+			r = 3
 		}
 		if r >= 0 && (best < 0 || r < best) {
 			best = r
@@ -227,6 +231,97 @@ func wordPrefix(s, q string) bool {
 		}
 	}
 	return false
+}
+
+// subsequence is whether s has q's runes in order, for q of three
+// runes or more (fewer match nearly anything).
+func subsequence(s, q string) bool {
+	if utf8.RuneCountInString(q) < 3 {
+		return false
+	}
+	for _, r := range s {
+		if q == "" {
+			break
+		}
+		if c, n := utf8.DecodeRuneInString(q); c == r {
+			q = q[n:]
+		}
+	}
+	return q == ""
+}
+
+// BestPerson is the person name (as typed after from: or mentions:)
+// fits best, ranked as @-completion ranks (personRank): people before
+// bots, then the shorter name. ok is false when no one matches.
+func BestPerson(name string, people []backend.Person) (p backend.Person, ok bool) {
+	q := itext.Fold(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(name), "@")))
+	if q == "" {
+		return backend.Person{}, false
+	}
+	best, bestRank := -1, 0
+	for i, c := range people {
+		r := personRank(q, c)
+		if r < 0 {
+			continue
+		}
+		if c.Bot {
+			r += 4 // after every person, fuzzy ones included
+		}
+		if best < 0 || r < bestRank || (r == bestRank && len(c.Name) < len(people[best].Name)) {
+			best, bestRank = i, r
+		}
+	}
+	if best < 0 {
+		return backend.Person{}, false
+	}
+	return people[best], true
+}
+
+// BestGroup is the usergroup whose handle or name fits name best (as
+// BestPerson), ok false when none does.
+func BestGroup(name string, groups []backend.UserGroup) (g backend.UserGroup, ok bool) {
+	q := itext.Fold(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(name), "@")))
+	if q == "" {
+		return backend.UserGroup{}, false
+	}
+	best, bestRank := -1, 0
+	for i, c := range groups {
+		if c.Handle == "" {
+			continue
+		}
+		if r := groupRank(q, c); r >= 0 && (best < 0 || r < bestRank) {
+			best, bestRank = i, r
+		}
+	}
+	if best < 0 {
+		return backend.UserGroup{}, false
+	}
+	return groups[best], true
+}
+
+// BestConversation is the conversation whose name fits name best: one
+// starting with it, then one with a word starting with it, containing
+// it, or with its letters in order; the most recently active among
+// equals. A leading # or @ is ignored. ok is false when none matches.
+func BestConversation(name string, convs []backend.Conversation) (c backend.Conversation, ok bool) {
+	q := itext.Fold(strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(name), "#@")))
+	if q == "" {
+		return backend.Conversation{}, false
+	}
+	best, bestRank := -1, 0
+	for i, cv := range convs {
+		r := personRank(q, backend.Person{Name: cv.Name})
+		if r < 0 {
+			continue
+		}
+		if best < 0 || r < bestRank || (r == bestRank && cv.Latest.After(convs[best].Latest)) {
+			best, bestRank = i, r
+		}
+	}
+	if best < 0 {
+		return backend.Conversation{}, false
+	}
+	return convs[best], true
 }
 
 // MatchChannels is what "#query" completes to: the user's channels

@@ -38,8 +38,15 @@ type listWindow struct {
 	th   *material.Theme
 	view richView
 
-	convs     []backend.Conversation
-	index     map[string]int // conversation ID -> position in convs
+	convs []backend.Conversation
+	index map[string]int // conversation ID -> position in convs
+	// threads is the followed threads' unread count; threadsRow opens
+	// the Threads window.
+	threads    backend.ThreadsUnread
+	threadsRow widget.Clickable
+	// pending is activity in conversations the list does not have yet,
+	// applied when Slack says what they are (ConversationOpened).
+	pending   map[string][]activity
 	sections  []backend.Section
 	loading   bool
 	loadErr   string
@@ -110,6 +117,21 @@ func (l *listWindow) setConvs(convs []backend.Conversation) {
 	}
 }
 
+// applyActivity notes a message in a conversation the list has: when,
+// and whether it is unread.
+func (l *listWindow) applyActivity(a activity) {
+	c := l.conv(a.channelID)
+	if c == nil {
+		return
+	}
+	if a.at.After(c.Latest) {
+		c.Latest = a.at
+	}
+	if a.unread {
+		c.Unread = true
+	}
+}
+
 type conversationsLoaded struct {
 	convs []backend.Conversation
 	err   error
@@ -128,6 +150,7 @@ const (
 	itemHeading = iota
 	itemConv
 	itemFold
+	itemThreads // the Threads row, first
 )
 
 func newListWindow(h *hub, connected bool) *listWindow {
@@ -215,15 +238,23 @@ func (l *listWindow) apply() {
 			}
 			l.setConvs(v.convs)
 			l.sections = l.h.be.Sections()
-		case activity:
-			if c := l.conv(v.channelID); c != nil {
-				if v.at.After(c.Latest) {
-					c.Latest = v.at
-				}
-				if v.unread {
-					c.Unread = true
-				}
+		case backend.ThreadsUnread:
+			l.threads = v
+		case backend.ConversationOpened:
+			l.setConvs(upsertConv(l.convs, v.Conv))
+			for _, a := range l.pending[v.Conv.ID] {
+				l.applyActivity(a)
 			}
+			delete(l.pending, v.Conv.ID)
+		case activity:
+			if l.conv(v.channelID) == nil && l.convs != nil {
+				if l.pending == nil {
+					l.pending = map[string][]activity{}
+				}
+				l.pending[v.channelID] = append(l.pending[v.channelID], v)
+				continue
+			}
+			l.applyActivity(v)
 		case visited:
 			if c := l.conv(v.channelID); c != nil {
 				c.Visited = v.at
@@ -297,7 +328,7 @@ func (l *listWindow) items(now time.Time) []listItem {
 		return out
 	}
 	groups := sidebar.Arrange(l.convs, l.sections, now, sidebar.QuietAfter)
-	var out []listItem
+	out := []listItem{{kind: itemThreads}}
 	for i := range groups {
 		g := &groups[i]
 		out = append(out, listItem{kind: itemHeading, group: g})
@@ -345,6 +376,9 @@ func (l *listWindow) layout(gtx C) {
 			l.expanded[key] = !l.expanded[key]
 		}
 	}
+	if l.threadsRow.Clicked(gtx) {
+		l.h.showThreads()
+	}
 	items := l.items(gtx.Now)
 	if submitted && strings.TrimSpace(l.filter.Text()) != "" {
 		for _, it := range items {
@@ -389,6 +423,8 @@ func (l *listWindow) layout(gtx C) {
 					return l.heading(gtx, it.group)
 				case itemFold:
 					return l.fold(gtx, it.group)
+				case itemThreads:
+					return l.threadsLine(gtx)
 				}
 				return l.row(gtx, it.conv, it.quiet)
 			})
@@ -545,6 +581,56 @@ func (l *listWindow) row(gtx C, c backend.Conversation, quiet bool) D {
 						return name.Layout(gtx)
 					}),
 					layout.Rigid(func(gtx C) D { return l.rowEnd(gtx, c) }),
+				)
+			})
+		})
+	})
+}
+
+// threadsLine is the list's first row: Threads, with how many followed
+// threads have unread replies (red when one mentions the user).
+func (l *listWindow) threadsLine(gtx C) D {
+	btn := &l.threadsRow
+	n := l.threads
+	return btn.Layout(gtx, func(gtx C) D {
+		pointer.CursorPointer.Add(gtx.Ops)
+		return hoverFill(gtx, btn.Hovered(), func(gtx C) D {
+			return layout.Inset{Top: unit.Dp(8), Bottom: unit.Dp(4), Left: unit.Dp(12), Right: unit.Dp(12)}.Layout(gtx, func(gtx C) D {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx C) D {
+						gtx.Constraints.Min.X = gtx.Dp(unit.Dp(28))
+						return layout.Inset{Right: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
+							gtx.Constraints = layout.Exact(image.Pt(gtx.Dp(18), gtx.Dp(18)))
+							return iconReplies.Layout(gtx, colMuted)
+						})
+					}),
+					layout.Flexed(1, func(gtx C) D {
+						name := bodyLabel(l.th, "Threads")
+						if n.Count > 0 {
+							name.Font.Weight = font.SemiBold
+						} else {
+							name.Color = colMuted
+						}
+						return name.Layout(gtx)
+					}),
+					layout.Rigid(func(gtx C) D {
+						if n.Count == 0 {
+							return D{}
+						}
+						bg := colAccent
+						if n.Mentions > 0 {
+							bg = colBadge
+						}
+						return rounded(gtx, bg, unit.Dp(8), func(gtx C) D {
+							return layout.Inset{Left: unit.Dp(6), Right: unit.Dp(6), Top: unit.Dp(1), Bottom: unit.Dp(1)}.Layout(gtx, func(gtx C) D {
+								lbl := captionLabel(l.th, strconv.Itoa(n.Count))
+								lbl.Color = textOn(bg)
+								lbl.Font.Weight = font.SemiBold
+								return lbl.Layout(gtx)
+							})
+						})
+					}),
 				)
 			})
 		})

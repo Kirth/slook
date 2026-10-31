@@ -1,7 +1,6 @@
 package main
 
 import (
-	"image"
 	"strings"
 	"time"
 	"unicode"
@@ -9,7 +8,6 @@ import (
 
 	"gioui.org/io/event"
 	"gioui.org/io/key"
-	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
@@ -19,7 +17,6 @@ import (
 	"github.com/gammons/slk/gui/backend"
 	"github.com/gammons/slk/gui/chat"
 	"github.com/gammons/slk/internal/slashcmd"
-	"github.com/gammons/slk/internal/ui/messages"
 )
 
 // composeBox is a window's composer: the editor, its slash-command
@@ -66,6 +63,9 @@ type composeBox struct {
 	groups   func() []backend.UserGroup
 	convs    func() []backend.Conversation
 	rv       *richView
+
+	// typing is who is typing here, drawn under the editor.
+	typing typingState
 }
 
 // editFailed is Slack refusing an edit: the composer goes back to
@@ -242,8 +242,11 @@ func (b *composeBox) update(gtx C) {
 		if !ok {
 			break
 		}
-		if s, ok := ev.(widget.SubmitEvent); ok {
-			b.submit(s.Text)
+		switch e := ev.(type) {
+		case widget.SubmitEvent:
+			b.submit(e.Text)
+		case widget.ChangeEvent:
+			b.typed()
 		}
 	}
 	_, caret := b.composer.Selection()
@@ -298,7 +301,16 @@ func (b *composeBox) layout(gtx C, hint, castLabel string) D {
 			if b.threadTS != "" && b.editing == nil {
 				in.Bottom = unit.Dp(4)
 			}
+			if b.typingShown() {
+				in.Bottom = 0 // the typing strip is the space under it
+			}
 			return in.Layout(gtx, framedEditor(b.th, &b.composer, hint))
+		}),
+		layout.Rigid(func(gtx C) D {
+			if !b.typingShown() {
+				return D{}
+			}
+			return b.typingStrip(gtx)
 		}),
 		layout.Rigid(func(gtx C) D {
 			if b.threadTS == "" || b.editing != nil {
@@ -524,71 +536,12 @@ func (b *composeBox) commandList(gtx C) D {
 			return D{}
 		}
 	}
-	return layout.Inset{Left: unit.Dp(12), Right: unit.Dp(12), Top: unit.Dp(6)}.Layout(gtx, func(gtx C) D {
-		return widget.Border{Color: colBorder, CornerRadius: unit.Dp(6), Width: unit.Dp(1)}.Layout(gtx, func(gtx C) D {
-			rows := make([]layout.FlexChild, 0, p.n())
-			for i := 0; i < p.n(); i++ {
-				rows = append(rows, layout.Rigid(func(gtx C) D {
-					return p.rows[i].Layout(gtx, func(gtx C) D {
-						pointer.CursorPointer.Add(gtx.Ops)
-						bg := colBg
-						if i == p.sel {
-							bg = colHover
-						}
-						return rounded(gtx, bg, unit.Dp(4), func(gtx C) D {
-							gtx.Constraints.Min.X = gtx.Constraints.Max.X
-							return layout.Inset{Top: unit.Dp(5), Bottom: unit.Dp(5), Left: unit.Dp(10), Right: unit.Dp(10)}.Layout(gtx, func(gtx C) D {
-								if i < len(p.matches) {
-									return b.commandRow(gtx, p.matches[i])
-								}
-								return b.choiceRow(gtx, p.choices[i-len(p.matches)])
-							})
-						})
-					})
-				}))
-			}
-			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
-		})
+	return popupList(gtx, &p.rows, p.n(), p.sel, func(gtx C, i int) D {
+		if i < len(p.matches) {
+			return b.commandRow(gtx, p.matches[i])
+		}
+		return choiceRow(gtx, b.th, b.rv, p.choices[i-len(p.matches)])
 	})
-}
-
-// choiceRow is one completion: a person's avatar, a channel's glyph or
-// an emoji, then its name and, muted, a detail.
-func (b *composeBox) choiceRow(gtx C, c chat.Choice) D {
-	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-		layout.Rigid(func(gtx C) D {
-			return layout.Inset{Right: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
-				gtx.Constraints.Min = image.Pt(gtx.Dp(unit.Dp(20)), 0)
-				switch {
-				case c.ID != "" && b.rv != nil:
-					return b.rv.avatar(gtx, c.ID, c.Avatar, c.Label, unit.Dp(20))
-				case c.Emoji != "" && b.rv != nil:
-					return b.rv.emoji(gtx, c.Emoji, unit.Dp(18))
-				case c.Kind != "":
-					g := bodyLabel(b.th, messages.ChannelGlyph(string(c.Kind)))
-					g.Color = colMuted
-					return g.Layout(gtx)
-				}
-				return D{Size: gtx.Constraints.Min}
-			})
-		}),
-		layout.Rigid(func(gtx C) D {
-			lbl := bodyLabel(b.th, c.Label)
-			lbl.MaxLines = 1
-			return lbl.Layout(gtx)
-		}),
-		layout.Flexed(1, func(gtx C) D {
-			if c.Detail == "" {
-				return D{}
-			}
-			return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
-				lbl := captionLabel(b.th, c.Detail)
-				lbl.Color = colMuted
-				lbl.MaxLines = 1
-				return lbl.Layout(gtx)
-			})
-		}),
-	)
 }
 
 func (b *composeBox) commandRow(gtx C, cmd backend.Command) D {

@@ -10,6 +10,7 @@ import (
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/slack/membership"
+	"github.com/gammons/slk/internal/threadsubs"
 	"github.com/gammons/slk/internal/ui/sidebar"
 )
 
@@ -84,9 +85,9 @@ type WorkspaceContext struct {
 	// threadSubsSyncInterval. Fired on workspace-ready, on Threads
 	// view activation, and by the reconnect/wake catch-up. See
 	// ensureThreadSubscriptions.
-	ThreadSubsGate threadSubsGate
+	ThreadSubsGate threadsubs.Gate
 	// SubscriptionsAvailable indicates whether the most recent
-	// threadSubscriptionSync attempt succeeded in fetching Slack's
+	// threadsubs.Sync attempt succeeded in fetching Slack's
 	// authoritative thread-subscription list. true on bootstrap
 	// (optimistic — no banner before the first Threads-view open, by
 	// which point nothing has been attempted) and after every

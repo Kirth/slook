@@ -48,6 +48,17 @@ type textIterator struct {
 	first bool
 	// baseline tracks the location of the first line of text's baseline.
 	baseline int
+	// clusters are where each shaped cluster starts (x from the first
+	// glyph) and how many runes it covers; end is where the last glyph
+	// ends. Together they give every rune's x, for text selection.
+	clusters []cluster
+	end      int
+}
+
+// cluster is a run of runes shaped together: where it starts, and how
+// many runes.
+type cluster struct {
+	x, runes int
 }
 
 // processGlyph checks whether the glyph is visible within the iterator's configured
@@ -135,6 +146,12 @@ func (it *textIterator) paintGlyph(gtx layout.Context, shaper *text.Shaper, glyp
 			it.firstX = glyph.X
 			it.init = true
 		}
+		if glyph.Flags&text.FlagTruncator == 0 {
+			if glyph.Runes > 0 {
+				it.clusters = append(it.clusters, cluster{x: (glyph.X - it.firstX).Round(), runes: int(glyph.Runes)})
+			}
+			it.end = max(it.end, (glyph.X + glyph.Advance - it.firstX).Round())
+		}
 		if len(line) == 0 {
 			it.lineOff = image.Point{X: (glyph.X - it.firstX).Floor(), Y: int(glyph.Y)}.Sub(it.viewport.Min)
 		}
@@ -153,4 +170,25 @@ func (it *textIterator) paintGlyph(gtx layout.Context, shaper *text.Shaper, glyp
 		line = line[:0]
 	}
 	return line, visibleOrBefore
+}
+
+// runeXs is the x of each rune boundary of the processed glyphs: len
+// runes+1, from the first rune's start to the last's end. A cluster's
+// runes share its width evenly.
+func (it *textIterator) runeXs(runes int) []int {
+	xs := make([]int, 0, runes+1)
+	for i, c := range it.clusters {
+		next := it.end
+		if i+1 < len(it.clusters) {
+			next = it.clusters[i+1].x
+		}
+		for k := 0; k < c.runes; k++ {
+			xs = append(xs, c.x+(next-c.x)*k/c.runes)
+		}
+	}
+	for len(xs) < runes {
+		xs = append(xs, it.end) // runes not shaped (a line's newline)
+	}
+	xs = xs[:runes]
+	return append(xs, it.end)
 }

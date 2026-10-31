@@ -96,3 +96,15 @@ func TestEditShowsMentionsReadably(t *testing.T) {
 		t.Fatalf("sent as %q", got)
 	}
 }
+
+func TestStatusPhrase(t *testing.T) {
+	for _, c := range []struct{ name, status, want string }{
+		{"Claude", "is thinking...", "Claude is thinking"},
+		{"Claude", "  is   searching the docs…", "Claude is searching the docs"},
+		{"Claude", "", "Claude"},
+	} {
+		if got := statusPhrase(c.name, c.status); got != c.want {
+			t.Errorf("statusPhrase(%q, %q) = %q, want %q", c.name, c.status, got, c.want)
+		}
+	}
+}

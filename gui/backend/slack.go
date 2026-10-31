@@ -23,6 +23,7 @@ import (
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/core/blocks"
+	"github.com/gammons/slk/internal/emoji"
 	"github.com/gammons/slk/internal/export"
 	"github.com/gammons/slk/internal/filedl"
 	imgpkg "github.com/gammons/slk/internal/image"
@@ -97,7 +98,13 @@ type Slack struct {
 	kinds    map[string]Kind   // channel ID -> kind
 	profiles map[string]Profile
 	// groups is the workspace's usergroups (see usergroups.go).
-	groups    groupState
+	groups groupState
+	// dnd is people's do-not-disturb as last heard; dndAsked the ones
+	// asked of Slack (profiles.go).
+	dnd      map[string]dndState
+	dndAsked map[string]bool
+	// threads is the followed threads' unread count (threads.go).
+	threads   threadsState
 	peers     []string          // DM partners, whose presence the socket reports
 	commands  []Command         // nil until fetched
 	customs   map[string]string // custom emoji; nil until fetched
@@ -299,8 +306,11 @@ func (s *Slack) Conversations(ctx context.Context) ([]Conversation, error) {
 	})
 	g.Go(func() error {
 		var err error
-		if unreads, _, err = s.client.GetUnreadCountsContext(gctx); err != nil {
+		var agg slackclient.ThreadsAggregate
+		if unreads, agg, err = s.client.GetUnreadCountsContext(gctx); err != nil {
 			fmt.Fprintln(os.Stderr, "slk-gio: unread counts:", err)
+		} else {
+			s.noteThreadsAggregate(gctx, agg)
 		}
 		return nil
 	})
@@ -348,24 +358,7 @@ func (s *Slack) Conversations(ctx context.Context) ([]Conversation, error) {
 	convs := make([]Conversation, 0, len(chans))
 	s.mu.Lock()
 	for _, c := range chans {
-		conv := Conversation{ID: c.ID, Name: c.Name, Kind: KindChannel}
-		switch {
-		case c.IsIM:
-			conv.Kind = KindDM
-			conv.Name = s.users[c.User]
-			if conv.Name == "" {
-				conv.Name = c.User
-			}
-			conv.AvatarURL = s.avatars[c.User]
-			conv.PeerID = c.User
-		case c.IsMpIM:
-			conv.Kind = KindGroupDM
-			conv.Name = slackfmt.FormatMPDMName(c.Name, func(h string) string { return s.handles[h] })
-		case c.IsPrivate:
-			conv.Kind = KindPrivate
-		}
-		s.channels[c.ID] = conv.Name
-		s.kinds[c.ID] = conv.Kind
+		conv := s.conversationOfLocked(c, levels[c.ID], starred[c.ID])
 		if r, ok := reads[c.ID]; ok {
 			conv.Unread, conv.Mentions = r.HasUnread, r.MentionCount
 			conv.Latest, _ = export.TimeFromTS(r.Latest)
@@ -373,10 +366,6 @@ func (s *Slack) Conversations(ctx context.Context) ([]Conversation, error) {
 		if v := visits[c.ID]; v > 0 {
 			conv.Visited = time.Unix(v, 0)
 		}
-		conv.Muted = s.mutes.IsMuted(c.ID)
-		conv.Notify = levels[c.ID]
-		conv.Starred = starred[c.ID]
-		conv.Section, _ = s.sections.SectionForChannel(c.ID)
 		convs = append(convs, conv)
 	}
 	s.convOrder = activityOrder(convs)
@@ -385,6 +374,77 @@ func (s *Slack) Conversations(ctx context.Context) ([]Conversation, error) {
 	sortConversations(convs)
 	s.watchPresence(peers)
 	return convs, nil
+}
+
+// conversationOfLocked is a Slack conversation as the windows show it:
+// its kind, its name (a DM's peer, a group DM's members), the peer's
+// picture, and the user's settings for it (mute, notify level, star,
+// sidebar section). It records the name and kind for later lookups.
+// Read state is the caller's. s.mu is held; a DM's peer should be
+// resolved beforehand (resolveAll) for its name to be known.
+func (s *Slack) conversationOfLocked(c slack.Channel, notify NotifyLevel, starred bool) Conversation {
+	conv := Conversation{ID: c.ID, Name: c.Name, Kind: KindChannel}
+	switch {
+	case c.IsIM:
+		conv.Kind = KindDM
+		conv.Name = s.users[c.User]
+		if conv.Name == "" {
+			conv.Name = c.User
+		}
+		conv.AvatarURL = s.avatars[c.User]
+		conv.PeerID = c.User
+	case c.IsMpIM:
+		conv.Kind = KindGroupDM
+		conv.Name = slackfmt.FormatMPDMName(c.Name, func(h string) string { return s.handles[h] })
+	case c.IsPrivate:
+		conv.Kind = KindPrivate
+	}
+	s.channels[c.ID] = conv.Name
+	s.kinds[c.ID] = conv.Kind
+	conv.Muted = s.mutes.IsMuted(c.ID)
+	conv.Notify = notify
+	conv.Starred = starred
+	conv.Section, _ = s.sections.SectionForChannel(c.ID)
+	return conv
+}
+
+// opened makes a conversation Slack says the user now has (a new DM,
+// a channel joined) one of theirs: named, recorded, cached, first in
+// the activity order. It returns how the windows show it.
+func (s *Slack) opened(ctx context.Context, c slack.Channel) Conversation {
+	if c.IsIM && c.User != "" {
+		s.resolveAll(ctx, []string{c.User})
+	}
+	levels := s.notifyLevels()
+	starred := slices.Contains(s.sections.StarredConversationIDs(), c.ID)
+	s.mu.Lock()
+	conv := s.conversationOfLocked(c, levels[c.ID], starred)
+	if !slices.Contains(s.convOrder, c.ID) {
+		s.convOrder = append([]string{c.ID}, s.convOrder...)
+	}
+	s.mu.Unlock()
+	s.persistChannels([]Conversation{conv})
+	return conv
+}
+
+// rawOpened is the socket's mpim_open, im_created, group_joined,
+// channel_joined.
+type rawOpened struct{ ch slack.Channel }
+
+// Conversation is one conversation by ID, asked of Slack
+// (conversations.info): for a message from a conversation the list
+// does not know yet.
+func (s *Slack) Conversation(ctx context.Context, id string) (Conversation, error) {
+	ch, err := s.client.GetConversationInfo(ctx, id)
+	if err != nil {
+		return Conversation{}, err
+	}
+	conv := s.opened(ctx, *ch)
+	select {
+	case s.queue <- rawEmit{ConversationOpened{Conv: conv}}:
+	case <-ctx.Done():
+	}
+	return conv, nil
 }
 
 // persistChannels writes the conversations to the cache: the rows a
@@ -662,6 +722,7 @@ func (s *Slack) fromSlack(ctx context.Context, channelID string, raw []slack.Mes
 func (s *Slack) fromCache(ctx context.Context, rows []cache.Message) []Message {
 	msgs := make([]rawMessage, 0, len(rows))
 	var ids []string
+	latest := map[string]string{} // a parent's newest reply, by its ts
 	for _, row := range rows {
 		var m slack.Message
 		if err := json.Unmarshal([]byte(row.RawJSON), &m); err != nil || m.Timestamp == "" {
@@ -669,6 +730,9 @@ func (s *Slack) fromCache(ctx context.Context, rows []cache.Message) []Message {
 		}
 		r := rawFromSlack(row.ChannelID, m)
 		r.ts, r.threadTS, r.replyCount = row.TS, row.ThreadTS, row.ReplyCount
+		if m.LatestReply != "" {
+			latest[row.TS] = m.LatestReply
+		}
 		r.edited = r.edited || row.EditedAt != ""
 		if row.Subtype != "" {
 			r.subtype = row.Subtype
@@ -677,7 +741,9 @@ func (s *Slack) fromCache(ctx context.Context, rows []cache.Message) []Message {
 		ids = append(ids, r.mentioned()...)
 	}
 	s.cachedReactions(msgs)
-	return s.finish(ctx, msgs, ids)
+	out := s.finish(ctx, msgs, ids)
+	s.markUnreadThreads(out, latest)
+	return out
 }
 
 // cachedReactions replaces the reactions each message's raw_json had
@@ -822,21 +888,53 @@ func reactions(rs []slack.ItemReaction, self string) []Reaction {
 // a no-op by then. Slack saying the reaction is already there (or
 // already gone) is what the user asked for, so it is no error.
 func (s *Slack) React(ctx context.Context, channelID, ts, name string, add bool) error {
-	var err error
-	if add {
-		err = s.client.AddReaction(ctx, channelID, ts, name)
-	} else {
-		err = s.client.RemoveReaction(ctx, channelID, ts, name)
+	// Slack keeps one name per emoji (+1, not thumbsup); a custom emoji
+	// keeps its own. Sent and shown under that name, the socket's echo
+	// lands on the same pill.
+	s.mu.Lock()
+	customs := s.customs
+	s.mu.Unlock()
+	name = emoji.CanonicalSlackName(name, customs)
+	self := s.client.UserID()
+	start := time.Now()
+	show := func(added bool) {
+		select {
+		case s.queue <- rawReaction{channelID, ts, self, name, added}:
+		case <-ctx.Done():
+		}
 	}
-	if err != nil && !isSlackError(err, "already_reacted", "no_reaction") {
-		return err
+	err := reactWith(ctx, add, show, func(ctx context.Context) error {
+		if add {
+			return s.client.AddReaction(ctx, channelID, ts, name)
+		}
+		return s.client.RemoveReaction(ctx, channelID, ts, name)
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "slk-gio: reaction :%s: on %s/%s (add %v) failed after %s: %v\n",
+			name, channelID, ts, add, time.Since(start).Round(time.Millisecond), err)
 	}
-	select {
-	case s.queue <- rawReaction{channelID, ts, s.client.UserID(), name, add}:
-	case <-ctx.Done():
-		return ctx.Err()
+	return err
+}
+
+// reactTimeout bounds one reactions.add or reactions.remove: a request
+// that never returns becomes an error the user sees, rather than a
+// click that silently does nothing.
+const reactTimeout = 15 * time.Second
+
+// reactWith shows a reaction change at once (show), makes it in Slack
+// (call, bounded by reactTimeout) and, when Slack refuses or does not
+// answer, shows the change taken back and returns why. Slack saying
+// it was already so (already_reacted, no_reaction) is success.
+func reactWith(ctx context.Context, add bool, show func(added bool), call func(context.Context) error) error {
+	show(add)
+	cctx, cancel := context.WithTimeout(ctx, reactTimeout)
+	err := call(cctx)
+	cancel()
+	if err == nil || isSlackError(err, "already_reacted", "no_reaction") {
+		return nil
 	}
-	return nil
+	show(!add)
+	return err
 }
 
 // isSlackError reports whether err is a Slack API error with one of
@@ -846,7 +944,12 @@ func isSlackError(err error, codes ...string) bool {
 	if errors.As(err, &se) {
 		return slices.Contains(codes, se.Err)
 	}
-	return slices.Contains(codes, err.Error())
+	for _, c := range codes {
+		if msg := err.Error(); msg == c || strings.HasSuffix(msg, ": "+c) {
+			return true
+		}
+	}
+	return false
 }
 
 // slackbotID is Slackbot's user ID; it needs no lookup.
@@ -978,6 +1081,9 @@ func (s *Slack) RunCommand(ctx context.Context, channelID, threadTS, name, args 
 func (s *Slack) Profile(ctx context.Context, id string) (Profile, error) {
 	s.mu.Lock()
 	p, ok := s.profiles[id]
+	if ok {
+		p = s.withDNDLocked(p)
+	}
 	s.mu.Unlock()
 	if ok {
 		return p, nil
@@ -1005,17 +1111,18 @@ func (s *Slack) Profile(ctx context.Context, id string) (Profile, error) {
 		s.persistUser(id, u.Name, u.Profile.DisplayName, u.Profile.Image72, u.IsBot)
 		name := s.rememberUser(id, u.Name, u.Profile.DisplayName, u.RealName, u.Profile.Image72)
 		p = Profile{
-			ID:          id,
-			Name:        name,
-			RealName:    u.RealName,
-			Handle:      u.Name,
-			Title:       u.Profile.Title,
-			StatusEmoji: u.Profile.StatusEmoji,
-			StatusText:  u.Profile.StatusText,
-			TZLabel:     u.TZLabel,
-			TZOffset:    u.TZOffset,
-			HasTZ:       u.TZ != "",
-			AvatarURL:   u.Profile.Image192,
+			ID:            id,
+			Name:          name,
+			RealName:      u.RealName,
+			Handle:        u.Name,
+			Title:         u.Profile.Title,
+			StatusEmoji:   u.Profile.StatusEmoji,
+			StatusText:    u.Profile.StatusText,
+			StatusExpires: unixTime(int64(u.Profile.StatusExpiration)),
+			TZLabel:       u.TZLabel,
+			TZOffset:      u.TZOffset,
+			HasTZ:         u.TZ != "",
+			AvatarURL:     u.Profile.Image192,
 		}
 		if p.AvatarURL == "" {
 			p.AvatarURL = u.Profile.Image72
@@ -1026,6 +1133,7 @@ func (s *Slack) Profile(ctx context.Context, id string) (Profile, error) {
 	}
 	s.mu.Lock()
 	s.profiles[id] = p
+	p = s.withDNDLocked(p)
 	s.mu.Unlock()
 	return p, nil
 }
@@ -1147,7 +1255,15 @@ func (s *Slack) Permalink(ctx context.Context, channelID, ts string) (string, er
 // MarkThreadRead marks a thread read up to ts, as viewing it in Slack
 // does.
 func (s *Slack) MarkThreadRead(ctx context.Context, channelID, threadTS, ts string) error {
-	return s.client.MarkThread(ctx, channelID, threadTS, ts)
+	if err := s.client.MarkThread(ctx, channelID, threadTS, ts); err != nil {
+		return err
+	}
+	// Slack echoes it as thread_marked; showing it now is the same.
+	select {
+	case s.queue <- rawThreadMarked{channelID, threadTS, ts}:
+	case <-ctx.Done():
+	}
+	return nil
 }
 
 // Thread answers from the cache when it holds the thread and fetches
@@ -1312,6 +1428,30 @@ func (s *Slack) Run(ctx context.Context, emit func(Event)) error {
 				emit(v.ev)
 			case rawSubteams:
 				s.groupsChangedInSlack(ctx)
+			case rawOpened:
+				emit(ConversationOpened{Conv: s.opened(lctx, v.ch)})
+			case rawThreadMarked:
+				s.threadMarked(v, emit)
+			case rawThreadSub:
+				s.threadFollowed(v, emit)
+			case rawThreadsRecount:
+				s.recountThreads(emit)
+			case rawStatus:
+				s.applyStatus(v.userID, v.st)
+				emit(ProfileChanged{UserID: v.userID})
+			case rawInvalidated:
+				s.forgetProfile(v.userID)
+				emit(ProfileChanged{UserID: v.userID})
+			case rawDND:
+				s.setDND(v)
+				emit(ProfileChanged{UserID: v.userID})
+			case rawTyping:
+				if v.userID != "" && v.userID != s.client.UserID() {
+					emit(Typing{ChannelID: v.channelID, UserID: v.userID, Name: s.userName(lctx, v.userID)})
+				}
+			case rawAppStatus:
+				emit(AppStatus{ChannelID: v.ChannelID, ThreadTS: v.ThreadTS, BotUserID: v.BotUserID,
+					Name: s.userName(lctx, v.BotUserID), Status: v.Status})
 			case rawReaction:
 				if s.sync != nil {
 					if err := s.sync.ApplyReaction(v.channelID, v.ts, v.user, v.emoji, v.added); err != nil {
@@ -1421,7 +1561,7 @@ func (c *connScope) end() {
 // the socket missed are caught up (catchUpAfterConnect).
 func (s *Slack) afterConnect(ctx context.Context, first bool) {
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	unreads, _, err := s.client.GetUnreadCountsContext(cctx)
+	unreads, agg, err := s.client.GetUnreadCountsContext(cctx)
 	cancel()
 	if err != nil {
 		if ctx.Err() == nil {
@@ -1429,6 +1569,7 @@ func (s *Slack) afterConnect(ctx context.Context, first bool) {
 		}
 		return
 	}
+	s.noteThreadsAggregate(ctx, agg)
 	if !first {
 		select {
 		case s.queue <- rawCounts{unreads}:
@@ -1457,6 +1598,9 @@ func (s *Slack) applyEvent(ctx context.Context, ev slackclient.MessageEvent, emi
 	r.edited = r.edited || ev.Kind == slackclient.MessageChanged
 	s.resolveAll(ctx, r.mentioned())
 	emit(MessagePosted{Message: s.message(ctx, r)})
+	if m := ev.Message; ev.Kind == slackclient.MessageNew && m.ThreadTimestamp != "" && m.ThreadTimestamp != m.Timestamp {
+		s.replyArrived(ev.ChannelID, m.ThreadTimestamp, m.User, emit)
+	}
 }
 
 // socketHandler forwards the socket events the GUI uses to Run and
@@ -1521,6 +1665,18 @@ func (h socketHandler) OnPresenceChange(user, presence string) {
 	h.queue <- rawPresence{user, presence}
 }
 
+// OnConversationOpened is a new DM, a channel joined: the list gains
+// it (rawOpened, on the event loop).
+func (h socketHandler) OnConversationOpened(ch slack.Channel) { h.queue <- rawOpened{ch} }
+
+// OnUserTyping and OnAssistantStatus are named on the event loop.
+func (h socketHandler) OnUserTyping(channelID, userID string) {
+	h.queue <- rawTyping{channelID, userID}
+}
+func (h socketHandler) OnAssistantStatus(st slackclient.AssistantStatus) {
+	h.queue <- rawAppStatus(st)
+}
+
 // OnSubteamChanged is a usergroup created, changed or its members
 // changed: the groups are read again, at most once a minute.
 func (h socketHandler) OnSubteamChanged() { h.queue <- rawSubteams{} }
@@ -1548,17 +1704,8 @@ func (h socketHandler) OnMessageDeleted(channelID, ts string) {
 func (h socketHandler) OnConnect()    { h.queue <- rawConnected(true) }
 func (h socketHandler) OnDisconnect() { h.queue <- rawConnected(false) }
 
-func (socketHandler) OnViewOpened(string)                                           {}
-func (socketHandler) OnUserTyping(string, string)                                   {}
-func (socketHandler) OnAssistantStatus(slackclient.AssistantStatus)                 {}
-func (socketHandler) OnSelfPresenceChange(string)                                   {}
-func (socketHandler) OnDNDChange(bool, int64)                                       {}
-func (socketHandler) OnThreadMarked(string, string, string, slackclient.Subscribed) {}
-func (socketHandler) OnThreadSubscriptionChanged(string, string, string, bool)      {}
-func (socketHandler) OnConversationOpened(slack.Channel)                            {}
-func (socketHandler) OnMemberJoined(string, string)                                 {}
-func (socketHandler) OnMemberLeft(string, string)                                   {}
-func (socketHandler) OnUserStatusChange(string, slackclient.UserStatus)             {}
-func (socketHandler) OnUserInvalidated(string)                                      {}
-func (socketHandler) OnDNDInvalidated(string)                                       {}
-func (socketHandler) OnUserDNDChange(string, bool, int64)                           {}
+func (socketHandler) OnViewOpened(string)           {}
+func (socketHandler) OnSelfPresenceChange(string)   {}
+func (socketHandler) OnDNDChange(bool, int64)       {}
+func (socketHandler) OnMemberJoined(string, string) {}
+func (socketHandler) OnMemberLeft(string, string)   {}

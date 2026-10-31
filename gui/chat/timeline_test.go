@@ -166,3 +166,25 @@ func TestFetchedReplyIsNotCountedAgainLive(t *testing.T) {
 		t.Fatalf("reply count %d, want 1", got)
 	}
 }
+
+func TestTimelineThreadState(t *testing.T) {
+	var tl Timeline
+	parent := backend.Message{ChannelID: "C1", TS: "1.0", ReplyCount: 2}
+	tl.Merge([]backend.Message{parent}, nil)
+	if !tl.Apply("C1", backend.ThreadState{ChannelID: "C1", ThreadTS: "1.0", Unread: true}) {
+		t.Fatal("unread not applied")
+	}
+	edit := parent
+	edit.Edited = true
+	tl.Apply("C1", backend.MessagePosted{Message: edit})
+	if !tl.Messages()[0].ThreadUnread {
+		t.Fatal("an edit dropped the unread mark")
+	}
+	if tl.Apply("C1", backend.ThreadState{ChannelID: "C2", ThreadTS: "1.0", Unread: false}) {
+		t.Fatal("another conversation's thread changed this one")
+	}
+	tl.Apply("C1", backend.ThreadState{ChannelID: "C1", ThreadTS: "1.0"})
+	if tl.Messages()[0].ThreadUnread {
+		t.Fatal("still unread after it was read")
+	}
+}

@@ -86,7 +86,7 @@ func (t *Timeline) Apply(channelID string, ev backend.Event) bool {
 		if i, ok := t.msgs.find(m.TS); ok {
 			// An edit carries no reply count, nor (reliably) reactions,
 			// which arrive as their own events; keep the ones we have.
-			m.ReplyCount, m.Reactions = t.msgs[i].ReplyCount, t.msgs[i].Reactions
+			m.ReplyCount, m.Reactions, m.ThreadUnread = t.msgs[i].ReplyCount, t.msgs[i].Reactions, t.msgs[i].ThreadUnread
 			t.msgs[i] = m
 			return true
 		}
@@ -106,6 +106,16 @@ func (t *Timeline) Apply(channelID string, ev backend.Event) bool {
 			return false
 		}
 		return t.msgs.react(ev)
+	case backend.ThreadState:
+		if ev.ChannelID != channelID {
+			return false
+		}
+		i, ok := t.msgs.find(ev.ThreadTS)
+		if !ok || t.msgs[i].ThreadUnread == ev.Unread {
+			return false
+		}
+		t.msgs[i].ThreadUnread = ev.Unread
+		return true
 	}
 	return false
 }

@@ -127,7 +127,7 @@ func nextPosted(t *testing.T, got <-chan Event) MessagePosted {
 		switch ev := ev.(type) {
 		case MessagePosted:
 			return ev
-		case PresenceChanged, UserGroupsChanged:
+		case PresenceChanged, UserGroupsChanged, Typing, ConversationOpened, ProfileChanged, ThreadsUnread, ThreadState, ThreadsChanged:
 		default:
 			t.Fatalf("got %#v, want a message", ev)
 		}
@@ -145,7 +145,7 @@ func TestFakeSearchAndBackfillProgress(t *testing.T) {
 	go f.Run(ctx, func(ev Event) { got <- ev })
 	<-got // connected
 
-	hits, err := f.Search(ctx, "offsite", 10, Newest)
+	hits, err := f.Search(ctx, Words("offsite"), 10, Newest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestFakeSearchAndBackfillProgress(t *testing.T) {
 			t.Fatal("hits are not newest first")
 		}
 	}
-	if hits, _ = f.Search(ctx, "", 10, Newest); hits != nil {
+	if hits, _ = f.Search(ctx, Words(""), 10, Newest); hits != nil {
 		t.Fatal("blank query returned hits")
 	}
 
@@ -311,11 +311,11 @@ func TestFakeSearchOrders(t *testing.T) {
 	dense := f.appendLocked("C2", "Ada Lovelace", "queue queue queue")
 	newer := f.appendLocked("C2", "Grace Hopper", "the queue is fine")
 	f.mu.Unlock()
-	best, _ := f.Search(ctx, "queue", 50, Relevance)
+	best, _ := f.Search(ctx, Words("queue"), 50, Relevance)
 	if len(best) == 0 || best[0].Message.TS != dense.TS {
 		t.Fatalf("relevance: first is %+v, want the message saying it three times", best[0].Message)
 	}
-	recent, _ := f.Search(ctx, "queue", 50, Newest)
+	recent, _ := f.Search(ctx, Words("queue"), 50, Newest)
 	if recent[0].Message.TS != newer.TS {
 		t.Fatalf("newest: first is %s, want %s", recent[0].Message.TS, newer.TS)
 	}
@@ -340,5 +340,67 @@ func TestFakeUserGroups(t *testing.T) {
 	}
 	if name, ok := fakeNames.UserGroup("S2"); !ok || name != "design" {
 		t.Fatalf("UserGroup(S2) = %q, %v", name, ok)
+	}
+}
+
+func TestFakeTypesBeforeATimedPost(t *testing.T) {
+	f := NewFake(time.Unix(1_700_000_000, 0))
+	f.Interval = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan Event, 16)
+	go f.Run(ctx, func(ev Event) { got <- ev })
+	var typing *Typing
+	for ev := range got {
+		switch ev := ev.(type) {
+		case Typing:
+			typing = &ev
+		case MessagePosted:
+			if typing == nil {
+				t.Fatal("a timed post came without typing first")
+			}
+			if ev.Message.ChannelID != typing.ChannelID || ev.Message.AuthorID != typing.UserID {
+				t.Fatalf("typing %+v, then a post by %s in %s", *typing, ev.Message.AuthorID, ev.Message.ChannelID)
+			}
+			return
+		}
+	}
+}
+
+func TestFakeReactKeepsSlacksName(t *testing.T) {
+	f := NewFake(time.Unix(1_700_000_000, 0))
+	feed := f.pageLocked("C1", "")
+	ts := feed[0].TS
+	if err := f.React(context.Background(), "C1", ts, "thumbsup", true); err != nil {
+		t.Fatal(err)
+	}
+	if ev := (<-f.events).(ReactionChanged); ev.Name != "+1" {
+		t.Fatalf("reacted as %q, want +1", ev.Name)
+	}
+}
+
+func TestFakeThreads(t *testing.T) {
+	f := NewFake(time.Unix(1_700_000_000, 0))
+	ts, err := f.Threads(context.Background())
+	if err != nil || len(ts) != 2 {
+		t.Fatalf("threads %+v, %v", ts, err)
+	}
+	var unread *ThreadSummary
+	for i := range ts {
+		if ts[i].Unread {
+			unread = &ts[i]
+		}
+	}
+	if unread == nil || unread.Replies != 3 || unread.Author == "" {
+		t.Fatalf("unread thread %+v", unread)
+	}
+	if err := f.MarkThreadRead(context.Background(), "C1", unread.ThreadTS, ""); err != nil {
+		t.Fatal(err)
+	}
+	if ev := (<-f.events).(ThreadState); ev.ThreadTS != unread.ThreadTS || ev.Unread {
+		t.Fatalf("state %+v", ev)
+	}
+	if ev := (<-f.events).(ThreadsUnread); ev.Count != 0 {
+		t.Fatalf("count %+v", ev)
 	}
 }

@@ -3,6 +3,7 @@ package chat
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/gammons/slk/gui/backend"
 )
@@ -148,5 +149,59 @@ func TestReadableRoundTrip(t *testing.T) {
 	}
 	if back := m.Wire(read); back != wire {
 		t.Fatalf("round trip %q, want %q", back, wire)
+	}
+}
+
+func TestBestPerson(t *testing.T) {
+	people := []backend.Person{
+		{ID: "U1", Name: "Ada Lovelace", Handle: "ada"},
+		{ID: "U2", Name: "Adam", Handle: "adam"},
+		{ID: "U3", Name: "Grace Hopper", Handle: "grace"},
+		{ID: "B1", Name: "Adabot", Bot: true},
+		{ID: "U4", Name: "Linus", RealName: "Linus Torvalds"},
+	}
+	for _, c := range []struct{ q, want string }{
+		{"ada", "U2"},      // both start with it: the shorter name
+		{"@ada lov", "U1"}, // the full name
+		{"lovelace", "U1"}, // a word of it
+		{"adlv", "U1"},     // letters in order
+		{"hopp", "U3"},     // a word
+		{"torv", "U4"},     // the real name
+		{"ADABOT", "B1"},   // a bot when only it matches
+		{"race", "U3"},     // contains
+		{"lnt", "U4"},      // three letters in order
+		{"lt", ""},         // two in order are too few to mean anything
+		{"zzz", ""},
+		{"", ""},
+	} {
+		p, ok := BestPerson(c.q, people)
+		if ok != (c.want != "") || p.ID != c.want {
+			t.Errorf("BestPerson(%q) = %q %v, want %q", c.q, p.ID, ok, c.want)
+		}
+	}
+}
+
+func TestBestConversation(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	convs := []backend.Conversation{
+		{ID: "C1", Name: "general", Kind: backend.KindChannel, Latest: now.Add(-time.Hour)},
+		{ID: "C2", Name: "gen-ai", Kind: backend.KindChannel, Latest: now},
+		{ID: "C3", Name: "eng-platform", Kind: backend.KindPrivate},
+	}
+	for _, c := range []struct{ q, want string }{
+		{"#gen", "C2"}, // both start with it: the more recently active
+		{"genera", "C1"},
+		{"platform", "C3"}, // a word
+		{"engpl", "C3"},    // letters in order
+		{"nope", ""},
+	} {
+		got, ok := BestConversation(c.q, convs)
+		if ok != (c.want != "") || got.ID != c.want {
+			t.Errorf("BestConversation(%q) = %q %v, want %q", c.q, got.ID, ok, c.want)
+		}
+	}
+	g, ok := BestGroup("@eng", []backend.UserGroup{{ID: "S1", Handle: "engineering"}, {ID: "S2", Handle: "design"}})
+	if !ok || g.ID != "S1" {
+		t.Fatalf("BestGroup: %v %v", g, ok)
 	}
 }

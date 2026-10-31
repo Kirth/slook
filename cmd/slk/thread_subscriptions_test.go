@@ -9,10 +9,11 @@ import (
 
 	"github.com/gammons/slk/internal/cache"
 	slackclient "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/threadsubs"
 	"github.com/slack-go/slack"
 )
 
-// fakeSubscriptions implements threadSubscriptionLister and counts its
+// fakeSubscriptions implements threadsubs.Lister and counts its
 // calls, so a caller that fetches the list more than once per trigger
 // is visible.
 type fakeSubscriptions struct {
@@ -51,8 +52,8 @@ func subView(channel, threadTS, lastRead, text, user string, active bool) slackc
 	}
 }
 
-func newSubscriptionSync(db *cache.DB, fake *fakeSubscriptions, cb func(bool)) *threadSubscriptionSync {
-	return &threadSubscriptionSync{client: fake, db: db, workspaceID: "T1", availableCb: cb}
+func newSubscriptionSync(db *cache.DB, fake *fakeSubscriptions, cb func(bool)) *threadsubs.Sync {
+	return &threadsubs.Sync{Client: fake, DB: db, WorkspaceID: "T1", Available: cb}
 }
 
 // TestThreadSubscriptions_PopulatesTable verifies the sync fetches the
@@ -64,7 +65,7 @@ func TestThreadSubscriptions_PopulatesTable(t *testing.T) {
 		subView("C1", "1700000100.000000", "1700000150.000000", "p1", "U2", true),
 		subView("C2", "1700000200.000000", "1700000250.000000", "p2", "U3", true),
 	}}
-	if err := newSubscriptionSync(db, fake, nil).sync(context.Background()); err != nil {
+	if err := newSubscriptionSync(db, fake, nil).Run(context.Background()); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	got, err := db.ListActiveThreadSubscriptions("T1")
@@ -88,7 +89,7 @@ func TestThreadSubscriptions_UpsertsRootMessageIntoMessagesCache(t *testing.T) {
 	fake := &fakeSubscriptions{response: []slackclient.ThreadSubscriptionView{
 		subView("C1", "1700000100.000000", "1700000150.000000", "parent X", "U2", true),
 	}}
-	if err := newSubscriptionSync(db, fake, nil).sync(context.Background()); err != nil {
+	if err := newSubscriptionSync(db, fake, nil).Run(context.Background()); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 
@@ -114,7 +115,7 @@ func TestThreadSubscriptions_ReconcilesUnsubscribes(t *testing.T) {
 	fake := &fakeSubscriptions{response: []slackclient.ThreadSubscriptionView{
 		subView("C2", "1700000300.000000", "1700000350.000000", "p2", "U3", true),
 	}}
-	if err := newSubscriptionSync(db, fake, nil).sync(context.Background()); err != nil {
+	if err := newSubscriptionSync(db, fake, nil).Run(context.Background()); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	got, err := db.ListActiveThreadSubscriptions("T1")
@@ -134,7 +135,7 @@ func TestThreadSubscriptions_ErrorTriggersAvailabilityCallback(t *testing.T) {
 	cb := func(available bool) { calls = append(calls, available) }
 	fake := &fakeSubscriptions{err: errors.New("network kaboom")}
 
-	if err := newSubscriptionSync(db, fake, cb).sync(context.Background()); err == nil {
+	if err := newSubscriptionSync(db, fake, cb).Run(context.Background()); err == nil {
 		t.Fatalf("expected error, got nil")
 	}
 	if len(calls) != 1 || calls[0] {
@@ -148,7 +149,7 @@ func TestThreadSubscriptions_SuccessTriggersAvailabilityCallback(t *testing.T) {
 	db := newTestDB(t)
 	var calls []bool
 	cb := func(available bool) { calls = append(calls, available) }
-	if err := newSubscriptionSync(db, &fakeSubscriptions{}, cb).sync(context.Background()); err != nil {
+	if err := newSubscriptionSync(db, &fakeSubscriptions{}, cb).Run(context.Background()); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(calls) != 1 || !calls[0] {
@@ -202,54 +203,48 @@ func zeroStagger(t *testing.T) {
 // under -race. If the goroutine never exits, this hangs and `go test`'s
 // own timeout dumps the goroutine that is stuck, the same failure mode
 // as a blocking channel receive.
-func awaitGateRelease(g *threadSubsGate) {
-	for {
-		g.mu.Lock()
-		running := g.running
-		g.mu.Unlock()
-		if !running {
-			return
-		}
+func awaitGateRelease(g *threadsubs.Gate) {
+	for g.Running() {
 		time.Sleep(time.Millisecond)
 	}
 }
 
 func TestThreadSubsGate_FirstSyncAdmittedOnce(t *testing.T) {
-	g := &threadSubsGate{window: time.Hour}
+	g := &threadsubs.Gate{Window: time.Hour}
 	now := time.Now()
 
-	first, ok := g.tryStart(now)
+	first, ok := g.TryStart(now)
 	if !ok || !first {
 		t.Fatalf("first tryStart = (%v, %v); want (true, true)", first, ok)
 	}
-	g.done()
+	g.Done()
 
-	if _, ok := g.tryStart(now.Add(30 * time.Minute)); ok {
+	if _, ok := g.TryStart(now.Add(30 * time.Minute)); ok {
 		t.Fatal("tryStart inside the window admitted a second sync")
 	}
-	first, ok = g.tryStart(now.Add(2 * time.Hour))
+	first, ok = g.TryStart(now.Add(2 * time.Hour))
 	if !ok {
 		t.Fatal("tryStart after the window did not admit a re-sync")
 	}
 	if first {
 		t.Error("re-sync reported first=true; the startup stagger must apply exactly once per workspace")
 	}
-	g.done()
+	g.Done()
 }
 
 func TestThreadSubsGate_BlocksWhileRunning(t *testing.T) {
 	// A second trigger landing mid-sync (view opened while the boot
 	// sync is still paginating) must not double the request volume,
 	// even when the throttle window has technically elapsed.
-	g := &threadSubsGate{window: 0}
-	if _, ok := g.tryStart(time.Now()); !ok {
+	g := &threadsubs.Gate{Window: 0}
+	if _, ok := g.TryStart(time.Now()); !ok {
 		t.Fatal("first tryStart not admitted")
 	}
-	if _, ok := g.tryStart(time.Now().Add(time.Hour)); ok {
+	if _, ok := g.TryStart(time.Now().Add(time.Hour)); ok {
 		t.Fatal("tryStart admitted while a sync is still running")
 	}
-	g.done()
-	if _, ok := g.tryStart(time.Now().Add(time.Hour)); !ok {
+	g.Done()
+	if _, ok := g.TryStart(time.Now().Add(time.Hour)); !ok {
 		t.Fatal("tryStart after done() not admitted")
 	}
 }
@@ -265,7 +260,7 @@ func TestEnsureThreadSubscriptions_FetchesOnceWithinWindow(t *testing.T) {
 	fake := &fakeSubscriptions{response: []slackclient.ThreadSubscriptionView{
 		subView("C1", "1700000100.000000", "1700000150.000000", "p1", "U2", true),
 	}}
-	gate := &threadSubsGate{window: time.Hour}
+	gate := &threadsubs.Gate{Window: time.Hour}
 	done := make(chan struct{}, 8)
 
 	var wg sync.WaitGroup
@@ -313,7 +308,7 @@ func TestEnsureThreadSubscriptions_ResyncsAfterWindow(t *testing.T) {
 	fake := &fakeSubscriptions{response: []slackclient.ThreadSubscriptionView{
 		subView("C1", "1700000100.000000", "1700000150.000000", "p1", "U2", true),
 	}}
-	gate := &threadSubsGate{window: 20 * time.Millisecond}
+	gate := &threadsubs.Gate{Window: 20 * time.Millisecond}
 	done := make(chan struct{}, 2)
 
 	ensureThreadSubscriptions(context.Background(), gate,
@@ -338,7 +333,7 @@ func TestEnsureThreadSubscriptions_ResyncsAfterWindow(t *testing.T) {
 	// release the gate, is now awaitGateRelease's job above; that half
 	// *was* load-sensitive and would have silently dropped the second
 	// trigger.
-	time.Sleep(gate.window)
+	time.Sleep(gate.Window)
 
 	ensureThreadSubscriptions(context.Background(), gate,
 		newSubscriptionSync(db, fake, nil),
@@ -381,7 +376,7 @@ func TestEnsureThreadSubscriptions_FirstSyncStaggers(t *testing.T) {
 	// remove.
 	threadSubsStaggerStep = time.Hour
 	threadSubsStagger.Store(2) // this workspace drew slot 2 → a 2h delay
-	blocked := &threadSubsGate{window: 0}
+	blocked := &threadsubs.Gate{Window: 0}
 	ctx, cancel := context.WithCancel(context.Background())
 	ensureThreadSubscriptions(ctx, blocked,
 		newSubscriptionSync(db, fake, nil),
@@ -401,7 +396,7 @@ func TestEnsureThreadSubscriptions_FirstSyncStaggers(t *testing.T) {
 	// sync completes, however long the slot actually took.
 	threadSubsStaggerStep = time.Millisecond
 	threadSubsStagger.Store(2)
-	gate := &threadSubsGate{window: 0}
+	gate := &threadsubs.Gate{Window: 0}
 	ensureThreadSubscriptions(context.Background(), gate,
 		newSubscriptionSync(db, fake, nil),
 		func() { done <- struct{}{} })
@@ -434,7 +429,7 @@ func TestEnsureThreadSubscriptions_FailureDoesNotNotify(t *testing.T) {
 	zeroStagger(t)
 	db := newTestDB(t)
 	fake := &fakeSubscriptions{err: errors.New("boom")}
-	gate := &threadSubsGate{window: time.Hour}
+	gate := &threadsubs.Gate{Window: time.Hour}
 	notified := make(chan struct{}, 1)
 
 	ensureThreadSubscriptions(context.Background(), gate,

@@ -2,7 +2,8 @@
 // Package richtext is gioui.org/x/richtext v0.10.3, copied so it can use
 // this module's styledtext, which paints color emoji. See that package.
 // It adds SpanStyle.Inline, for drawing over a span (a custom emoji's
-// picture over a placeholder character).
+// picture over a placeholder character), and TextStyle.Segments, where
+// the text was drawn, for selecting it.
 package richtext
 
 import (
@@ -231,6 +232,9 @@ type TextStyle struct {
 	// sensible default will be used.
 	LineHeightScale float32
 	*text.Shaper
+	// Segments, when set, receives each piece of text as drawn (see
+	// styledtext.Segment), for text selection.
+	Segments *[]styledtext.Segment
 }
 
 // Text constructs a TextStyle.
@@ -273,6 +277,7 @@ func (t TextStyle) Layout(gtx layout.Context) layout.Dimensions {
 	text.Alignment = t.Alignment
 	text.LineHeight = t.LineHeight
 	text.LineHeightScale = t.LineHeightScale
+	text.Segments = t.Segments
 	return text.Layout(gtx, func(gtx layout.Context, i int, dims layout.Dimensions) {
 		span := &t.Styles[i]
 		if span.Inline != nil {

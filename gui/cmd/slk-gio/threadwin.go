@@ -243,6 +243,9 @@ func (t *threadWindow) apply() {
 			}
 			continue
 		}
+		if t.typingApply(item) {
+			continue
+		}
 		switch v := item.(type) {
 		case threadLoaded:
 			t.loading = false
@@ -370,7 +373,7 @@ func (t *threadWindow) layout(gtx C) {
 	t.composeBox.update(gtx)
 	t.handleWidgets(gtx, func() { t.sendErr = "" })
 	defer t.trackPointer(gtx).Pop()
-	t.authorHover = ""
+	t.authorHover, t.pillHover = "", nil
 	if !t.focused {
 		gtx.Execute(key.FocusCmd{Tag: &t.composer})
 		t.focused = true
@@ -536,7 +539,9 @@ func (t *threadWindow) parentPost(gtx C, m backend.Message) D {
 		layout.Rigid(func(gtx C) D {
 			return layout.Inset{Top: unit.Dp(8), Left: indent}.Layout(gtx, func(gtx C) D {
 				var rows []layout.FlexChild
-				rows = append(rows, layout.Rigid(func(gtx C) D { return t.view.blocks(gtx, w, m.Body) }))
+				rows = append(rows, layout.Rigid(func(gtx C) D {
+					return t.selectable(gtx, w, m, func(gtx C) D { return t.view.blocks(gtx, w, m.Body) })
+				}))
 				if m.Edited {
 					rows = append(rows, layout.Rigid(func(gtx C) D {
 						lbl := secondaryLabel(t.th, "(edited)")

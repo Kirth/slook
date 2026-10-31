@@ -35,6 +35,21 @@ type spanShape struct {
 	call   op.CallOp
 	size   image.Point
 	ascent int
+	// text and xs are what the piece shows and each rune boundary's x
+	// (len runes+1), for Segments.
+	text string
+	xs   []int
+}
+
+// Segment is a piece of one span drawn on one line, for text selection:
+// the span's index in TextStyle.Styles, the text the piece shows, where
+// it is drawn, and the x of each rune boundary relative to Rect.Min.X
+// (len runes+1).
+type Segment struct {
+	Span int
+	Text string
+	Rect image.Rectangle
+	X    []int
 }
 
 // Layout renders the span using the provided text shaping.
@@ -82,6 +97,10 @@ type TextStyle struct {
 	LineHeightScale float32
 
 	*text.Shaper
+
+	// Segments, when set, receives every piece of text as it is drawn,
+	// in reading order, for text selection.
+	Segments *[]Segment
 }
 
 // Text constructs a TextStyle.
@@ -94,6 +113,7 @@ func Text(shaper *text.Shaper, styles ...SpanStyle) TextStyle {
 
 type spanResults struct {
 	call             op.CallOp
+	xs               []int
 	width            int
 	height           int
 	ascent           int
@@ -163,8 +183,13 @@ func (t TextStyle) layoutSpan(gtx layout.Context, maxWidth int, span SpanStyle) 
 			endedWithNewline = ti.hasNewline
 		}
 	}
+	xs := ti.runeXs(runesDisplayed)
+	// The piece ends where the next on its line begins (its width, as
+	// Layout places them), so a selection across pieces has no seams.
+	xs[len(xs)-1] = max(xs[len(xs)-1], ti.bounds.Dx())
 	return spanResults{
 		call:             call,
+		xs:               xs,
 		width:            ti.bounds.Dx(),
 		height:           ti.bounds.Dy(),
 		ascent:           ti.baseline,
@@ -231,6 +256,8 @@ func (t TextStyle) Layout(gtx layout.Context, spanFn func(gtx layout.Context, id
 				size:   image.Point{X: res.width, Y: res.height},
 				call:   res.call,
 				ascent: res.ascent,
+				text:   firstRunes(span.Content, res.runes),
+				xs:     res.xs,
 			})
 			// update the dimensions of the current line
 			lineDims.X += res.width
@@ -289,6 +316,17 @@ func (t TextStyle) Layout(gtx layout.Context, spanFn func(gtx layout.Context, id
 			stack := op.Offset(image.Pt(pad, 0)).Push(gtx.Ops)
 			lineCall.Add(gtx.Ops)
 			stack.Pop()
+			if t.Segments != nil {
+				for k, shape := range lineShapes {
+					min := image.Pt(pad+shape.offset.X, overallSize.Y)
+					*t.Segments = append(*t.Segments, Segment{
+						Span: spans[k+lineStartIndex].idx,
+						Text: shape.text,
+						Rect: image.Rectangle{Min: min, Max: min.Add(image.Pt(shape.size.X, max(shape.size.Y, lineDims.Y)))},
+						X:    shape.xs,
+					})
+				}
+			}
 
 			// reset line shaping data and update overall vertical dimensions
 			lineShapes = lineShapes[:0]
@@ -334,4 +372,14 @@ func (t TextStyle) Layout(gtx layout.Context, spanFn func(gtx layout.Context, id
 	}
 
 	return layout.Dimensions{Size: gtx.Constraints.Constrain(overallSize)}
+}
+
+// firstRunes is s cut after n runes.
+func firstRunes(s string, n int) string {
+	i := 0
+	for ; n > 0 && i < len(s); n-- {
+		_, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+	}
+	return s[:i]
 }

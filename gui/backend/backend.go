@@ -11,6 +11,7 @@ package backend
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/gammons/slk/gui/rich"
@@ -120,6 +121,9 @@ type Message struct {
 	ThreadTS     string
 	InThreadOnly bool
 	ReplyCount   int
+	// ThreadUnread marks a parent whose thread the user follows and has
+	// replies they have not read.
+	ThreadUnread bool
 	// Ephemeral marks a message only the user can see, such as a slash
 	// command's reply. Slack does not keep it: it is gone on reload.
 	Ephemeral bool
@@ -171,10 +175,17 @@ type Profile struct {
 	Title       string
 	StatusEmoji string // shortcode, e.g. ":palm_tree:"
 	StatusText  string
-	TZLabel     string
-	TZOffset    int // seconds east of UTC
-	HasTZ       bool
-	AvatarURL   string
+	// StatusExpires is when the status lapses; zero when it does not.
+	StatusExpires time.Time
+	// DND is whether they have do-not-disturb on, until DNDUntil (zero
+	// when unknown or open-ended). Known for people whose DND slk has
+	// asked about (a DM's peer) or heard change.
+	DND       bool
+	DNDUntil  time.Time
+	TZLabel   string
+	TZOffset  int // seconds east of UTC
+	HasTZ     bool
+	AvatarURL string
 }
 
 // Event is something that happened after startup. Run delivers them in
@@ -233,6 +244,67 @@ type UserGroup struct {
 // connect, or changed in Slack). Mine is the IDs of the user's own.
 type UserGroupsChanged struct{ Mine []string }
 
+// ThreadSummary is one thread the user follows, for the Threads view:
+// where it is, its parent (author and a one-line preview), how many
+// replies, when the last came, and whether some are unread.
+type ThreadSummary struct {
+	ChannelID string
+	Channel   string // the conversation's name
+	Kind      Kind
+	ThreadTS  string
+	AuthorID  string
+	Author    string
+	Preview   string
+	Replies   int
+	LastReply time.Time
+	Unread    bool
+}
+
+// ThreadState is a followed thread becoming read or unread.
+type ThreadState struct {
+	ChannelID string
+	ThreadTS  string
+	Unread    bool
+}
+
+// ThreadsUnread is how many followed threads have unread replies, and
+// how many of those mention the user (when known).
+type ThreadsUnread struct{ Count, Mentions int }
+
+// ThreadsChanged is the list of followed threads changing (a sync with
+// Slack, a thread followed or left): a Threads view reads it again.
+type ThreadsChanged struct{}
+
+// ProfileChanged is someone's status, DND or profile changing: what
+// was shown of them (a header, a hover card) should be asked again.
+type ProfileChanged struct{ UserID string }
+
+// ConversationOpened is a conversation the user newly has: a DM
+// someone started, a channel they joined or were added to, or one a
+// message arrived from that the list did not know. Read state comes
+// with the conversation's messages.
+type ConversationOpened struct{ Conv Conversation }
+
+// Typing is someone typing in a conversation (Slack's user_typing,
+// which names no thread). It lasts typing.Expiry unless repeated, and
+// ends with their message.
+type Typing struct {
+	ChannelID string
+	UserID    string
+	Name      string
+}
+
+// AppStatus is an app's "working" status on a thread (Slack's
+// ai_assistant_status): Status reads after its name ("is thinking…");
+// empty clears it.
+type AppStatus struct {
+	ChannelID string
+	ThreadTS  string
+	BotUserID string
+	Name      string
+	Status    string
+}
+
 // NotifyChanged is a conversation's notify level changing.
 type NotifyChanged struct {
 	ChannelID string
@@ -248,6 +320,67 @@ type MutesChanged struct{ Muted map[string]bool }
 type SearchHit struct {
 	Message Message
 }
+
+// SearchQuery is what Search looks for, with names already resolved to
+// IDs (gui/search.Resolve builds it from what the user typed). Every
+// part that is set must hold; a query with nothing set finds nothing.
+type SearchQuery struct {
+	// All are groups of alternatives, one of each group the text must
+	// match. An alternative is whole words in a row; a trailing * makes
+	// the last one a prefix ("ig*" matches "ignore", "ig" does not).
+	All [][]string
+	// None are alternatives the text must not match.
+	None []string
+	// Users and Channels are authors and conversations a message must
+	// be one of; NotUsers and NotChannels ones it must not.
+	Users, NotUsers, Channels, NotChannels []string
+	// Mentions are pieces of Slack markup (<@U1>, <!subteam^S1) the
+	// text must contain one of; NotMentions none of.
+	Mentions, NotMentions []string
+	// Since and Until bound the message's time, [Since, Until); zero is
+	// unbounded.
+	Since, Until time.Time
+	// Thread is a parent with replies, Reply a reply that was not also
+	// sent to the channel, Edited an edited message, Link one linking
+	// somewhere, File one with files, Reaction one with any reaction.
+	Thread, Reply, Edited, Link, File, Reaction Tri
+	// Emoji are reactions a message must have each of, NotEmoji ones it
+	// must have none of: names as Slack keeps them, without colons.
+	Emoji, NotEmoji []string
+	// Nothing is set when part of the query matched no one (from:
+	// someone unknown): it finds nothing.
+	Nothing bool
+}
+
+// Tri is a yes/no filter that may be left out.
+type Tri int8
+
+const (
+	Any Tri = iota // not filtered
+	Yes
+	No
+)
+
+// Words is a query for messages with every one of s's words (whole
+// words; end one with * for a prefix).
+func Words(s string) SearchQuery {
+	var q SearchQuery
+	for _, w := range strings.Fields(s) {
+		q.All = append(q.All, []string{w})
+	}
+	return q
+}
+
+// Empty is whether q asks for nothing at all.
+func (q SearchQuery) Empty() bool {
+	return len(q.All)+len(q.None)+len(q.Users)+len(q.NotUsers)+len(q.Channels)+len(q.NotChannels)+
+		len(q.Mentions)+len(q.NotMentions)+len(q.Emoji)+len(q.NotEmoji) == 0 &&
+		q.Since.IsZero() && q.Until.IsZero() && !q.Nothing &&
+		q.Thread == Any && q.Reply == Any && q.Edited == Any && q.Link == Any && q.File == Any && q.Reaction == Any
+}
+
+// Ranked is whether q has text to rank its hits by.
+func (q SearchQuery) Ranked() bool { return len(q.All) > 0 }
 
 // SearchOrder is how Search sorts its hits.
 type SearchOrder int
@@ -351,18 +484,25 @@ type HistoryUpdated struct {
 	ThreadTS string
 }
 
-func (MessagePosted) isEvent()     {}
-func (MessageDeleted) isEvent()    {}
-func (ConnectionChanged) isEvent() {}
-func (ReadChanged) isEvent()       {}
-func (SectionsChanged) isEvent()   {}
-func (MutesChanged) isEvent()      {}
-func (NotifyChanged) isEvent()     {}
-func (UserGroupsChanged) isEvent() {}
-func (PresenceChanged) isEvent()   {}
-func (HistoryUpdated) isEvent()    {}
-func (ReactionChanged) isEvent()   {}
-func (SyncChanged) isEvent()       {}
+func (MessagePosted) isEvent()      {}
+func (MessageDeleted) isEvent()     {}
+func (ConnectionChanged) isEvent()  {}
+func (ReadChanged) isEvent()        {}
+func (SectionsChanged) isEvent()    {}
+func (MutesChanged) isEvent()       {}
+func (NotifyChanged) isEvent()      {}
+func (UserGroupsChanged) isEvent()  {}
+func (Typing) isEvent()             {}
+func (ConversationOpened) isEvent() {}
+func (ProfileChanged) isEvent()     {}
+func (ThreadState) isEvent()        {}
+func (ThreadsUnread) isEvent()      {}
+func (ThreadsChanged) isEvent()     {}
+func (AppStatus) isEvent()          {}
+func (PresenceChanged) isEvent()    {}
+func (HistoryUpdated) isEvent()     {}
+func (ReactionChanged) isEvent()    {}
+func (SyncChanged) isEvent()        {}
 
 // Backend is one workspace.
 type Backend interface {
@@ -406,15 +546,30 @@ type Backend interface {
 	Delete(ctx context.Context, channelID, ts string) error
 	// Permalink is a link to the message in Slack.
 	Permalink(ctx context.Context, channelID, ts string) (string, error)
+	// Threads lists the threads the user follows, newest activity
+	// first, from the cache; it makes no request.
+	Threads(ctx context.Context) ([]ThreadSummary, error)
+	// RefreshThreads brings the followed threads up to date with Slack,
+	// at most every half hour (a sweep of up to ~60 requests); when it
+	// is done Run reports ThreadsChanged.
+	RefreshThreads()
 	// MarkThreadRead marks a thread read up to ts in Slack.
 	MarkThreadRead(ctx context.Context, channelID, threadTS, ts string) error
+	// Typing tells Slack the user is typing in a conversation; callers
+	// throttle it (typing.Throttle). Best-effort: a failure is dropped.
+	Typing(channelID string)
 	// Run delivers events to emit until ctx is done.
 	Run(ctx context.Context, emit func(Event)) error
 	// Images downloads avatars and pictures with the workspace's
 	// credentials. Nil means none can be shown.
 	Images() *imgpkg.Fetcher
 	// Profile describes a user or app by ID, for the hover card.
+	// Changes arrive through Run as ProfileChanged.
 	Profile(ctx context.Context, id string) (Profile, error)
+	// WatchDND asks Slack for someone's do-not-disturb state once (one
+	// request), for a DM's header; it lands in their Profile and comes
+	// back as a ProfileChanged. Later changes arrive by themselves.
+	WatchDND(userID string)
 	// People lists the people slk knows in the workspace (everyone it
 	// has seen), for completing @mentions. It makes no request: Slack's
 	// full member list can be huge, and the people the user talks with
@@ -438,6 +593,10 @@ type Backend interface {
 	MarkRead(ctx context.Context, channelID, ts string) error
 	// Visited records that the user opened a conversation.
 	Visited(channelID string)
+	// Conversation describes one conversation by ID, asking Slack: for
+	// a message from a conversation the list does not know. It is also
+	// reported through Run as a ConversationOpened.
+	Conversation(ctx context.Context, id string) (Conversation, error)
 	// Details fetches a conversation's topic, purpose and size.
 	Details(ctx context.Context, channelID string) (Details, error)
 	// Members lists who is in a conversation: from the cache when it
@@ -459,9 +618,10 @@ type Backend interface {
 	// CustomEmoji is the workspace's own emoji: name to picture URL, or
 	// "alias:<name>" (see emoji.BuildCustomEmojiURL).
 	CustomEmoji(ctx context.Context) (map[string]string, error)
-	// Search finds cached messages matching query, newest first, at
-	// most limit of them; replies included.
-	Search(ctx context.Context, query string, limit int, order SearchOrder) ([]SearchHit, error)
+	// Search finds cached messages matching q, in order, at most limit
+	// of them; replies included. Without text to rank by the order is
+	// newest first.
+	Search(ctx context.Context, q SearchQuery, limit int, order SearchOrder) ([]SearchHit, error)
 	// SyncStatus reports what the cache holds and what is being fetched.
 	SyncStatus(ctx context.Context) (SyncStatus, error)
 	// StartBackfill fills the cache back to horizon (0 for everything)

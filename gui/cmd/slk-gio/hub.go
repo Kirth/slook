@@ -48,12 +48,22 @@ type hub struct {
 	// muted is the muted conversations, from the list and then the
 	// socket's mute changes; notes decides and shows notifications (nil
 	// when they are off).
-	muted          map[string]bool
-	levels         map[string]backend.NotifyLevel // slk's notify levels, by channel ID
-	myGroups       map[string]bool                // the user's own usergroups, by ID
-	notes          *notifications.Center
-	list           *listWindow
-	search         *searchWindow          // the one search window, or nil
+	muted    map[string]bool
+	levels   map[string]backend.NotifyLevel // slk's notify levels, by channel ID
+	myGroups map[string]bool                // the user's own usergroups, by ID
+	// askedConv is the conversations asked of Slack because a message
+	// came from one the list did not know; each is asked once.
+	askedConv map[string]bool
+	// typingOn is [animations] typing_indicators: show who is typing,
+	// and tell Slack when the user is. Set before any window opens.
+	typingOn   bool
+	notes      *notifications.Center
+	list       *listWindow
+	search     *searchWindow  // the one search window, or nil
+	threadsWin *threadsWindow // the one Threads window, or nil
+	// threadsUnread is how many followed threads have unread replies,
+	// for the list's Threads row.
+	threadsUnread  backend.ThreadsUnread
 	chats          map[string]*chatWindow // by channel ID
 	threads        map[threadKey]*threadWindow
 	openingThreads map[threadKey]bool // thread windows being built
@@ -192,6 +202,7 @@ func (h *hub) dispatch(ev backend.Event) {
 		if c := h.chats[m.ChannelID]; c != nil {
 			to = append(to, &c.box)
 		}
+		h.askUnknownLocked(m.ChannelID)
 		if h.list != nil && !m.Ephemeral {
 			unread := !m.FromSelf && !m.Edited && !m.InThreadOnly && !h.focused[m.ChannelID]
 			h.list.box.post(activity{m.ChannelID, m.Time, unread})
@@ -216,6 +227,52 @@ func (h *hub) dispatch(ev backend.Event) {
 		}
 		for _, c := range h.chats {
 			to = append(to, &c.box)
+		}
+	case backend.ThreadsUnread:
+		h.threadsUnread = ev
+		if h.list != nil {
+			to = append(to, &h.list.box)
+		}
+	case backend.ThreadState:
+		if c := h.chats[ev.ChannelID]; c != nil {
+			to = append(to, &c.box)
+		}
+		if h.threadsWin != nil {
+			to = append(to, &h.threadsWin.box)
+		}
+	case backend.ThreadsChanged:
+		if h.threadsWin != nil {
+			to = append(to, &h.threadsWin.box)
+		}
+	case backend.ProfileChanged:
+		// Whoever shows them: any window's header or hover card.
+		for _, c := range h.chats {
+			to = append(to, &c.box)
+		}
+		for _, t := range h.threads {
+			to = append(to, &t.box)
+		}
+	case backend.ConversationOpened:
+		if h.list != nil {
+			to = append(to, &h.list.box) // its publish brings h.convs along
+		} else {
+			h.convs = upsertConv(h.convs, ev.Conv)
+		}
+	case backend.Typing:
+		if c := h.chats[ev.ChannelID]; c != nil && h.typingOn {
+			to = append(to, &c.box)
+		}
+	case backend.AppStatus:
+		if !h.typingOn {
+			break
+		}
+		if c := h.chats[ev.ChannelID]; c != nil {
+			to = append(to, &c.box)
+		}
+		for k, t := range h.threads {
+			if k.channelID == ev.ChannelID && k.ts == ev.ThreadTS {
+				to = append(to, &t.box)
+			}
 		}
 	case backend.UserGroupsChanged:
 		h.myGroups = map[string]bool{}
@@ -382,6 +439,7 @@ func (h *hub) showList() {
 	}
 	l := newListWindow(h, h.connected)
 	h.list = l
+	l.box.post(h.threadsUnread)
 	h.windows++
 	go l.run()
 	go l.load()
@@ -448,6 +506,7 @@ func (h *hub) adoptList(st listState) {
 	l := newListWindowFrom(h, st)
 	h.mu.Lock()
 	h.list = l
+	l.box.post(h.threadsUnread)
 	h.windows++
 	h.mu.Unlock()
 	go l.run()
@@ -473,6 +532,10 @@ func (h *hub) closed(w any, err error) {
 	case *searchWindow:
 		if h.search == w {
 			h.search = nil
+		}
+	case *threadsWindow:
+		if h.threadsWin == w {
+			h.threadsWin = nil
 		}
 	case *threadWindow:
 		if h.threads[w.key] == w {
@@ -644,6 +707,50 @@ func (h *hub) openNote(n notifications.Note) {
 // peopleFresh is how long the people list serves before it is read
 // again: new people show up as messages arrive.
 const peopleFresh = 5 * time.Minute
+
+// askUnknownLocked asks Slack about a conversation a message came from
+// that the list does not know (a DM someone just started, when the
+// socket's "opened" event did not say so), once. h.mu is held.
+func (h *hub) askUnknownLocked(channelID string) {
+	if channelID == "" || len(h.convs) == 0 || h.askedConv[channelID] {
+		return
+	}
+	for _, c := range h.convs {
+		if c.ID == channelID {
+			return
+		}
+	}
+	if h.askedConv == nil {
+		h.askedConv = map[string]bool{}
+	}
+	h.askedConv[channelID] = true
+	go func() {
+		if _, err := h.be.Conversation(h.ctx, channelID); err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio: new conversation", channelID+":", err)
+		}
+	}()
+}
+
+// upsertConv is convs with c in it: replacing the one with its ID, or
+// added. convs is not changed (it may be shared).
+func upsertConv(convs []backend.Conversation, c backend.Conversation) []backend.Conversation {
+	out := slices.Clone(convs)
+	for i := range out {
+		if out[i].ID == c.ID {
+			// Keep what the list knows of its activity and read state.
+			c.Unread, c.Mentions = out[i].Unread || c.Unread, max(out[i].Mentions, c.Mentions)
+			if out[i].Latest.After(c.Latest) {
+				c.Latest = out[i].Latest
+			}
+			if out[i].Visited.After(c.Visited) {
+				c.Visited = out[i].Visited
+			}
+			out[i] = c
+			return out
+		}
+	}
+	return append(out, c)
+}
 
 // seedGroups takes the user's own usergroups from what the backend
 // already knows (its cache), before any UserGroupsChanged: one only

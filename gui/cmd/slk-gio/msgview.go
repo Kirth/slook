@@ -44,7 +44,16 @@ type msgView struct {
 	pointer     image.Point
 	spanHover   string
 	authorHover string
-	hoverName   string
+	// selTS is the message holding the text selection, "" for none.
+	selTS     string
+	hoverName string
+	// pillHover is the reaction pill under the pointer this frame;
+	// pillShown is the one whose card is up, and since when.
+	pillHover *pillHover
+	pillShown struct {
+		key   string
+		since time.Time
+	}
 
 	// highlight is a message lit until a moment (a jump's target).
 	highlight struct {
@@ -113,6 +122,10 @@ func (v *msgView) applyCommon(item any) (handled bool, note string) {
 		return true, "" // the post already woke the window; it redraws
 	case customEmojiLoaded:
 		v.view.customs = it.customs
+		return true, ""
+	case backend.ProfileChanged:
+		// Asked again when next shown, through the backend's cache.
+		delete(v.profiles, it.UserID)
 		return true, ""
 	case reactFailed:
 		return true, "Could not react: " + it.err.Error()
@@ -305,6 +318,10 @@ func (v *msgView) hoverCard(gtx C) {
 	if v.menu.open || v.confirm.open || v.picker.open {
 		return // a popup is in front; the card would cover it
 	}
+	if v.pillHover != nil {
+		v.reactorsCard(gtx)
+		return
+	}
 	id := v.spanHover
 	if id == "" {
 		id = v.authorHover
@@ -484,7 +501,9 @@ func (v *msgView) body(gtx C, w *msgWidgets, m backend.Message, showAuthor bool)
 			})
 		}))
 	}
-	rows = append(rows, layout.Rigid(func(gtx C) D { return v.view.blocks(gtx, w, m.Body) }))
+	rows = append(rows, layout.Rigid(func(gtx C) D {
+		return v.selectable(gtx, w, m, func(gtx C) D { return v.view.blocks(gtx, w, m.Body) })
+	}))
 	if m.Edited {
 		rows = append(rows, layout.Rigid(func(gtx C) D {
 			lbl := secondaryLabel(v.th, "(edited)")
@@ -506,7 +525,26 @@ func (v *msgView) body(gtx C, w *msgWidgets, m backend.Message, showAuthor bool)
 	case m.ReplyCount > 0:
 		rows = append(rows, layout.Rigid(func(gtx C) D {
 			return layout.Inset{Top: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
-				return linkCaption(gtx, v.th, &w.replies, replyCount(m.ReplyCount))
+				if !m.ThreadUnread {
+					return linkCaption(gtx, v.th, &w.replies, replyCount(m.ReplyCount))
+				}
+				// New replies in a thread the user follows: a dot, and
+				// the link in bold.
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx C) D {
+						d := gtx.Dp(7)
+						paint.FillShape(gtx.Ops, colAccent, clip.Ellipse{Max: image.Pt(d, d)}.Op(gtx.Ops))
+						return D{Size: image.Pt(d+gtx.Dp(5), d)}
+					}),
+					layout.Rigid(func(gtx C) D {
+						return w.replies.Layout(gtx, func(gtx C) D {
+							pointer.CursorPointer.Add(gtx.Ops)
+							lbl := secondaryLabel(v.th, replyCount(m.ReplyCount)+" · new")
+							lbl.Color, lbl.Font.Weight = colAccent, font.SemiBold
+							return lbl.Layout(gtx)
+						})
+					}),
+				)
 			})
 		}))
 	case m.ThreadTS != "" && m.ThreadTS != m.TS && !m.Ephemeral:

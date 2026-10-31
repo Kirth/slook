@@ -108,7 +108,7 @@ func TestBotStatus_ExpiresAfterTwoMinutes(t *testing.T) {
 	a := botStatusApp(t)
 	t0 := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
 	now := t0
-	a.typing.now = func() time.Time { return now }
+	a.typing.Now = func() time.Time { return now }
 
 	_, cmd := a.Update(atlasStatus("C1", "100.1", "Thinking..."))
 	if cmd == nil {

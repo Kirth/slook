@@ -40,10 +40,13 @@ type msgMenu struct {
 	focus  bool // take the keyboard next frame, for Escape
 	target backend.Message
 	at     image.Point // where it was opened, in window pixels
-	items  [5]widget.Clickable
+	items  [6]widget.Clickable
 	// scrim takes clicks outside the menu (closing it), panel the ones
 	// on it between items.
-	scrim, panel struct{}
+	// They are bytes, not struct{}: two zero-size fields side by side
+	// share an address, so their tags would be equal and a click on the
+	// panel would close it (TestPopupTagsAreDistinct).
+	scrim, panel byte
 }
 
 // menuItem is one line of the menu.
@@ -63,19 +66,27 @@ type confirmDelete struct {
 	focus           bool
 	target          backend.Message
 	cancel, confirm widget.Clickable
-	scrim, panel    struct{}
+	// scrim and panel are bytes so their tags differ; see msgMenu.
+	scrim, panel byte
 }
 
 // menuItems is what the menu offers for m.
 func (v *msgView) menuItems(m backend.Message) []menuItem {
-	items := []menuItem{
+	var items []menuItem
+	if sel := v.selectionOf(m.TS); strings.TrimSpace(sel) != "" {
+		items = append(items, menuItem{label: "Copy selection", act: func() {
+			v.clip = sel
+			v.notify("Copied", false)
+		}})
+	}
+	items = append(items, []menuItem{
 		{label: "Copy text", act: func() {
 			v.clip = rich.PlainBlocks(m.Body)
 			v.notify("Copied", false)
 		}},
 		{label: "Copy link", act: func() { v.permalink(m, false) }},
 		{label: "Open in Slack", act: func() { v.permalink(m, true) }},
-	}
+	}...)
 	if m.FromSelf && v.onEdit != nil {
 		items = append(items,
 			menuItem{label: "Edit message", act: func() { v.onEdit(m) }},

@@ -1,14 +1,20 @@
 package main
 
 import (
+	"image"
 	"strings"
 	"unicode/utf8"
 
+	"gioui.org/io/pointer"
+	"gioui.org/layout"
+	"gioui.org/unit"
 	"gioui.org/widget"
+	"gioui.org/widget/material"
 
 	"github.com/gammons/slk/gui/backend"
 	"github.com/gammons/slk/gui/chat"
 	"github.com/gammons/slk/internal/text"
+	"github.com/gammons/slk/internal/ui/messages"
 )
 
 // popupRows is how many commands or completions the popup lists at once.
@@ -129,4 +135,72 @@ func findConversation(convs []backend.Conversation, target string, dmOnly bool) 
 		n = len(runes)
 	}
 	return best, string(runes[n:]), true
+}
+
+// popupList draws a completion popup's n rows (at most popupRows), row
+// i drawn by row, the selected one lit. The caller handles the rows'
+// clicks before drawing.
+func popupList(gtx C, rows *[popupRows]widget.Clickable, n, sel int, row func(gtx C, i int) D) D {
+	return layout.Inset{Left: unit.Dp(12), Right: unit.Dp(12), Top: unit.Dp(6)}.Layout(gtx, func(gtx C) D {
+		return widget.Border{Color: colBorder, CornerRadius: unit.Dp(6), Width: unit.Dp(1)}.Layout(gtx, func(gtx C) D {
+			children := make([]layout.FlexChild, 0, n)
+			for i := 0; i < n; i++ {
+				children = append(children, layout.Rigid(func(gtx C) D {
+					return rows[i].Layout(gtx, func(gtx C) D {
+						pointer.CursorPointer.Add(gtx.Ops)
+						bg := colBg
+						if i == sel {
+							bg = colHover
+						}
+						return rounded(gtx, bg, unit.Dp(4), func(gtx C) D {
+							gtx.Constraints.Min.X = gtx.Constraints.Max.X
+							return layout.Inset{Top: unit.Dp(5), Bottom: unit.Dp(5), Left: unit.Dp(10), Right: unit.Dp(10)}.Layout(gtx, func(gtx C) D {
+								return row(gtx, i)
+							})
+						})
+					})
+				}))
+			}
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+		})
+	})
+}
+
+// choiceRow is one completion: a person's avatar, a channel's glyph or
+// an emoji, then its name and, muted, a detail.
+func choiceRow(gtx C, th *material.Theme, rv *richView, c chat.Choice) D {
+	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+		layout.Rigid(func(gtx C) D {
+			return layout.Inset{Right: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
+				gtx.Constraints.Min = image.Pt(gtx.Dp(unit.Dp(20)), 0)
+				switch {
+				case c.ID != "" && rv != nil:
+					return rv.avatar(gtx, c.ID, c.Avatar, c.Label, unit.Dp(20))
+				case c.Emoji != "" && rv != nil:
+					return rv.emoji(gtx, c.Emoji, unit.Dp(18))
+				case c.Kind != "":
+					g := bodyLabel(th, messages.ChannelGlyph(string(c.Kind)))
+					g.Color = colMuted
+					return g.Layout(gtx)
+				}
+				return D{Size: gtx.Constraints.Min}
+			})
+		}),
+		layout.Rigid(func(gtx C) D {
+			lbl := bodyLabel(th, c.Label)
+			lbl.MaxLines = 1
+			return lbl.Layout(gtx)
+		}),
+		layout.Flexed(1, func(gtx C) D {
+			if c.Detail == "" {
+				return D{}
+			}
+			return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
+				lbl := captionLabel(th, c.Detail)
+				lbl.Color = colMuted
+				lbl.MaxLines = 1
+				return lbl.Layout(gtx)
+			})
+		}),
+	)
 }

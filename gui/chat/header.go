@@ -17,6 +17,7 @@ const (
 	ChipClock           // someone's local time, during their day
 	ChipNight           // someone's local time, at night for them
 	ChipMuted           // the conversation is muted
+	ChipDND             // they have do-not-disturb on
 )
 
 // Tone is how a chip is coloured: quietly, or as something to notice.
@@ -65,8 +66,12 @@ func Chips(c backend.Conversation, details *backend.Details, profile *backend.Pr
 		if profile == nil {
 			break
 		}
-		text(profile.StatusText, true)
-		text(profile.Title, profile.StatusText == "")
+		status := StatusText(*profile, now)
+		if profile.DND && (profile.DNDUntil.IsZero() || now.Before(profile.DNDUntil)) {
+			out = append(out, Chip{Icon: ChipDND, Text: DNDText(profile.DNDUntil, now), Tone: ToneWarn})
+		}
+		text(status, true)
+		text(profile.Title, status == "")
 		if profile.HasTZ {
 			local := now.UTC().Add(time.Duration(profile.TZOffset) * time.Second)
 			chip := Chip{Icon: ChipClock, Text: local.Format("15:04")}
@@ -96,4 +101,25 @@ func Chips(c backend.Conversation, details *backend.Details, profile *backend.Pr
 		out = append(out, Chip{Icon: ChipMuted, Text: "muted"})
 	}
 	return out
+}
+
+// StatusText is someone's custom status text, "" once it has expired.
+func StatusText(p backend.Profile, now time.Time) string {
+	if !p.StatusExpires.IsZero() && !now.Before(p.StatusExpires) {
+		return ""
+	}
+	return p.StatusText
+}
+
+// DNDText words do-not-disturb ending at until: "do not disturb until
+// 17:00", with the day when it is not today; "do not disturb" when the
+// end is unknown.
+func DNDText(until, now time.Time) string {
+	switch {
+	case until.IsZero():
+		return "do not disturb"
+	case SameDay(until, now):
+		return "do not disturb until " + until.Format("15:04")
+	}
+	return "do not disturb until " + until.Format("Mon 15:04")
 }

@@ -19,10 +19,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/gammons/slk/gui/rich"
 	"github.com/gammons/slk/internal/core"
+	"github.com/gammons/slk/internal/emoji"
 	imgpkg "github.com/gammons/slk/internal/image"
+	"github.com/gammons/slk/internal/text"
 )
 
 // Fake is an in-memory workspace for trying the GUI without a Slack
@@ -39,6 +42,13 @@ type Fake struct {
 	logs  map[string][]Message
 	convs map[string]*Conversation // activity state, by ID
 	order []string
+	// followed is the threads the user follows in C1, by parent ts:
+	// true while it has unread replies.
+	followed map[string]bool
+	// adaChanged is Ada's status and DND having changed (a timed
+	// change, with timed posts on), DND until adaDNDUntil.
+	adaChanged  bool
+	adaDNDUntil time.Time
 	// bf is the pretend backfill: it walks the conversations on a
 	// timer so the search window has progress to show.
 	bf struct {
@@ -165,6 +175,8 @@ func NewFake(now time.Time) *Fake {
 	f.replyLocked("C1", parent, "Ada Lovelace", "The *worker* queue. <@U2> restarted it, looks better now", false)
 	f.replyLocked("C1", parent, "Grace Hopper", "Yes, back to normal :+1:", false)
 	f.replyLocked("C1", log[len(log)-6].TS, "Margaret Hamilton", "Following up in <#C3>", true)
+	// Both threads are followed; the first has replies unread.
+	f.followed = map[string]bool{parent: true, log[len(log)-6].TS: false}
 	// Reactions, one the user is in and one custom, and custom emoji in
 	// a line of text.
 	// Usergroup mentions: one labelled, one bare, one of them the user's.
@@ -228,11 +240,22 @@ func (f *Fake) nextLocked(channelID, author, text string) Message {
 		ChannelID: channelID,
 		TS:        strconv.FormatInt(f.seq, 10) + ".000100",
 		Author:    author,
-		AuthorID:  author,
+		AuthorID:  fakeUserID(author),
 		Body:      rich.FromMrkdwn(text, fakeNames),
 		Text:      text,
 		Time:      time.Unix(f.seq, 0),
 	}
+}
+
+// fakeUserID is a fake author's user ID (U1 for Ada Lovelace), or the
+// name itself for one without (You, whose ID is fakeSelf).
+func fakeUserID(name string) string {
+	for id, n := range fakeNames.Users {
+		if n == name {
+			return id
+		}
+	}
+	return name
 }
 
 func (f *Fake) Workspace() string { return "Demo" }
@@ -314,8 +337,43 @@ func (f *Fake) Profile(_ context.Context, id string) (Profile, error) {
 	}
 	if name == "Ada Lovelace" {
 		p.StatusEmoji, p.StatusText = ":palm_tree:", "Out until Monday"
+		f.mu.Lock()
+		if f.adaChanged {
+			p.StatusEmoji, p.StatusText = ":computer:", "Back early, heads down"
+			p.DND, p.DNDUntil = true, f.adaDNDUntil
+		}
+		f.mu.Unlock()
 	}
 	return p, nil
+}
+
+// Conversation is one of the fake's conversations by ID.
+func (f *Fake) Conversation(_ context.Context, id string) (Conversation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c := f.convs[id]; c != nil {
+		return *c, nil
+	}
+	return Conversation{}, fmt.Errorf("no conversation %s", id)
+}
+
+// fakeNewDMAfter is when, with timed posts on, someone new starts a DM:
+// a conversation the list did not have.
+const fakeNewDMAfter = 6 * time.Second
+
+// newDM is Katherine Johnson starting a DM: the conversation, then her
+// message in it.
+func (f *Fake) newDM() []Event {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.convs["D9"] != nil {
+		return nil
+	}
+	c := &Conversation{ID: "D9", Name: "Katherine Johnson", Kind: KindDM, PeerID: "U5"}
+	f.convs[c.ID], f.order = c, append(f.order, c.ID)
+	m := f.appendLocked("D9", "Katherine Johnson", "Hi! Got a minute to look at the trajectory numbers?")
+	c.Mentions = 1
+	return []Event{ConversationOpened{Conv: *c}, MessagePosted{Message: m}}
 }
 
 func (f *Fake) Conversations(context.Context) ([]Conversation, error) {
@@ -545,6 +603,7 @@ func (f *Fake) Permalink(_ context.Context, channelID, ts string) (string, error
 
 // React toggles the user's reaction and reports it, as Slack's echo.
 func (f *Fake) React(ctx context.Context, channelID, ts, name string, add bool) error {
+	name = emoji.CanonicalSlackName(name, nil) // as Slack keeps it
 	f.mu.Lock()
 	f.reactLocked(channelID, ts, name, fakeSelf, add)
 	f.mu.Unlock()
@@ -611,7 +670,13 @@ func (f *Fake) pageLocked(channelID, beforeTS string) []Message {
 	if len(out) > fakePage {
 		out = out[len(out)-fakePage:]
 	}
-	return cloneMessages(out)
+	out = cloneMessages(out)
+	if channelID == "C1" {
+		for i := range out {
+			out[i].ThreadUnread = f.followed[out[i].TS]
+		}
+	}
+	return out
 }
 
 // cloneMessages copies msgs deep enough that the fake changing its own
@@ -659,7 +724,69 @@ func (f *Fake) SendReply(ctx context.Context, channelID, threadTS, text string, 
 }
 
 // MarkThreadRead: the fake keeps no thread read state.
-func (f *Fake) MarkThreadRead(context.Context, string, string, string) error { return nil }
+func (f *Fake) MarkThreadRead(ctx context.Context, channelID, threadTS, _ string) error {
+	f.mu.Lock()
+	unread, ok := f.followed[threadTS]
+	if ok && channelID == "C1" {
+		f.followed[threadTS] = false
+	}
+	n := f.threadsUnreadLocked()
+	f.mu.Unlock()
+	if !ok || channelID != "C1" || !unread {
+		return nil
+	}
+	for _, ev := range []Event{ThreadState{ChannelID: channelID, ThreadTS: threadTS}, n} {
+		select {
+		case f.events <- ev:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// threadsUnreadLocked counts the followed threads with unread replies.
+func (f *Fake) threadsUnreadLocked() ThreadsUnread {
+	var n ThreadsUnread
+	for _, unread := range f.followed {
+		if unread {
+			n.Count++
+		}
+	}
+	return n
+}
+
+// Threads is the followed threads in C1, newest reply first.
+func (f *Fake) Threads(context.Context) ([]ThreadSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []ThreadSummary
+	for ts, unread := range f.followed {
+		t := ThreadSummary{ChannelID: "C1", Channel: "general", Kind: KindChannel, ThreadTS: ts, Unread: unread}
+		for _, m := range f.logs["C1"] {
+			switch {
+			case m.TS == ts:
+				t.Author, t.AuthorID, t.Preview = m.Author, m.AuthorID, rich.PlainBlocks(m.Body)
+			case m.ThreadTS == ts:
+				t.Replies++
+				if m.Time.After(t.LastReply) {
+					t.LastReply = m.Time
+				}
+			}
+		}
+		out = append(out, t)
+	}
+	slices.SortFunc(out, func(a, b ThreadSummary) int { return b.LastReply.Compare(a.LastReply) })
+	return out, nil
+}
+
+// RefreshThreads has nothing to fetch; the list is as it was.
+func (f *Fake) RefreshThreads() {
+	select {
+	case f.events <- ThreadsChanged{}:
+	default:
+	}
+}
 
 // fakeCommands are the slash commands the fake offers.
 var fakeCommands = []Command{
@@ -741,13 +868,20 @@ func (f *Fake) Send(ctx context.Context, channelID, text string) error {
 func (f *Fake) Run(ctx context.Context, emit func(Event)) error {
 	emit(ConnectionChanged{Connected: true})
 	emit(UserGroupsChanged{Mine: []string{"S1"}})
+	f.mu.Lock()
+	emit(f.threadsUnreadLocked())
+	f.mu.Unlock()
 	emit(PresenceChanged{UserID: "U1", Active: true})
 	emit(PresenceChanged{UserID: "U3", Active: false})
-	var tick <-chan time.Time
+	var tick, newDM, profileChange <-chan time.Time
+	var post <-chan time.Time // the typed message is due
+	var pending struct{ channel, author string }
 	if f.Interval > 0 {
 		t := time.NewTicker(f.Interval)
 		defer t.Stop()
 		tick = t.C
+		newDM = time.After(fakeNewDMAfter)
+		profileChange = time.After(fakeProfileChangeAfter)
 	}
 	for {
 		select {
@@ -756,19 +890,53 @@ func (f *Fake) Run(ctx context.Context, emit func(Event)) error {
 		case ev := <-f.events:
 			emit(ev)
 		case <-tick:
-			c := fakeConversations[rand.IntN(len(fakeConversations))]
+			// Someone types for a moment, then posts.
+			if post != nil {
+				continue
+			}
+			pending.channel = fakeConversations[rand.IntN(len(fakeConversations))].ID
+			pending.author = fakeAuthors[rand.IntN(len(fakeAuthors))]
+			emit(Typing{ChannelID: pending.channel, UserID: fakeUserID(pending.author), Name: pending.author})
+			post = time.After(min(fakeTypingLead, f.Interval/2))
+		case <-profileChange:
+			profileChange = nil
 			f.mu.Lock()
-			m := f.appendLocked(c.ID, fakeAuthors[rand.IntN(len(fakeAuthors))], fakeLines[rand.IntN(len(fakeLines))])
+			f.adaChanged, f.adaDNDUntil = true, time.Now().Add(90*time.Minute).Truncate(time.Minute)
+			f.mu.Unlock()
+			emit(ProfileChanged{UserID: "U1"})
+		case <-newDM:
+			newDM = nil
+			for _, ev := range f.newDM() {
+				emit(ev)
+			}
+		case <-post:
+			post = nil
+			f.mu.Lock()
+			m := f.appendLocked(pending.channel, pending.author, fakeLines[rand.IntN(len(fakeLines))])
 			f.mu.Unlock()
 			emit(MessagePosted{Message: m})
 		}
 	}
 }
 
-// Search scans the fake's history for the query's words, newest first.
-func (f *Fake) Search(_ context.Context, query string, limit int, order SearchOrder) ([]SearchHit, error) {
-	terms := strings.Fields(strings.ToLower(query))
-	if len(terms) == 0 {
+// fakeTypingLead is how long a fake author types before posting.
+const fakeTypingLead = 2 * time.Second
+
+// WatchDND is a no-op: the fake's DND changes come by themselves.
+func (f *Fake) WatchDND(string) {}
+
+// fakeProfileChangeAfter is when, with timed posts on, Ada's status and
+// DND change.
+const fakeProfileChangeAfter = 9 * time.Second
+
+// Typing is a no-op: no one is watching the fake.
+func (f *Fake) Typing(string) {}
+
+// Search scans the fake's history for what q asks, as the cache would:
+// whole words (a trailing * a prefix), phrases as words in a row, case-
+// and accent-blind.
+func (f *Fake) Search(_ context.Context, q SearchQuery, limit int, order SearchOrder) ([]SearchHit, error) {
+	if q.Nothing || q.Empty() {
 		return nil, nil
 	}
 	if limit <= 0 {
@@ -777,27 +945,17 @@ func (f *Fake) Search(_ context.Context, query string, limit int, order SearchOr
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var hits []SearchHit
-	score := map[string]int{} // by ts: how often the terms appear, for Relevance
+	score := map[string]int{} // by channel and ts: how often the text matched, for Relevance
 	for _, id := range f.order {
 		for _, m := range f.logs[id] {
-			text := strings.ToLower(rich.PlainBlocks(m.Body))
-			n := 0
-			for _, t := range terms {
-				c := strings.Count(text, t)
-				if c == 0 {
-					n = 0
-					break
-				}
-				n += c
-			}
-			if n > 0 {
+			if n, ok := fakeMatches(q, m); ok {
 				hits = append(hits, SearchHit{Message: cloneMessages([]Message{m})[0]})
 				score[m.ChannelID+m.TS] = n
 			}
 		}
 	}
 	slices.SortFunc(hits, func(a, b SearchHit) int {
-		if order == Relevance {
+		if order == Relevance && q.Ranked() {
 			if d := score[b.Message.ChannelID+b.Message.TS] - score[a.Message.ChannelID+a.Message.TS]; d != 0 {
 				return d
 			}
@@ -808,6 +966,98 @@ func (f *Fake) Search(_ context.Context, query string, limit int, order SearchOr
 		hits = hits[:limit]
 	}
 	return hits, nil
+}
+
+// fakeMatches is whether m is one q finds, and how many times its text
+// matched (its rank).
+func fakeMatches(q SearchQuery, m Message) (int, bool) {
+	words := fakeWords(rich.PlainBlocks(m.Body))
+	n := 0
+	for _, group := range q.All {
+		c := 0
+		for _, alt := range group {
+			c += countPhrase(words, fakeWords(alt), strings.HasSuffix(alt, "*"))
+		}
+		if c == 0 {
+			return 0, false
+		}
+		n += c
+	}
+	for _, alt := range q.None {
+		if countPhrase(words, fakeWords(alt), strings.HasSuffix(alt, "*")) > 0 {
+			return 0, false
+		}
+	}
+	oneOf := func(v string, set []string) bool { return len(set) == 0 || slices.Contains(set, v) }
+	if !oneOf(m.AuthorID, q.Users) || slices.Contains(q.NotUsers, m.AuthorID) ||
+		!oneOf(m.ChannelID, q.Channels) || slices.Contains(q.NotChannels, m.ChannelID) {
+		return 0, false
+	}
+	if len(q.Mentions) > 0 && !slices.ContainsFunc(q.Mentions, func(w string) bool { return strings.Contains(m.Text, w) }) {
+		return 0, false
+	}
+	if slices.ContainsFunc(q.NotMentions, func(w string) bool { return strings.Contains(m.Text, w) }) {
+		return 0, false
+	}
+	if (!q.Since.IsZero() && m.Time.Before(q.Since)) || (!q.Until.IsZero() && !m.Time.Before(q.Until)) {
+		return 0, false
+	}
+	hasFile := slices.ContainsFunc(m.Body, func(b rich.Block) bool {
+		switch b.(type) {
+		case rich.File, rich.Image:
+			return true
+		}
+		return false
+	})
+	for _, t := range []struct {
+		tri Tri
+		is  bool
+	}{
+		{q.Thread, m.ThreadTS == m.TS && m.ReplyCount > 0},
+		{q.Reply, m.ThreadTS != "" && m.ThreadTS != m.TS && m.InThreadOnly},
+		{q.Edited, m.Edited},
+		{q.Link, strings.Contains(m.Text, "<http")},
+		{q.File, hasFile},
+		{q.Reaction, len(m.Reactions) > 0},
+	} {
+		if (t.tri == Yes && !t.is) || (t.tri == No && t.is) {
+			return 0, false
+		}
+	}
+	reacted := func(name string) bool {
+		return slices.ContainsFunc(m.Reactions, func(r Reaction) bool { return r.Name == name })
+	}
+	for _, e := range q.Emoji {
+		if !reacted(e) {
+			return 0, false
+		}
+	}
+	if slices.ContainsFunc(q.NotEmoji, reacted) {
+		return 0, false
+	}
+	return n, true
+}
+
+// fakeWords are s's words, folded, as FTS5's tokenizer splits them.
+func fakeWords(s string) []string {
+	return strings.FieldsFunc(text.Fold(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+}
+
+// countPhrase is how many times phrase occurs in words, its last word as
+// a prefix when prefix is set. An empty phrase occurs nowhere.
+func countPhrase(words, phrase []string, prefix bool) int {
+	k := len(phrase)
+	if k == 0 {
+		return 0
+	}
+	n := 0
+	for i := 0; i+k <= len(words); i++ {
+		last := words[i+k-1] == phrase[k-1] || (prefix && strings.HasPrefix(words[i+k-1], phrase[k-1]))
+		if last && slices.Equal(words[i:i+k-1], phrase[:k-1]) {
+			n++
+		}
+	}
+	return n
 }
 
 // SyncStatus: the fake holds every conversation whole.

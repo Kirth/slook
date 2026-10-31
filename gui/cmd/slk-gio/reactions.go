@@ -17,6 +17,7 @@ import (
 	"github.com/gammons/slk/gui/backend"
 	"github.com/gammons/slk/gui/chat"
 	"github.com/gammons/slk/gui/rich"
+	"github.com/gammons/slk/internal/emoji"
 )
 
 // reactFailed is Slack refusing a reaction.
@@ -55,7 +56,14 @@ func (v *msgView) reactions(gtx C, w *msgWidgets, m backend.Message) D {
 	}
 	items := make([]layout.Widget, 0, len(m.Reactions)+1)
 	for i, r := range m.Reactions {
-		items = append(items, func(gtx C) D { return v.pill(gtx, w.pills[i], r) })
+		items = append(items, func(gtx C) D {
+			dims := v.pill(gtx, w.pills[i], r)
+			// Read after layout: the card is drawn later this frame.
+			if w.pills[i].Hovered() {
+				v.pillHover = &pillHover{key: m.ChannelID + "/" + m.TS + "/" + r.Name, r: r}
+			}
+			return dims
+		})
 	}
 	items = append(items, func(gtx C) D {
 		return pillFrame(gtx, &w.addPill, false, func(gtx C) D {
@@ -173,7 +181,10 @@ type reactPicker struct {
 	cells   [pickerMax]widget.Clickable
 	// scrim takes clicks outside the panel; panel takes the ones on it
 	// that hit no choice, so they do not reach the messages beneath.
-	scrim, panel struct{}
+	// They are bytes, not struct{}: two zero-size fields side by side
+	// share an address, so their tags would be equal and a click on the
+	// panel would close it (TestPopupTagsAreDistinct).
+	scrim, panel byte
 }
 
 func (p *reactPicker) show(m backend.Message) {
@@ -259,8 +270,10 @@ func (v *msgView) pickerUpdate(gtx C) (closed bool) {
 	}
 	name := p.choices[pick].Name
 	add := true
+	// Slack keeps one name per emoji: picking thumbsup is the user's +1.
+	canonical := emoji.CanonicalSlackName(name, v.view.customs)
 	for _, r := range p.target.Reactions {
-		if r.Name == name && r.Mine {
+		if (r.Name == name || r.Name == canonical) && r.Mine {
 			add = false // picking one the user has takes it back, as a pill click does
 		}
 	}
@@ -350,4 +363,90 @@ func (v *msgView) pickerGrid(gtx C) D {
 		})
 	}))
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
+}
+
+// pillHover is the reaction pill under the pointer this frame.
+type pillHover struct {
+	key string // channel/ts/name: which pill, to start its entrance once
+	r   backend.Reaction
+}
+
+// reactorsAsked is how many unknown reactors a hover looks up at most.
+const reactorsAsked = 10
+
+// reactorsCard draws who reacted with the hovered pill's emoji, above
+// the pointer: the emoji large, then "Ada Lovelace, Grace Hopper and
+// you", then its :name:. Names slk does not know yet are looked up
+// (a few, once each) and fill in as they arrive.
+func (v *msgView) reactorsCard(gtx C) {
+	ph := v.pillHover
+	if v.pillShown.key != ph.key {
+		v.pillShown.key, v.pillShown.since = ph.key, gtx.Now
+	}
+	text := chat.Reactors(v.reactorNames(ph.r), ph.r.Count, ph.r.Mine)
+	cgtx := gtx
+	cgtx.Constraints = layout.Constraints{Max: image.Pt(min(gtx.Dp(260), gtx.Constraints.Max.X), gtx.Constraints.Max.Y)}
+	m := op.Record(gtx.Ops)
+	dims := enter(cgtx, v.pillShown.since, func(gtx C) D {
+		return overlayFrame(gtx, func(gtx C) D {
+			return layout.UniformInset(unit.Dp(10)).Layout(gtx, func(gtx C) D {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx C) D { return v.emoji(gtx, ph.r.Name, unit.Dp(30)) }),
+					layout.Rigid(layout.Spacer{Width: unit.Dp(10)}.Layout),
+					layout.Flexed(1, func(gtx C) D {
+						return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+							layout.Rigid(secondaryLabel(v.th, text).Layout),
+							layout.Rigid(func(gtx C) D {
+								lbl := captionLabel(v.th, "reacted with :"+ph.r.Name+":")
+								lbl.Color = colMuted
+								return lbl.Layout(gtx)
+							}),
+						)
+					}),
+				)
+			})
+		})
+	})
+	call := m.Stop()
+	pos := v.pointer.Sub(image.Pt(dims.Size.X/2, dims.Size.Y+gtx.Dp(14)))
+	pos.X = max(gtx.Dp(4), min(pos.X, gtx.Constraints.Max.X-dims.Size.X-gtx.Dp(4)))
+	if pos.Y < 0 {
+		pos.Y = v.pointer.Y + gtx.Dp(18) // no room above: below the pointer
+	}
+	defer op.Offset(pos).Push(gtx.Ops).Pop()
+	call.Add(gtx.Ops)
+}
+
+// reactorNames names the others who reacted (the user is "you", said
+// by Reactors): from profiles the window has, else the people slk
+// knows; the rest are asked for, a few at a time.
+func (v *msgView) reactorNames(r backend.Reaction) []string {
+	self := v.h.be.Self()
+	var people map[string]string
+	var names []string
+	asked := 0
+	for _, id := range r.Users {
+		if id == self {
+			continue
+		}
+		if e := v.profiles[id]; e != nil && e.p != nil && e.p.Name != "" {
+			names = append(names, e.p.Name)
+			continue
+		}
+		if people == nil {
+			people = map[string]string{}
+			for _, p := range v.h.people() {
+				people[p.ID] = p.Name
+			}
+		}
+		if n := people[id]; n != "" {
+			names = append(names, n)
+			continue
+		}
+		if v.profiles[id] == nil && asked < reactorsAsked {
+			asked++
+			v.profile(id)
+		}
+	}
+	return names
 }

@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gammons/slk/gui/backend"
 )
@@ -40,5 +41,21 @@ func TestThreadFocusKeyIsNeverAChannel(t *testing.T) {
 	k := threadKey{"C1", "100.000001"}
 	if k.focusKey() == k.channelID || !strings.HasPrefix(k.focusKey(), "C1/") {
 		t.Fatalf("focus key %q", k.focusKey())
+	}
+}
+
+func TestUpsertConvKeepsWhatTheListKnows(t *testing.T) {
+	at := time.Unix(1_700_000_000, 0)
+	shared := []backend.Conversation{{ID: "C1", Name: "general"}, {ID: "D1", Name: "Ada", Unread: true, Latest: at}}
+	got := upsertConv(shared, backend.Conversation{ID: "D9", Name: "Katherine", Kind: backend.KindDM})
+	if len(got) != 3 || got[2].ID != "D9" || len(shared) != 2 {
+		t.Fatalf("added: %+v (shared %d)", got, len(shared))
+	}
+	got = upsertConv(got, backend.Conversation{ID: "D1", Name: "Ada Lovelace"})
+	if d := got[1]; d.Name != "Ada Lovelace" || !d.Unread || !d.Latest.Equal(at) {
+		t.Fatalf("replaced: %+v", d)
+	}
+	if shared[1].Name != "Ada" {
+		t.Fatal("the shared slice was changed")
 	}
 }

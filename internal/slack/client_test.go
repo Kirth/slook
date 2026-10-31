@@ -152,6 +152,7 @@ type mockSlackAPI struct {
 	getUsersInConversationContextFn func(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error)
 	openConversationContextFn       func(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error)
 	searchMessagesFn                func(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, error)
+	reactionFn                      func(ctx context.Context, add bool, name string, item slack.ItemRef) error
 	getUserGroupsContextFn          func(ctx context.Context, options ...slack.GetUserGroupsOption) ([]slack.UserGroup, error)
 }
 
@@ -217,11 +218,17 @@ func (m *mockSlackAPI) DeleteMessage(channelID, timestamp string) (string, strin
 	return "", "", nil
 }
 
-func (m *mockSlackAPI) AddReaction(name string, item slack.ItemRef) error {
+func (m *mockSlackAPI) AddReactionContext(ctx context.Context, name string, item slack.ItemRef) error {
+	if m.reactionFn != nil {
+		return m.reactionFn(ctx, true, name, item)
+	}
 	return nil
 }
 
-func (m *mockSlackAPI) RemoveReaction(name string, item slack.ItemRef) error {
+func (m *mockSlackAPI) RemoveReactionContext(ctx context.Context, name string, item slack.ItemRef) error {
+	if m.reactionFn != nil {
+		return m.reactionFn(ctx, false, name, item)
+	}
 	return nil
 }
 
@@ -3596,5 +3603,28 @@ func TestGetUsersInConversationMaxStopsAtTheCap(t *testing.T) {
 	}
 	if calls != 2 || complete || !reflect.DeepEqual(got, []string{"U1", "U2"}) {
 		t.Fatalf("calls %d, complete %v, got %v", calls, complete, got)
+	}
+}
+
+func TestReactionsPassTheContextAndWrapErrors(t *testing.T) {
+	var got []string
+	mock := &mockSlackAPI{
+		reactionFn: func(ctx context.Context, add bool, name string, item slack.ItemRef) error {
+			got = append(got, strings.TrimSpace(fmt.Sprintln(add, name, item.Channel, item.Timestamp)))
+			return ctx.Err()
+		},
+	}
+	c := &Client{api: mock}
+	if err := c.AddReaction(context.Background(), "C1", "1.0", "+1"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := c.RemoveReaction(ctx, "C1", "1.0", "+1")
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "removing reaction :+1:") {
+		t.Fatalf("cancelled remove: %v", err)
+	}
+	if want := []string{"true +1 C1 1.0", "false +1 C1 1.0"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls %v, want %v", got, want)
 	}
 }

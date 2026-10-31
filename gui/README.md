@@ -2,7 +2,17 @@
 
 A graphical frontend for slk, built with [Gio](https://gioui.org). Each
 conversation opens in its own window; the conversation list is one more
-window, and the program exits when the last window closes.
+window.
+
+On Linux slk-gio puts an icon in the desktop's tray (StatusNotifierItem)
+and keeps running when its last window closes: the socket, notifications
+and backfill carry on, a click on the icon opens the list again, and
+its menu opens the list, Threads or Search, or quits. `[gui] tray =
+false` in `config.toml` turns it off. Without a tray host (GNOME needs
+the AppIndicator extension) or elsewhere than Linux, the program exits
+when the last window closes. Launching slk-gio again for a workspace
+that already has one running brings that one's list forward instead of
+starting a second (`-fake` runs count as a workspace of their own).
 
 ```
 make gui                    # builds bin/slk-gio, inside gui/shell.nix when Nix is there
@@ -27,6 +37,37 @@ what is being fetched right now. Each conversation shows how far toward
 the horizon its cache reaches (a bar and a percentage); the panel shows
 the same for the whole workspace, and while the backfill runs, how fast
 messages are coming in and roughly how long is left.
+
+The search box takes a small query language. Words match whole words,
+case- and accent-blind (`ig` finds "ig", not "ignore"; `ig*` finds
+both); everything is combined with AND, and any part can be excluded
+with a leading `!` (or `-`):
+
+| Typed | Finds |
+|---|---|
+| `deploy failed` | both words |
+| `deplo*` | words starting with it |
+| `"build failed"` | the words in a row |
+| `red \| green`, `red OR green` | either |
+| `!staging`, `-"dry run"` | not that |
+| `from:ada`, `from:"ada lovelace"`, `from:me` | by that person (repeat for any of several) |
+| `in:general`, `in:#gen`, `in:@ada` | in that conversation; `@` is your DM with them |
+| `mentions:grace`, `mentions:me`, `mentions:@eng` | mentioning a person or usergroup |
+| `is:dm` `is:channel` `is:thread` `is:reply` `is:edited` | that kind of message |
+| `has:link` `has:file` `has:reaction` `has::tada:` | carrying that |
+| `on:` / `during:` | within a time |
+| `after:` / `before:` / `since:` | after it ends, before it starts, from its start |
+
+Times are `2026-10-01`, `2026-10`, `2026`, `today`, `yesterday`, a
+weekday (the latest, today included), a month (the latest),
+`this-week`, `last-week`, `this-month`, `last-month`, `this-year`,
+`last-year`, or a length back from now: `4h`, `3d`, `2w`, `6m`, `1y`.
+Names match loosely (`from:adlv` is Ada Lovelace) and the best match
+wins. A line under the box says how the query was read (a name that
+matches no one in red, which finds nothing). A popup completes filter
+names, people, conversations and values as you type: Tab or Enter
+takes the lit one, Up and Down move, Escape hides it. Without words to
+rank by, results are newest first.
 
 Colours come from `[gui.theme]` in slk's `config.toml`. `preset` (or
 `name`) is one of the shipped palettes:
@@ -80,6 +121,17 @@ conversation is muted in Slack, and **Nothing** silences it. The choice
 is slk's own, kept in its cache; Slack's notification settings and
 your phone are not changed.
 
+Under the composer, a line says who is typing in the conversation
+("Ada is typing", three dots pulsing after it) and which apps are
+working; in a thread window, that thread's apps and their status
+("Claude is thinking"). Slack's typing event names the conversation,
+not the thread, so people typing show in the conversation's window
+only. The line clears when their message arrives, and its space is kept
+when no one is typing, so nothing moves. While you write a message,
+slk-gio tells Slack you are typing, at most every three seconds, as
+Slack's own clients do. `[animations] typing_indicators = false` turns
+both off.
+
 The composer completes as you type:
 
 - `@` suggests people slk has seen, the workspace's usergroups
@@ -102,12 +154,23 @@ Enter saves, and Escape or Cancel puts back what you were writing. Up
 in an empty composer edits your last message there. Delete asks first:
 Enter or Delete deletes, and Escape or Cancel keeps the message.
 
+A message's text can be selected and copied: drag over it (across its
+lines and paragraphs, formatting kept), double-click a word, or
+triple-click a paragraph, then press Ctrl+C (Cmd+C), or right-click and
+choose Copy selection. Escape drops the selection; one message holds a
+selection at a time. Code blocks, fields and app context lines keep
+their own behaviour.
+
 Reactions show as pills under a message: the emoji and how many
 reacted, outlined in the accent color when you are among them. Click a
 pill to add or take back your reaction, and "+" (or the "+ 🙂" that
 appears while the pointer is over a message) opens a picker. Type to
 filter by name, move with the arrows, and press Enter or click to
-react. Reactions others add or remove arrive live. The workspace's
+react. Your reaction shows at once; if Slack refuses it, or does not
+answer within 15 seconds, it is taken back with a note saying why (also
+written to stderr). Hover a pill to see who reacted: "Ada Lovelace,
+Grace Hopper and you", names slk does not know yet being looked up as
+you hover. Reactions others add or remove arrive live. The workspace's
 custom emoji are drawn as their pictures, in message text, in pills and
 in the picker. `-fake` makes up a picture for each.
 
@@ -137,6 +200,12 @@ whether it is muted; a person's status, title and local time (amber
 with a moon when it is night for them); a group's size. Then its
 actions and minimize, maximize and close.
 
+Headers and hover cards follow what people change while slk-gio runs:
+a new custom status (gone once it expires), do-not-disturb ("do not
+disturb until 17:00", in amber), and profile edits. A DM's window asks
+Slack once for its peer's do-not-disturb; changes after that arrive by
+themselves.
+
 Clicking a chat window's name opens its details, growing down out of
 the header over the messages; a click on the name again, on the
 messages, or Escape closes them. They have tabs:
@@ -164,6 +233,22 @@ window does the same. Drag the header (beside the name) to move the window; resi
 its edges. When the compositor draws window decorations itself
 (server-side decorations, and always on X11), its buttons are used and
 the header leaves them out.
+
+At the top of the list, **Threads** counts the threads you follow
+(ones you started, replied in or were mentioned in) that have replies
+you have not read. It opens the Threads window: each thread with its
+conversation, the parent's author and first lines, and how many replies
+and when the last came, unread ones bold behind a dot. Choosing one
+opens it, which marks it read. A message whose thread has new replies
+shows "N replies · new" with a dot. The list of followed threads comes
+from Slack when the Threads window opens, at most every half hour (it
+can take tens of requests); in between, the socket's thread events and
+new replies keep it current.
+
+New conversations appear by themselves: a DM someone starts, a channel
+you join or are added to. When a message comes from a conversation the
+list does not know, slk-gio asks Slack about it once
+(`conversations.info`) and adds it.
 
 The list is arranged by activity, around your Slack sidebar:
 
@@ -316,12 +401,23 @@ catch_up = true           # false turns it off
 catch_up_limit = 20       # conversations per connect
 ```
 
-`-backfill` turns on a slow background fill (one request every eight
-seconds, paused while a chat window has the keyboard) back to the given
-horizon, then the threads in it; the search window starts and stops the
-same fill and shows its progress. It is off by default and deliberate
-about its pace: Slack has signed slk users out over bulk history
-fetching (`docs/superpowers/specs/2026-07-30-enterprise-grid-bootstrap-design.md`).
+From startup, slk-gio fills the cache in the background for search:
+the last 90 days of every conversation you are in, then the threads in
+them. It skips what `backfill_ignore` names and the ranges the cache
+already holds, so after the first run it only tops up. It is slow on
+purpose: one request every eight seconds, paused while a chat window
+has the keyboard, because Slack has signed slk users out over bulk
+history fetching
+(`docs/superpowers/specs/2026-07-30-enterprise-grid-bootstrap-design.md`).
+The search window shows its progress and can stop it or start it again
+with another range. To change how far back it goes, or turn it off:
+
+```toml
+[cache]
+backfill = "90d"          # "1y", "all", or "off"
+```
+
+`-backfill` overrides it for one run (`-backfill off`, `-backfill 1y`).
 
 ## Speed
 
@@ -360,10 +456,8 @@ with `GIORENDERER=opengl` and without.
   composer does nothing yet; attachments can only be shown and saved.
 - **Starting conversations.** Joining a channel you are not in, or
   starting a new DM (`/open`, `/msg`), is not there; nor `/leave`.
-- **Typing indicators.** The socket's "is typing" events are not shown.
 - **Interactive apps.** Dialogs some commands open (an app's modal) and
   the buttons on ephemeral replies (`/giphy`'s Shuffle and Send) do
   nothing yet.
-- **Selecting message text.** Only code blocks can be selected.
 - **Strike-through** is drawn dimmed instead.
 - **More than one workspace** at a time.

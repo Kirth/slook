@@ -306,3 +306,110 @@ func TestSearchChannelMessages_LikeFallback(t *testing.T) {
 		}
 	}
 }
+
+// seedSpecMessages is a small workspace for SearchMessagesSpec: authors
+// U1/U2, channels C1/C2, a thread, an edit, a link, a file, reactions
+// and mentions.
+func seedSpecMessages(t *testing.T, db *DB) {
+	t.Helper()
+	for _, m := range []Message{
+		{TS: "1700000001.000000", ChannelID: "C1", WorkspaceID: "T1", UserID: "U1", Text: "deploy went fine", ReplyCount: 1, ThreadTS: "1700000001.000000"},
+		{TS: "1700000002.000000", ChannelID: "C1", WorkspaceID: "T1", UserID: "U2", Text: "the build failed on staging", ThreadTS: "1700000001.000000"},
+		{TS: "1700000003.000000", ChannelID: "C2", WorkspaceID: "T1", UserID: "U1", Text: "build failed again <@U2>", EditedAt: "1700000009.000000"},
+		{TS: "1700000004.000000", ChannelID: "C2", WorkspaceID: "T1", UserID: "U2", Text: "see <https://example.com|the docs> <!subteam^S1|@eng>"},
+		{TS: "1700000005.000000", ChannelID: "C1", WorkspaceID: "T1", UserID: "U2", Text: "screenshot attached", RawJSON: `{"text":"screenshot attached","files":[{"id":"F1"}]}`},
+		{TS: "1700000006.000000", ChannelID: "C1", WorkspaceID: "T2", UserID: "U1", Text: "deploy elsewhere"},
+	} {
+		if err := db.UpsertMessage(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.UpsertReaction("1700000001.000000", "C1", "tada", []string{"U2"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertReaction("1700000003.000000", "C2", "eyes", []string{"U2"}, 1); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSearchMessagesSpec(t *testing.T) {
+	for _, fts := range []bool{true, false} {
+		db := setupDBWithWorkspace(t)
+		seedSpecMessages(t, db)
+		db.ftsDisabled = !fts
+		for _, c := range []struct {
+			name string
+			spec SearchSpec
+			want string // the ts' last digit, newest first
+		}{
+			{"empty finds nothing", SearchSpec{}, ""},
+			{"a word", SearchSpec{All: [][]string{{"build"}}}, "32"},
+			{"a whole word only", SearchSpec{All: [][]string{{"buil"}}}, ""},
+			{"a prefix", SearchSpec{All: [][]string{{"buil*"}}}, "32"},
+			{"a phrase ending in a prefix", SearchSpec{All: [][]string{{"build fail*"}}}, "32"},
+			{"a phrase", SearchSpec{All: [][]string{{"build failed again"}}}, "3"},
+			{"alternatives", SearchSpec{All: [][]string{{"deploy", "screenshot"}}}, "51"},
+			{"excluded", SearchSpec{All: [][]string{{"build"}}, None: []string{"staging"}}, "3"},
+			{"excluded alone", SearchSpec{None: []string{"build", "deploy"}}, "54"},
+			{"from", SearchSpec{Users: []string{"U1"}}, "31"},
+			{"not from", SearchSpec{All: [][]string{{"build"}}, NotUsers: []string{"U1"}}, "2"},
+			{"in", SearchSpec{Channels: []string{"C2"}}, "43"},
+			{"not in", SearchSpec{NotChannels: []string{"C1"}}, "43"},
+			{"mentions a person", SearchSpec{Mentions: []string{"<@U2>"}}, "3"},
+			{"mentions any of", SearchSpec{Mentions: []string{"<@U2>", "<!subteam^S1"}}, "43"},
+			{"mentions none", SearchSpec{Channels: []string{"C2"}, NotMentions: []string{"<@U2>"}}, "4"},
+			{"since", SearchSpec{Since: "1700000004"}, "54"},
+			{"until", SearchSpec{Until: "1700000002"}, "1"},
+			{"between", SearchSpec{Since: "1700000002", Until: "1700000004"}, "32"},
+			{"thread", SearchSpec{Thread: Yes}, "1"},
+			{"reply", SearchSpec{Reply: Yes}, "2"},
+			{"not a reply", SearchSpec{All: [][]string{{"build"}}, Reply: No}, "3"},
+			{"edited", SearchSpec{Edited: Yes}, "3"},
+			{"link", SearchSpec{Link: Yes}, "4"},
+			{"file", SearchSpec{File: Yes}, "5"},
+			{"reaction", SearchSpec{Reaction: Yes}, "31"},
+			{"no reaction", SearchSpec{Users: []string{"U1"}, Reaction: No}, ""},
+			{"an emoji", SearchSpec{Emoji: []string{"tada"}}, "1"},
+			{"not an emoji", SearchSpec{Reaction: Yes, NotEmoji: []string{"tada"}}, "3"},
+			{"punctuation only", SearchSpec{All: [][]string{{"!!"}}}, ""},
+		} {
+			got, err := db.SearchMessagesSpec("T1", c.spec, 50, SearchNewest)
+			if err != nil {
+				t.Fatalf("fts=%v %s: %v", fts, c.name, err)
+			}
+			s := ""
+			for _, m := range got {
+				s += m.TS[9:10]
+			}
+			if c.name == "a whole word only" && !fts {
+				continue // LIKE knows substrings, not words
+			}
+			if s != c.want {
+				t.Errorf("fts=%v %s: got %q, want %q", fts, c.name, s, c.want)
+			}
+		}
+		db.Close()
+	}
+}
+
+func TestSearchMessagesSpecRanks(t *testing.T) {
+	db := setupDBWithWorkspace(t)
+	defer db.Close()
+	seedSpecMessages(t, db)
+	// Ranked: both messages with both words.
+	got, err := db.SearchMessagesSpec("T1", SearchSpec{All: [][]string{{"build"}, {"failed"}}}, 50, SearchRelevance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d", len(got))
+	}
+	// Filters alone have no rank: newest first whatever is asked.
+	got, err = db.SearchMessagesSpec("T1", SearchSpec{Users: []string{"U1"}}, 50, SearchRelevance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].TS != "1700000003.000000" {
+		t.Fatalf("filters only: %v", got)
+	}
+}

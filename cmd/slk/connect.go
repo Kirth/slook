@@ -17,6 +17,7 @@ import (
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slack/edge"
 	"github.com/gammons/slk/internal/slack/membership"
+	"github.com/gammons/slk/internal/threadsubs"
 	"github.com/gammons/slk/internal/ui"
 	"github.com/gammons/slk/internal/ui/statusbar"
 )
@@ -83,7 +84,7 @@ func connectWorkspace(ctx context.Context, token slackclient.Token, db *cache.DB
 		AvatarURLs:           &sync.Map{},
 		UserNamesByHandle:    make(map[string]string),
 		LastVisitedByChannel: make(map[string]int64),
-		ThreadSubsGate:       threadSubsGate{window: threadSubsSyncInterval},
+		ThreadSubsGate:       threadsubs.Gate{Window: threadsubs.Interval},
 	}
 	wctx.SubscriptionsAvailable = true
 
@@ -567,7 +568,7 @@ func (h *rtmEventHandler) syncOnReconnect(trigger string) bool {
 	}
 	// Threads: same "socket replays nothing" gap as the channel pass
 	// below. Fired BEFORE the dedupe check and unconditionally: the
-	// threadSubsGate inside throttles to one sweep per
+	// threadsubs.Gate inside throttles to one sweep per
 	// threadSubsSyncInterval, so the kick costs nothing when the last
 	// sync was recent, and a long offline gap must not have its
 	// reconciliation skipped just because a channel pass ran 10 s ago.

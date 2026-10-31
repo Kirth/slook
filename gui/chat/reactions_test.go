@@ -87,3 +87,27 @@ func TestEditKeepsReactions(t *testing.T) {
 		t.Fatal("an edit dropped the reactions")
 	}
 }
+
+func TestReactors(t *testing.T) {
+	many := []string{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"}
+	for _, c := range []struct {
+		names []string
+		total int
+		mine  bool
+		want  string
+	}{
+		{nil, 1, true, "You"},
+		{[]string{"Ada Lovelace"}, 1, false, "Ada Lovelace"},
+		{[]string{"Ada Lovelace"}, 2, true, "Ada Lovelace and you"},
+		{[]string{"Ada Lovelace", "Grace Hopper"}, 3, true, "Ada Lovelace, Grace Hopper and you"},
+		{[]string{"Ada Lovelace"}, 4, false, "Ada Lovelace and 3 others"},
+		{nil, 2, false, "2 others"},
+		{[]string{"Ada Lovelace"}, 2, false, "Ada Lovelace and 1 other"},
+		{many, 12, false, "A, B, C, D, E, F, G, H, I, J and 2 others"},
+		{nil, 0, false, ""},
+	} {
+		if got := Reactors(c.names, c.total, c.mine); got != c.want {
+			t.Errorf("Reactors(%v, %d, %v) = %q, want %q", c.names, c.total, c.mine, got, c.want)
+		}
+	}
+}

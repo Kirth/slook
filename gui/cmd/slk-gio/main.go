@@ -1,6 +1,10 @@
 // Command slk-gio is a prototype graphical frontend for slk, built with
 // Gio. Every conversation opens in a window of its own; the conversation
-// list is one more window. The program exits when the last window closes.
+// list is one more window. With a tray icon (on Linux, unless [gui] tray
+// = false or the desktop has no tray) the program keeps running when the
+// last window closes, and the icon opens the list again; without one it
+// exits. A second launch for the same workspace brings the running one's
+// list forward and exits.
 //
 //	slk-gio            the first workspace added with slk --add-workspace
 //	slk-gio -team NAME a workspace by team ID or name
@@ -8,9 +12,10 @@
 //	slk-gio -fake -fake-every 0
 //	                   the same, without someone posting every few seconds
 //	slk-gio -theme ink a palette for this run: dark, ink, light, or any slk theme
-//	                   the same, without someone posting every few seconds
 //	slk-gio -backfill 1y
-//	                   also fill the local message cache back a year, slowly
+//	                   fill the local message cache back a year, slowly,
+//	                   for search; by default [cache] backfill, else 90 days
+//	                   ("off" to skip)
 package main
 
 import (
@@ -20,8 +25,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"gioui.org/app"
@@ -42,14 +47,9 @@ func main() {
 	fake := flag.Bool("fake", false, "use made-up conversations instead of Slack")
 	fakeEvery := flag.Duration("fake-every", 4*time.Second, "with -fake, how often someone posts (0 for never)")
 	team := flag.String("team", "", "workspace to open, by team ID or name (default: the first one)")
-	backfill := flag.String("backfill", "", "fill the message cache back this far in the background (1y, 90d, 0 for everything); off when absent")
+	backfill := flag.String("backfill", "", "fill the message cache back this far in the background (90d, 1y, all, off); default: [cache] backfill in config.toml, else 90d")
 	themeName := flag.String("theme", "", "palette: dark, ink, light, or any slk theme name (default: [gui.theme] in config.toml)")
 	flag.Parse()
-	horizon, doBackfill, err := parseBackfill(*backfill)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "slk-gio: -backfill:", err)
-		os.Exit(2)
-	}
 
 	// slk's config: the GUI's colours, and the conversations the
 	// backfill skips. Missing is fine (defaults); unreadable is reported
@@ -57,6 +57,19 @@ func main() {
 	cfg, err := config.Load(filepath.Join(paths.Config(), "config.toml"))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "slk-gio: config:", err)
+	}
+	// The search backfill runs from startup, as far back as [cache]
+	// backfill says (90 days unset); -backfill overrides it.
+	horizon, doBackfill, err := cfg.Cache.BackfillOnStart()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "slk-gio: [cache] backfill:", err, "(not filling)")
+		doBackfill = false
+	}
+	if *backfill != "" {
+		if horizon, doBackfill, err = config.ParseBackfill(*backfill); err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio: -backfill:", err)
+			os.Exit(2)
+		}
 	}
 	name, colors := cfg.GUI.Theme.Settings()
 	if *themeName != "" {
@@ -73,20 +86,47 @@ func main() {
 	refillThemes()
 	go startPreviewer()
 
+	// One slk-gio per workspace: a second launch brings the running
+	// one's list forward and exits, before signing in.
+	var tok slackclient.Token
+	instanceID := "fake"
+	if !*fake {
+		if tok, err = pickToken(slackclient.NewTokenStore(filepath.Join(paths.Data(), "tokens")), *team); err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio:", err)
+			os.Exit(1)
+		}
+		instanceID = tok.TeamID
+	}
+	var running atomic.Pointer[hub]
+	if !claimInstance(instanceID, func() {
+		if h := running.Load(); h != nil {
+			h.showList()
+		}
+	}) {
+		fmt.Fprintln(os.Stderr, "slk-gio: already running; showing its list")
+		os.Exit(0)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		be, err := openBackend(ctx, *fake, *fakeEvery, *team)
+		be, err := openBackend(ctx, *fake, *fakeEvery, tok)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "slk-gio:", err)
 			os.Exit(1)
 		}
-		h := newHub(ctx, be, func(err error) {
+		var tray atomic.Bool
+		h := newHub(ctx, be, lastWindowClosed(tray.Load, func(code int) {
 			cancel()
-			if err != nil {
-				os.Exit(1)
-			}
-			os.Exit(0)
-		})
+			os.Exit(code)
+		}))
+		// The tray keeps slk-gio running with no window open.
+		if cfg.GUI.Tray {
+			tray.Store(startTray(h, func() {
+				cancel()
+				os.Exit(0)
+			}))
+		}
+		running.Store(h)
 		// Desktop notifications for mentions and DMs while no window
 		// has the keyboard; set before any window or event exists.
 		h.people() // start reading who @ completes to
@@ -94,6 +134,7 @@ func main() {
 			h.notes = notifications.New(cfg.Notifications, be.Self(), notifications.NewSink(cfg.Notifications, h.openNote))
 		}
 		h.seedGroups()
+		h.typingOn = cfg.Animations.TypingIndicators
 		if s, ok := be.(*backend.Slack); ok {
 			s.SetPaused(h.anyFocused)
 			s.SetBackfillIgnore(cfg.Cache.IgnoresBackfill)
@@ -112,15 +153,25 @@ func main() {
 	app.Main()
 }
 
-func openBackend(ctx context.Context, fake bool, fakeEvery time.Duration, team string) (backend.Backend, error) {
+// lastWindowClosed is the hub's onLast: with the tray up (tray reports
+// it) the program keeps running, the tray its way back; otherwise it
+// exits, 1 if the window failed.
+func lastWindowClosed(tray func() bool, exit func(code int)) func(error) {
+	return func(err error) {
+		switch {
+		case err != nil:
+			exit(1)
+		case !tray():
+			exit(0)
+		}
+	}
+}
+
+func openBackend(ctx context.Context, fake bool, fakeEvery time.Duration, tok slackclient.Token) (backend.Backend, error) {
 	if fake {
 		f := backend.NewFake(time.Now())
 		f.Interval = fakeEvery
 		return f, nil
-	}
-	tok, err := pickToken(slackclient.NewTokenStore(filepath.Join(paths.Data(), "tokens")), team)
-	if err != nil {
-		return nil, err
 	}
 	// The cache (shared with the TUI) seeds user names and keeps the
 	// user's channel visits, which order the list. It is created if slk
@@ -161,31 +212,4 @@ func pickToken(store *slackclient.TokenStore, team string) (slackclient.Token, e
 		names = append(names, t.TeamName)
 	}
 	return slackclient.Token{}, fmt.Errorf("no workspace %q (have: %s)", team, strings.Join(names, ", "))
-}
-
-// parseBackfill reads the -backfill flag: "" is off; "0" is everything;
-// "1y"/"90d" are years and days; anything else is a Go duration.
-func parseBackfill(v string) (horizon time.Duration, on bool, err error) {
-	v = strings.TrimSpace(v)
-	switch {
-	case v == "":
-		return 0, false, nil
-	case v == "0":
-		return 0, true, nil
-	case strings.HasSuffix(v, "y") || strings.HasSuffix(v, "d"):
-		n, err := strconv.Atoi(v[:len(v)-1])
-		if err != nil || n <= 0 {
-			return 0, false, fmt.Errorf("%q: want a count of years or days, like 1y or 90d", v)
-		}
-		days := n
-		if strings.HasSuffix(v, "y") {
-			days = n * 365
-		}
-		return time.Duration(days) * 24 * time.Hour, true, nil
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d <= 0 {
-		return 0, false, fmt.Errorf("%q: want 1y, 90d, 0, or a duration like 720h", v)
-	}
-	return d, true, nil
 }

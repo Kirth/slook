@@ -5,6 +5,7 @@ import (
 	"unicode"
 
 	"github.com/gammons/slk/gui/backend"
+	"github.com/gammons/slk/internal/searchq"
 	"github.com/gammons/slk/internal/text"
 )
 
@@ -15,14 +16,31 @@ type Piece struct {
 	Hit  bool
 }
 
-// terms are query's words as the matcher compares them: folded (case-
-// and accent-blind) and without the punctuation FTS5's tokenizer drops.
-func terms(query string) []string {
-	var out []string
-	for _, f := range strings.Fields(query) {
+// term is a word the query looks for: whole, or a prefix (typed with a
+// trailing *).
+type term struct {
+	word   string
+	prefix bool
+}
+
+// matches is whether a folded word of the text is one the term finds.
+func (t term) matches(folded string) bool {
+	if t.prefix {
+		return strings.HasPrefix(folded, t.word)
+	}
+	return folded == t.word
+}
+
+// terms are the words query looks for (searchq: no filters, nothing
+// excluded) as the matcher compares them: folded (case- and
+// accent-blind) and without the punctuation FTS5's tokenizer drops.
+func terms(query string) []term {
+	var out []term
+	for _, f := range searchq.Parse(query).TextTerms() {
+		prefix := strings.HasSuffix(f, "*")
 		f = strings.TrimFunc(text.Fold(f), func(r rune) bool { return !isWordRune(r) })
 		if f != "" {
-			out = append(out, f)
+			out = append(out, term{f, prefix})
 		}
 	}
 	return out
@@ -31,9 +49,10 @@ func terms(query string) []string {
 // isWordRune is a rune FTS5's unicode61 tokenizer keeps in a word.
 func isWordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
 
-// Highlight splits s into pieces, marking each word that starts with
-// one of query's terms, case- and accent-blind: the rule the cache's
-// full-text search matched it by. Concatenated, the pieces are s.
+// Highlight splits s into pieces, marking each word that is one of
+// query's terms (or starts with one typed with a trailing *), case- and
+// accent-blind: the rule the cache's full-text search matched it by.
+// Concatenated, the pieces are s.
 func Highlight(s, query string) []Piece {
 	ts := terms(query)
 	var out []Piece
@@ -59,7 +78,7 @@ func Highlight(s, query string) []Piece {
 		if word {
 			folded := text.Fold(chunk)
 			for _, t := range ts {
-				if strings.HasPrefix(folded, t) {
+				if t.matches(folded) {
 					hit = true
 					break
 				}

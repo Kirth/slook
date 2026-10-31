@@ -43,8 +43,8 @@ type SlackAPI interface {
 	PostMessageContext(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error)
 	UpdateMessage(channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error)
 	DeleteMessage(channelID, timestamp string) (string, string, error)
-	AddReaction(name string, item slack.ItemRef) error
-	RemoveReaction(name string, item slack.ItemRef) error
+	AddReactionContext(ctx context.Context, name string, item slack.ItemRef) error
+	RemoveReactionContext(ctx context.Context, name string, item slack.ItemRef) error
 	GetPermalinkContext(ctx context.Context, params *slack.PermalinkParameters) (string, error)
 	AuthTest() (*slack.AuthTestResponse, error)
 	JoinConversation(channelID string) (*slack.Channel, string, []string, error)
@@ -1327,13 +1327,21 @@ func (c *Client) RemoveMessage(ctx context.Context, channelID, ts string) error 
 }
 
 // AddReaction adds an emoji reaction to a message.
+// The call is bounded by ctx: a request that never returns ends with
+// ctx rather than holding the caller forever.
 func (c *Client) AddReaction(ctx context.Context, channelID, ts, emoji string) error {
-	return c.api.AddReaction(emoji, slack.ItemRef{Channel: channelID, Timestamp: ts})
+	if err := c.api.AddReactionContext(ctx, emoji, slack.ItemRef{Channel: channelID, Timestamp: ts}); err != nil {
+		return fmt.Errorf("adding reaction :%s:: %w", emoji, err)
+	}
+	return nil
 }
 
 // RemoveReaction removes an emoji reaction from a message.
 func (c *Client) RemoveReaction(ctx context.Context, channelID, ts, emoji string) error {
-	return c.api.RemoveReaction(emoji, slack.ItemRef{Channel: channelID, Timestamp: ts})
+	if err := c.api.RemoveReactionContext(ctx, emoji, slack.ItemRef{Channel: channelID, Timestamp: ts}); err != nil {
+		return fmt.Errorf("removing reaction :%s:: %w", emoji, err)
+	}
+	return nil
 }
 
 // SetUserPresence sets the authenticated user's presence. Accepts "auto"

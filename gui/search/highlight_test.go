@@ -30,12 +30,16 @@ func TestHighlight(t *testing.T) {
 		text, query string
 		want        []string
 	}{
-		{"Deploying the queue, then the deploy", "deploy", []string{"Deploying", "deploy"}},
+		{"Deploying the queue, then the deploy", "deploy", []string{"deploy"}}, // whole words
+		{"Deploying the queue, then the deploy", "deploy*", []string{"Deploying", "deploy"}},
+		{"ig, ignore it", "ig", []string{"ig"}},
+		{"ig, ignore it", "ig*", []string{"ig", "ignore"}},
 		{"Lunch at the Café?", "cafe", []string{"Café"}},
 		{"queue backed up; restart the worker", "worker queue", []string{"queue", "worker"}},
-		{"redeploy now", "deploy", nil}, // prefix of a word, as FTS5 matches
+		{"redeploy now", "deploy*", nil}, // a prefix of words, as FTS5 matches
 		{"nothing here", "zebra", nil},
-		{"build 4821 failed", "48", []string{"4821"}},
+		{"build 4821 failed", "48*", []string{"4821"}},
+		{"build 4821 failed", "48", nil},
 		{"ship it", ":ship:", []string{"ship"}},
 	}
 	for _, c := range cases {

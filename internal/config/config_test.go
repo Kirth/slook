@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -1078,6 +1079,18 @@ background = "#000000"
 	}
 }
 
+func TestGUITray(t *testing.T) {
+	if !Default().GUI.Tray {
+		t.Fatal("the tray should be on by default")
+	}
+	if cfg := loadConfigString(t, "[gui.theme]\npreset = \"ink\"\n"); !cfg.GUI.Tray {
+		t.Fatal("a [gui] table without tray should keep the default")
+	}
+	if cfg := loadConfigString(t, "[gui]\ntray = false\n"); cfg.GUI.Tray {
+		t.Fatal("tray = false should turn it off")
+	}
+}
+
 func TestCacheCatchUp(t *testing.T) {
 	def := Default().Cache
 	if !def.CatchUpOnConnect() || def.CatchUpMax() != DefaultCatchUpLimit {
@@ -1090,5 +1103,32 @@ catch_up_limit = 5
 `)
 	if cfg.Cache.CatchUpOnConnect() || cfg.Cache.CatchUpMax() != 5 {
 		t.Fatalf("set: on=%v max=%d", cfg.Cache.CatchUpOnConnect(), cfg.Cache.CatchUpMax())
+	}
+}
+
+func TestCacheBackfill(t *testing.T) {
+	day := 24 * time.Hour
+	if h, on, err := Default().Cache.BackfillOnStart(); err != nil || !on || h != 90*day {
+		t.Fatalf("default: %v %v %v", h, on, err)
+	}
+	for _, c := range []struct {
+		v    string
+		h    time.Duration
+		on   bool
+		fail bool
+	}{
+		{"off", 0, false, false},
+		{"all", 0, true, false},
+		{"0", 0, true, false},
+		{"1y", 365 * day, true, false},
+		{"30d", 30 * day, true, false},
+		{"720h", 720 * time.Hour, true, false},
+		{"soon", 0, false, true},
+	} {
+		cfg := loadConfigString(t, "[cache]\nbackfill = \""+c.v+"\"\n")
+		h, on, err := cfg.Cache.BackfillOnStart()
+		if (err != nil) != c.fail || h != c.h || on != c.on {
+			t.Errorf("%q: %v %v %v", c.v, h, on, err)
+		}
 	}
 }

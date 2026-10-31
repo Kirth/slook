@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gammons/slk/internal/core"
 	toml "github.com/pelletier/go-toml/v2"
@@ -31,6 +32,11 @@ type Config struct {
 // GUIConfig is [gui]: settings for the Gio frontend (slk-gio).
 type GUIConfig struct {
 	Theme GUITheme `toml:"theme"`
+	// Tray puts an icon in the desktop's tray (StatusNotifierItem) and
+	// keeps slk-gio running when its last window closes; the icon
+	// opens the list again. On by default; without a tray host (GNOME
+	// without the AppIndicator extension) slk-gio exits as before.
+	Tray bool `toml:"tray"`
 }
 
 // GUITheme is [gui.theme], kept as written so both its forms read:
@@ -203,6 +209,14 @@ type CacheConfig struct {
 	// ("leafcloud-alerts-*"). Messages that arrive live are still
 	// cached, and opening the conversation still fetches its page.
 	BackfillIgnore []string `toml:"backfill_ignore"`
+	// Backfill is how far back slk-gio fills the message cache in the
+	// background, for search, from startup: "90d", "1y", "all" (or
+	// "0") for everything, "off" for not at all. Unset means
+	// DefaultBackfill. The fill is paced (one request every eight
+	// seconds, paused while a window has the keyboard), skips what
+	// BackfillIgnore names and what the cache already holds; slk-gio's
+	// -backfill flag overrides it.
+	Backfill string `toml:"backfill"`
 	// CatchUp turns off (false) the catch-up a socket connect runs: one
 	// history page for each conversation the cache already follows that
 	// got new messages while slk-gio was not listening. On when unset.
@@ -211,6 +225,49 @@ type CacheConfig struct {
 	// CatchUpLimit bounds how many conversations one connect catches
 	// up; 0 means DefaultCatchUpLimit.
 	CatchUpLimit int `toml:"catch_up_limit"`
+}
+
+// DefaultBackfill is how far back slk-gio fills the cache from startup
+// when [cache] backfill is unset: the search window's own default.
+const DefaultBackfill = "90d"
+
+// BackfillOnStart is what [cache] backfill asks of startup: whether to
+// fill the cache, and how far back (0 for everything).
+func (c CacheConfig) BackfillOnStart() (horizon time.Duration, on bool, err error) {
+	v := strings.TrimSpace(c.Backfill)
+	if v == "" {
+		v = DefaultBackfill
+	}
+	return ParseBackfill(v)
+}
+
+// ParseBackfill reads a backfill horizon: "off" (or "" , "false", "no")
+// is none; "0" or "all" is everything; "1y" and "90d" are years and
+// days; anything else is a Go duration ("720h").
+func ParseBackfill(v string) (horizon time.Duration, on bool, err error) {
+	v = strings.ToLower(strings.TrimSpace(v))
+	switch v {
+	case "", "off", "false", "no":
+		return 0, false, nil
+	case "0", "all":
+		return 0, true, nil
+	}
+	if strings.HasSuffix(v, "y") || strings.HasSuffix(v, "d") {
+		n, err := strconv.Atoi(v[:len(v)-1])
+		if err != nil || n <= 0 {
+			return 0, false, fmt.Errorf("%q: want a count of years or days, like 1y or 90d", v)
+		}
+		days := n
+		if strings.HasSuffix(v, "y") {
+			days = n * 365
+		}
+		return time.Duration(days) * 24 * time.Hour, true, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return 0, false, fmt.Errorf("%q: want 90d, 1y, all, off, or a duration like 720h", v)
+	}
+	return d, true, nil
 }
 
 // DefaultCatchUpLimit is how many conversations a connect catches up
@@ -347,6 +404,7 @@ func Default() Config {
 		Sidebar: Sidebar{
 			HideInactiveAfterDays: 30,
 		},
+		GUI: GUIConfig{Tray: true},
 	}
 }
 

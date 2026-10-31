@@ -2,6 +2,8 @@ package chat
 
 import (
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/gammons/slk/gui/backend"
 )
@@ -48,4 +50,41 @@ func ApplyReaction(rs []backend.Reaction, name, user string, added, self bool) [
 	}
 	out[i] = r
 	return out
+}
+
+// reactorsShown is how many names a reaction's hover lists before
+// "and N others".
+const reactorsShown = 10
+
+// Reactors says who reacted, for a reaction's hover: names (the others
+// slk can name, at most reactorsShown of them shown), mine (the user
+// is among them, said last as "you") and total (how many reacted;
+// Slack's list of who can be shorter than the count on a big
+// reaction). "Ada Lovelace, Grace Hopper and you", "Ada Lovelace and 3
+// others", "You".
+func Reactors(names []string, total int, mine bool) string {
+	if len(names) > reactorsShown {
+		names = names[:reactorsShown]
+	}
+	parts := slices.Clone(names)
+	if mine {
+		parts = append(parts, "you")
+	}
+	if others := total - len(parts); others > 0 {
+		if others == 1 {
+			parts = append(parts, "1 other")
+		} else {
+			parts = append(parts, strconv.Itoa(others)+" others")
+		}
+	}
+	var s string
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		s = parts[0]
+	default:
+		s = strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }

@@ -64,7 +64,7 @@ type rtmEventHandler struct {
 
 	// ensureThreadSubs kicks the workspace's throttled thread-
 	// subscription sync (subscriptions.thread.getView). The reconnect
-	// catch-up fires it on every pass — the threadSubsGate inside
+	// catch-up fires it on every pass — the threadsubs.Gate inside
 	// owns the real throttling, so the kick itself is free.
 	//
 	// nil in tests that construct a handler for unrelated events.

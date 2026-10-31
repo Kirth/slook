@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // buildFTSQuery converts raw user input into an FTS5 MATCH expression
@@ -163,41 +164,228 @@ const (
 // replies included. It is the workspace-wide twin of
 // SearchChannelMessages for a search window, which can open a reply's
 // thread, so nothing is filtered by row shape. Matching is as there:
-// word-prefix, case- and accent-insensitive. When FTS is unavailable it
-// is a LIKE scan, which has no rank: newest first whatever order asks.
+// word-prefix, case- and accent-insensitive. It is SearchMessagesSpec
+// with every word required as a prefix.
 func (db *DB) SearchMessages(workspaceID, query string, limit int, order SearchOrder) ([]Message, error) {
+	var spec SearchSpec
+	for _, f := range strings.Fields(query) {
+		spec.All = append(spec.All, []string{f + "*"})
+	}
+	if len(spec.All) == 0 {
+		return nil, nil
+	}
+	return db.SearchMessagesSpec(workspaceID, spec, limit, order)
+}
+
+// Tri is a yes/no filter that may be left out.
+type Tri int8
+
+const (
+	Any Tri = iota // not filtered
+	Yes
+	No
+)
+
+// SearchSpec is what SearchMessagesSpec looks for. Every part that is
+// set must hold; an empty spec finds nothing.
+type SearchSpec struct {
+	// All are groups of alternatives, each group one the text must
+	// match. An alternative is whole words in a row; a trailing * makes
+	// its last word a prefix: {{"deploy"}, {"build fail*", "red"}} is
+	// deploy AND ("build" then a word starting "fail", OR red).
+	All [][]string
+	// None are alternatives the text must not match.
+	None []string
+	// Users and Channels are authors and conversations the message must
+	// be one of; NotUsers and NotChannels ones it must not.
+	Users, NotUsers, Channels, NotChannels []string
+	// Mentions are pieces of Slack markup (<@U1>, <!subteam^S1) the
+	// text must contain one of; NotMentions any of which it must not.
+	Mentions, NotMentions []string
+	// Since and Until bound the message's ts, [Since, Until); "" is
+	// unbounded.
+	Since, Until string
+	// Thread is a thread's parent with replies; Reply a reply (not a
+	// broadcast); Edited an edited message; Link one with a link in its
+	// text; File one with files; Reaction one with any reaction.
+	Thread, Reply, Edited, Link, File, Reaction Tri
+	// Emoji are reactions the message must have each of; NotEmoji ones
+	// it must have none of. Names without colons.
+	Emoji, NotEmoji []string
+}
+
+// empty is whether s asks for nothing at all.
+func (s SearchSpec) empty() bool {
+	return len(s.All) == 0 && len(s.None) == 0 && len(s.Users)+len(s.NotUsers)+len(s.Channels)+len(s.NotChannels) == 0 &&
+		len(s.Mentions)+len(s.NotMentions)+len(s.Emoji)+len(s.NotEmoji) == 0 && s.Since == "" && s.Until == "" &&
+		s.Thread == Any && s.Reply == Any && s.Edited == Any && s.Link == Any && s.File == Any && s.Reaction == Any
+}
+
+// ftsPhrase is one alternative as an FTS5 phrase, quoted so nothing in
+// it reads as FTS5 syntax, its last word a prefix when it ends in *;
+// "" when it has no word FTS5 would index.
+func ftsPhrase(alt string) string {
+	if !strings.ContainsFunc(alt, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+		return ""
+	}
+	prefix := strings.HasSuffix(alt, "*")
+	p := `"` + strings.ReplaceAll(strings.Join(strings.Fields(strings.TrimRight(alt, "*")), " "), `"`, `""`) + `"`
+	if prefix {
+		p += "*"
+	}
+	return p
+}
+
+// ftsAny is alternatives as one FTS5 expression, "" if none is a word.
+func ftsAny(alts []string) string {
+	var ps []string
+	for _, a := range alts {
+		if p := ftsPhrase(a); p != "" {
+			ps = append(ps, p)
+		}
+	}
+	switch len(ps) {
+	case 0:
+		return ""
+	case 1:
+		return ps[0]
+	}
+	return "(" + strings.Join(ps, " OR ") + ")"
+}
+
+// likePattern is a LIKE pattern for alt anywhere in the text (LIKE has
+// no words: whole or prefix, it is a substring).
+func likePattern(alt string) string {
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(strings.Join(strings.Fields(strings.TrimRight(alt, "*")), " "))
+	return "%" + escaped + "%"
+}
+
+// SearchMessagesSpec returns the workspace's non-deleted messages that
+// match spec, in order and at most limit of them, thread replies
+// included. Text matches whole words (a trailing * a prefix), case- and
+// accent-insensitively; without text to rank by,
+// or when FTS is unavailable (a LIKE scan: substrings, ASCII-only case
+// folding), the order is newest first.
+func (db *DB) SearchMessagesSpec(workspaceID string, spec SearchSpec, limit int, order SearchOrder) ([]Message, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	if db.ftsDisabled {
-		terms := strings.Fields(query)
-		if len(terms) == 0 {
-			return nil, nil
-		}
-		q := `SELECT ` + messageColumns + ` FROM messages WHERE workspace_id = ? AND is_deleted = 0`
-		args := []any{workspaceID}
-		for _, term := range terms {
-			q += ` AND text LIKE ? ESCAPE '\'`
-			escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(term)
-			args = append(args, "%"+escaped+"%")
-		}
-		q += ` ORDER BY ts DESC LIMIT ?`
-		args = append(args, limit)
-		return db.queryMessages(q, args...)
-	}
-	match := buildFTSQuery(query)
-	if match == "" {
+	if spec.empty() {
 		return nil, nil
 	}
-	cols := strings.ReplaceAll(messageColumns, ", ", ", m.")
+	cols := "m." + strings.ReplaceAll(messageColumns, ", ", ", m.")
+	from := ` FROM messages m`
+	where := []string{"m.workspace_id = ?", "m.is_deleted = 0"}
+	var args []any
+	args = append(args, workspaceID)
 	orderBy := "m.ts DESC"
-	if order == SearchRelevance {
-		orderBy = "bm25(messages_fts), m.ts DESC" // lower bm25 is better
+
+	if db.ftsDisabled {
+		for _, group := range spec.All {
+			var ors []string
+			for _, alt := range group {
+				if strings.TrimSpace(alt) == "" {
+					continue
+				}
+				ors = append(ors, `m.text LIKE ? ESCAPE '\'`)
+				args = append(args, likePattern(alt))
+			}
+			if len(ors) == 0 {
+				return nil, nil
+			}
+			where = append(where, "("+strings.Join(ors, " OR ")+")")
+		}
+		for _, alt := range spec.None {
+			if strings.TrimSpace(alt) != "" {
+				where = append(where, `m.text NOT LIKE ? ESCAPE '\'`)
+				args = append(args, likePattern(alt))
+			}
+		}
+	} else {
+		var match []string
+		for _, group := range spec.All {
+			e := ftsAny(group)
+			if e == "" {
+				return nil, nil // a group of no words matches nothing
+			}
+			match = append(match, e)
+		}
+		if len(match) > 0 {
+			from += ` JOIN messages_fts f ON f.rowid = m.rowid`
+			where = append(where, "messages_fts MATCH ?")
+			args = append(args, strings.Join(match, " AND "))
+			if order == SearchRelevance {
+				orderBy = "bm25(messages_fts), m.ts DESC" // lower bm25 is better
+			}
+		}
+		if e := ftsAny(spec.None); e != "" {
+			where = append(where, "m.rowid NOT IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)")
+			args = append(args, e)
+		}
 	}
-	return db.queryMessages(`
-		SELECT m.`+cols+`
-		FROM messages_fts f
-		JOIN messages m ON m.rowid = f.rowid
-		WHERE messages_fts MATCH ? AND m.workspace_id = ? AND m.is_deleted = 0
-		ORDER BY `+orderBy+` LIMIT ?`, match, workspaceID, limit)
+
+	in := func(col string, ids []string, not bool) {
+		if len(ids) == 0 {
+			return
+		}
+		op := " IN "
+		if not {
+			op = " NOT IN "
+		}
+		where = append(where, col+op+"("+strings.TrimSuffix(strings.Repeat("?, ", len(ids)), ", ")+")")
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	in("m.user_id", spec.Users, false)
+	in("m.user_id", spec.NotUsers, true)
+	in("m.channel_id", spec.Channels, false)
+	in("m.channel_id", spec.NotChannels, true)
+	if len(spec.Mentions) > 0 {
+		var ors []string
+		for _, w := range spec.Mentions {
+			ors = append(ors, "instr(m.text, ?) > 0")
+			args = append(args, w)
+		}
+		where = append(where, "("+strings.Join(ors, " OR ")+")")
+	}
+	for _, w := range spec.NotMentions {
+		where = append(where, "instr(m.text, ?) = 0")
+		args = append(args, w)
+	}
+	if spec.Since != "" {
+		where = append(where, "m.ts >= ?")
+		args = append(args, spec.Since)
+	}
+	if spec.Until != "" {
+		where = append(where, "m.ts < ?")
+		args = append(args, spec.Until)
+	}
+	tri := func(t Tri, cond string) {
+		switch t {
+		case Yes:
+			where = append(where, cond)
+		case No:
+			where = append(where, "NOT ("+cond+")")
+		}
+	}
+	tri(spec.Thread, "m.thread_ts = m.ts AND m.reply_count > 0")
+	tri(spec.Reply, "m.thread_ts != '' AND m.thread_ts != m.ts AND m.subtype != 'thread_broadcast'")
+	tri(spec.Edited, "m.edited_at != ''")
+	tri(spec.Link, "instr(m.text, '<http') > 0")
+	tri(spec.File, `instr(m.raw_json, '"files":[{') > 0`)
+	const reacted = "EXISTS (SELECT 1 FROM reactions r WHERE r.message_ts = m.ts AND r.channel_id = m.channel_id AND r.count > 0"
+	tri(spec.Reaction, reacted+")")
+	for _, e := range spec.Emoji {
+		where = append(where, reacted+" AND r.emoji = ?)")
+		args = append(args, e)
+	}
+	for _, e := range spec.NotEmoji {
+		where = append(where, "NOT "+reacted+" AND r.emoji = ?)")
+		args = append(args, e)
+	}
+
+	q := "SELECT " + cols + from + " WHERE " + strings.Join(where, " AND ") + " ORDER BY " + orderBy + " LIMIT ?"
+	args = append(args, limit)
+	return db.queryMessages(q, args...)
 }

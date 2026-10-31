@@ -26,6 +26,7 @@ import (
 	"github.com/gammons/slk/gui/motion"
 	"github.com/gammons/slk/gui/rich"
 	"github.com/gammons/slk/gui/search"
+	"github.com/gammons/slk/internal/searchq"
 	"github.com/gammons/slk/internal/ui/messages"
 )
 
@@ -55,12 +56,26 @@ type searchWindow struct {
 	due time.Time // when the typed text is searched; zero when nothing is pending
 	gen int       // the current search; results of older ones are dropped
 	// cancel ends the search in flight.
-	cancel    context.CancelFunc
-	query     string // the query the results answer
-	hits      []backend.SearchHit
-	searching bool
-	searchErr string
-	rows      map[string]*widget.Clickable // by channel+ts
+	cancel context.CancelFunc
+	query  string // the query the results answer
+	hits   []backend.SearchHit
+	// ranked is whether the query in use has words to rank by; without
+	// them results are newest first and there is no order to choose.
+	ranked bool
+	// chips are how the box's text reads, under it; sug is what the
+	// popup offers at the caret (sugText and sugCaret are what it was
+	// worked out for), sugSel its lit row, sugDismissed the text Escape
+	// hid it for.
+	chips        []search.Chip
+	sug          search.Suggestion
+	sugText      string
+	sugCaret     int
+	sugSel       int
+	sugDismissed string
+	sugRows      [popupRows]widget.Clickable
+	searching    bool
+	searchErr    string
+	rows         map[string]*widget.Clickable // by channel+ts
 	// bars glide the coverage bars to new values, by conversation ID
 	// (and overallBar).
 	bars map[string]*motion.Tween
@@ -148,6 +163,8 @@ func newSearchWindowFrom(h *hub, st searchState) *searchWindow {
 	s := newSearchWindow(h, st.connected)
 	s.ed.SetText(st.query)
 	s.query, s.hits = st.query, st.hits
+	_, s.chips = s.resolve(st.query)
+	s.ranked = searchq.Parse(st.query).HasText()
 	if st.horizon != "" {
 		s.horizon.Value = st.horizon
 	}
@@ -440,19 +457,177 @@ func (s *searchWindow) pruneRows() {
 
 func hitKey(h backend.SearchHit) string { return h.Message.ChannelID + "\x00" + h.Message.TS }
 
-// fire starts a search for q, dropping the one in flight.
+// sources is what the query's names resolve against: what the hub
+// already holds, nothing asked for.
+func (s *searchWindow) sources() search.Sources {
+	return search.Sources{
+		People: s.h.people(),
+		Groups: s.h.be.UserGroups(),
+		Convs:  s.h.cachedConversations(),
+		Self:   s.h.be.Self(),
+	}
+}
+
+// resolve reads q as of now.
+func (s *searchWindow) resolve(q string) (backend.SearchQuery, []search.Chip) {
+	return search.Resolve(searchq.Parse(q), s.sources(), time.Now())
+}
+
+// fire starts a search for q, dropping the one in flight. A query of
+// filters still being typed (from: alone) searches nothing yet; one
+// naming someone unknown finds nothing without asking.
 func (s *searchWindow) fire(q string) {
 	if s.cancel != nil {
 		s.cancel()
 	}
 	s.gen++
+	rq, chips := s.resolve(q)
+	s.chips = chips
+	if rq.Empty() {
+		s.cancel, s.searching = nil, false
+		s.query, s.hits, s.searchErr = "", nil, ""
+		s.pruneRows()
+		return
+	}
+	if rq.Nothing {
+		s.cancel, s.searching = nil, false
+		s.query, s.hits, s.searchErr = q, nil, ""
+		s.pruneRows()
+		return
+	}
+	s.ranked = rq.Ranked()
 	ctx, cancel := context.WithCancel(s.h.ctx)
 	s.cancel = cancel
 	s.searching = true
 	go func(gen int, order backend.SearchOrder) {
-		hits, err := s.h.be.Search(ctx, q, searchLimit, order)
+		hits, err := s.h.be.Search(ctx, rq, searchLimit, order)
 		s.box.post(searchResults{gen: gen, query: q, hits: hits, err: err})
 	}(s.gen, s.order)
+}
+
+// suggest works out what the popup offers for the box's text and
+// caret, once per change of either. Escape hides it until the text
+// changes.
+func (s *searchWindow) suggest() {
+	t := s.ed.Text()
+	_, caret := s.ed.Selection()
+	if t == s.sugText && caret == s.sugCaret {
+		return
+	}
+	s.sugText, s.sugCaret = t, caret
+	if t != s.sugDismissed {
+		s.sugDismissed = ""
+	}
+	prev := s.sug
+	s.sug = search.Suggestion{}
+	if s.sugDismissed == "" {
+		s.sug = search.Suggest(t, caret, s.sources(), popupRows)
+	}
+	if len(s.sug.Choices) != len(prev.Choices) || s.sug.Start != prev.Start {
+		s.sugSel = 0
+	}
+}
+
+// accept puts suggestion i in the box in place of what it completes,
+// followed by a space unless it is a filter's name (from:), and moves
+// the caret after it.
+func (s *searchWindow) accept(i int) {
+	if i < 0 || i >= len(s.sug.Choices) {
+		return
+	}
+	ins := s.sug.Choices[i].Insert
+	if !strings.HasSuffix(ins, ":") {
+		ins += " "
+	}
+	s.ed.SetCaret(s.sug.Start, s.sug.End)
+	s.ed.Insert(ins)
+	s.sug = search.Suggestion{}
+	s.sugText = "" // work it out again for the new text
+	s.due = time.Now().Add(searchDebounce)
+}
+
+// popupKeys takes Up, Down, Tab and Escape from the box while the popup
+// is open, before the editor sees them.
+func (s *searchWindow) popupKeys(gtx C) {
+	if len(s.sug.Choices) == 0 {
+		return
+	}
+	for {
+		ev, ok := gtx.Event(
+			key.Filter{Focus: &s.ed, Name: key.NameUpArrow},
+			key.Filter{Focus: &s.ed, Name: key.NameDownArrow},
+			key.Filter{Focus: &s.ed, Name: key.NameTab},
+			key.Filter{Focus: &s.ed, Name: key.NameEscape},
+		)
+		if !ok {
+			break
+		}
+		k, ok := ev.(key.Event)
+		if !ok || k.State != key.Press || len(s.sug.Choices) == 0 {
+			continue
+		}
+		n := len(s.sug.Choices)
+		switch k.Name {
+		case key.NameUpArrow:
+			s.sugSel = (s.sugSel + n - 1) % n
+		case key.NameDownArrow:
+			s.sugSel = (s.sugSel + 1) % n
+		case key.NameTab:
+			s.accept(s.sugSel)
+		case key.NameEscape:
+			s.sugDismissed = s.ed.Text()
+			s.sug = search.Suggestion{}
+		}
+	}
+}
+
+// suggestions draws the popup under the box, taking clicks on its rows.
+func (s *searchWindow) suggestions(gtx C) D {
+	n := min(len(s.sug.Choices), popupRows)
+	for i := 0; i < n; i++ {
+		if s.sugRows[i].Clicked(gtx) {
+			s.accept(i)
+			gtx.Execute(key.FocusCmd{Tag: &s.ed})
+			return D{}
+		}
+	}
+	if n == 0 {
+		return D{}
+	}
+	return layout.Inset{Bottom: unit.Dp(6)}.Layout(gtx, func(gtx C) D {
+		return popupList(gtx, &s.sugRows, n, s.sugSel, func(gtx C, i int) D {
+			return choiceRow(gtx, s.th, &s.view, s.sug.Choices[i])
+		})
+	})
+}
+
+// chipLine is how the query reads ("from Ada Lovelace · in #general"),
+// what is wrong with it in the error colour, or a hint at the language
+// while the box is empty.
+func (s *searchWindow) chipLine(gtx C) D {
+	if strings.TrimSpace(s.ed.Text()) == "" {
+		lbl := captionLabel(s.th, `from:ada  in:#general  since:monday  "a phrase"  !not  a | b  deplo*  has:link`)
+		lbl.Color = colMuted
+		lbl.MaxLines = 1
+		return layout.Inset{Left: unit.Dp(14), Right: unit.Dp(14), Bottom: unit.Dp(8)}.Layout(gtx, lbl.Layout)
+	}
+	if len(s.chips) == 0 {
+		return D{}
+	}
+	spans := make([]styledtext.SpanStyle, 0, 2*len(s.chips))
+	for i, c := range s.chips {
+		if i > 0 {
+			spans = append(spans, styledtext.SpanStyle{Font: font.Font{Typeface: s.th.Face}, Size: captionSize, Color: colMuted, Content: "  ·  "})
+		}
+		col := colFg
+		if c.Err {
+			col = colError
+		}
+		spans = append(spans, styledtext.SpanStyle{Font: font.Font{Typeface: s.th.Face}, Size: captionSize, Color: col, Content: c.Text})
+	}
+	return layout.Inset{Left: unit.Dp(14), Right: unit.Dp(14), Bottom: unit.Dp(8)}.Layout(gtx, func(gtx C) D {
+		return styledtext.Text(s.th.Shaper, spans...).Layout(gtx, nil)
+	})
 }
 
 // clearSearch drops the query, its results and any search in flight.
@@ -464,6 +639,7 @@ func (s *searchWindow) clearSearch() {
 	s.gen++
 	s.due = time.Time{}
 	s.query, s.hits, s.searching, s.searchErr = "", nil, false, ""
+	s.chips, s.sug = nil, search.Suggestion{}
 	s.pruneRows()
 }
 
@@ -475,6 +651,9 @@ func (s *searchWindow) layout(gtx C) {
 		s.refresh(gtx.Now)
 	}
 
+	// The popup's keys first: Escape then hides it rather than
+	// clearing the box.
+	s.popupKeys(gtx)
 	// Escape clears, before the editor sees the key.
 	for {
 		ev, ok := gtx.Event(key.Filter{Focus: &s.ed, Name: key.NameEscape})
@@ -497,15 +676,24 @@ func (s *searchWindow) layout(gtx C) {
 			if strings.TrimSpace(s.ed.Text()) == "" {
 				s.clearSearch()
 			} else {
+				_, s.chips = s.resolve(s.ed.Text()) // at once; the search waits
 				s.due = gtx.Now.Add(searchDebounce)
 				gtx.Execute(op.InvalidateCmd{At: s.due})
 			}
 		case widget.SubmitEvent:
+			if len(s.sug.Choices) > 0 {
+				s.accept(s.sugSel) // Enter takes the lit suggestion
+				break
+			}
 			if q := strings.TrimSpace(s.ed.Text()); q != "" {
 				s.due = time.Time{}
 				s.fire(q)
 			}
 		}
+	}
+	s.suggest()
+	if !s.due.IsZero() && gtx.Now.Before(s.due) {
+		gtx.Execute(op.InvalidateCmd{At: s.due}) // a suggestion taken set it
 	}
 	if !s.due.IsZero() && !gtx.Now.Before(s.due) {
 		s.due = time.Time{}
@@ -517,7 +705,7 @@ func (s *searchWindow) layout(gtx C) {
 		btn   *widget.Clickable
 		order backend.SearchOrder
 	}{{&s.sortBest, backend.Relevance}, {&s.sortNewest, backend.Newest}} {
-		if sw.btn.Clicked(gtx) && s.order != sw.order {
+		if sw.btn.Clicked(gtx) && s.order != sw.order && s.ranked {
 			s.order = sw.order
 			if q := strings.TrimSpace(s.ed.Text()); q != "" {
 				s.due = time.Time{}
@@ -555,8 +743,10 @@ func (s *searchWindow) layout(gtx C) {
 	layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx C) D { return s.hdr.layout(gtx, s.th, spec, s.cfg) }),
 		layout.Rigid(func(gtx C) D {
-			return layout.UniformInset(unit.Dp(10)).Layout(gtx, framedEditor(s.th, &s.ed, "Search messages"))
+			return layout.UniformInset(unit.Dp(10)).Layout(gtx, framedEditor(s.th, &s.ed, "Search messages, from:, in:, since:…"))
 		}),
+		layout.Rigid(s.suggestions),
+		layout.Rigid(s.chipLine),
 		layout.Rigid(divider),
 		layout.Flexed(1, s.main),
 		layout.Rigid(divider),
@@ -626,6 +816,8 @@ func (s *searchWindow) main(gtx C) D {
 		return notice(gtx, s.th, "Searching…", colMuted)
 	case len(s.hits) == 0 && s.query != "":
 		return notice(gtx, s.th, "No cached message matches.", colMuted)
+	case len(s.hits) == 0 && !s.searching && s.due.IsZero():
+		return notice(gtx, s.th, "Finish the filter, or add words to search for.", colMuted)
 	case len(s.hits) == 0:
 		return notice(gtx, s.th, "Searching…", colMuted)
 	}
@@ -646,8 +838,11 @@ func (s *searchWindow) sortBar(gtx C) D {
 	if len(s.hits) == 1 {
 		count = "1 result"
 	}
-	option := func(cl *widget.Clickable, label string, current bool) layout.FlexChild {
+	option := func(cl *widget.Clickable, label string, current, shown bool) layout.FlexChild {
 		return layout.Rigid(func(gtx C) D {
+			if !shown {
+				return D{}
+			}
 			return layout.Inset{Left: unit.Dp(10)}.Layout(gtx, func(gtx C) D {
 				if current {
 					lbl := captionLabel(s.th, label)
@@ -666,8 +861,16 @@ func (s *searchWindow) sortBar(gtx C) D {
 				lbl.Color = colMuted
 				return lbl.Layout(gtx)
 			}),
-			option(&s.sortBest, "Best match", s.order == backend.Relevance),
-			option(&s.sortNewest, "Newest", s.order == backend.Newest),
+			layout.Rigid(func(gtx C) D {
+				if s.ranked {
+					return D{}
+				}
+				lbl := captionLabel(s.th, "Newest first")
+				lbl.Color = colMuted
+				return lbl.Layout(gtx)
+			}),
+			option(&s.sortBest, "Best match", s.order == backend.Relevance, s.ranked),
+			option(&s.sortNewest, "Newest", s.order == backend.Newest, s.ranked),
 		)
 	})
 }
