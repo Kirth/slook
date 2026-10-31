@@ -36,14 +36,20 @@ import (
 	"github.com/gammons/slk/gui/palette"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/onboard"
 	"github.com/gammons/slk/internal/paths"
 	slackclient "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/slackdesktop"
 	"github.com/gammons/slk/internal/slackfmt"
 	"github.com/gammons/slk/internal/theme"
 )
 
 // connectTimeout bounds sign-in, so a wedged network fails visibly.
 const connectTimeout = 30 * time.Second
+
+// remintTimeout bounds the startup token refresh from the desktop app's
+// session; on expiry the stored tokens are used.
+const remintTimeout = 10 * time.Second
 
 func main() {
 	fake := flag.Bool("fake", false, "use made-up conversations instead of Slack")
@@ -100,7 +106,7 @@ func main() {
 	var tok slackclient.Token
 	instanceID := "fake"
 	if !*fake {
-		if tok, err = pickToken(slackclient.NewTokenStore(filepath.Join(paths.Data(), "tokens")), *team); err != nil {
+		if tok, err = pickToken(remintStored(slackclient.NewTokenStore(filepath.Join(paths.Data(), "tokens"))), *team); err != nil {
 			fmt.Fprintln(os.Stderr, "slk-gio:", err)
 			os.Exit(1)
 		}
@@ -197,18 +203,42 @@ func openBackend(ctx context.Context, fake bool, fakeEvery time.Duration, tok sl
 		db.Close()
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%w (if the session expired, run slk once to refresh it)", err)
+		return nil, fmt.Errorf("%w (if the session expired, sign in to the Slack desktop app and start slk-gio again, or run slk --add-workspace)", err)
 	}
 	return be, nil
 }
 
-func pickToken(store *slackclient.TokenStore, team string) (slackclient.Token, error) {
-	toks, err := store.List()
+// storedTokens is the token store's contents after a re-mint, or the
+// error listing it failed with.
+type storedTokens struct {
+	toks []slackclient.Token
+	err  error
+}
+
+// remintStored refreshes every stored token from the Slack desktop app's
+// live session, as slk did at each launch: xoxc tokens expire, and the
+// desktop app's session is the source of truth. A token that cannot be
+// refreshed (no desktop app, offline, a browser-session token) is used as
+// stored; onboard logs why to stderr.
+func remintStored(store *slackclient.TokenStore) storedTokens {
+	ctx, cancel := context.WithTimeout(context.Background(), remintTimeout)
+	defer cancel()
+	toks, err := onboard.Remint(ctx, store, slackclient.MintToken)
+	return storedTokens{toks, err}
+}
+
+func pickToken(stored storedTokens, team string) (slackclient.Token, error) {
+	toks, err := stored.toks, stored.err
 	if err != nil {
 		return slackclient.Token{}, fmt.Errorf("reading workspaces: %w", err)
 	}
 	if len(toks) == 0 {
-		return slackclient.Token{}, errors.New("no workspaces yet: run slk --add-workspace, or try slk-gio -fake")
+		msg := "no workspaces yet: run slk --add-workspace, or try slk-gio -fake"
+		// Say why the desktop app's session is no help, when it is not.
+		if _, derr := slackdesktop.Cookie(); derr != nil {
+			msg += "\n" + onboard.DesktopErrorMessage(derr)
+		}
+		return slackclient.Token{}, errors.New(msg)
 	}
 	if team == "" {
 		return toks[0], nil

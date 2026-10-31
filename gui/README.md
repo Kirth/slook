@@ -14,6 +14,11 @@ when the last window closes. Launching slk-gio again for a workspace
 that already has one running brings that one's list forward instead of
 starting a second (`-fake` runs count as a workspace of their own).
 
+At startup slk-gio refreshes the stored tokens from the Slack desktop
+app's session (as `slk` used to at each launch), so an expired token
+renews itself while the desktop app stays signed in; when that cannot be
+read the stored token is used and the reason goes to stderr.
+
 ```
 make gui                    # builds bin/slk-gio, inside gui/shell.nix when Nix is there
 bin/slk-gio -fake           # made-up conversations, no Slack account needed
