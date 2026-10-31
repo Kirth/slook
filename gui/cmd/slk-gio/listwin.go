@@ -74,6 +74,9 @@ type listWindow struct {
 	joinable []backend.ChannelResult
 	joins    map[string]*widget.Clickable
 	note     string
+	// newMsg is the new-message picker the header's compose button
+	// opens.
+	newMsg newMessagePicker
 }
 
 // listState is what the list hands to its replacement when it moves to
@@ -382,6 +385,12 @@ func (l *listWindow) open(c backend.Conversation) { l.h.openChat(c) }
 func (l *listWindow) layout(gtx C) {
 	fillBackground(gtx)
 	l.sizeDp = image.Pt(int(float32(gtx.Constraints.Max.X)/gtx.Metric.PxPerDp), int(float32(gtx.Constraints.Max.Y)/gtx.Metric.PxPerDp))
+	if ids, closed := l.newMsg.update(gtx, l.h.people(), l.h.be.Self()); closed {
+		l.focused = false // the filter takes the keyboard back
+		if ids != nil {
+			l.h.openDM(ids, "", &l.box)
+		}
+	}
 	submitted := false
 	l.rl.keys(gtx, &l.filter)
 	for {
@@ -493,6 +502,7 @@ func (l *listWindow) layout(gtx C) {
 			})
 		}),
 	)
+	l.newMsg.layout(gtx, l.th, &l.view)
 }
 
 // headerSpec is the list's header: the workspace and how much is
@@ -502,7 +512,10 @@ func (l *listWindow) headerSpec() headerSpec {
 	spec := headerSpec{
 		Title:   name,
 		Leading: func(gtx C) D { return tile(gtx, l.th, leadingSize, tint(colAccent), nil, initial(name)) },
-		Actions: []headerAction{{icon: iconSearch, onClick: l.h.showSearch}},
+		Actions: []headerAction{
+			{icon: iconCompose, onClick: l.newMsg.show, active: l.newMsg.open},
+			{icon: iconSearch, onClick: l.h.showSearch},
+		},
 	}
 	n := 0
 	for _, c := range l.convs {

@@ -504,9 +504,10 @@ func (b *composeBox) runCommand(typed, name, args string) {
 }
 
 // openNamed is /open and /msg: it opens the window of a conversation
-// by name. For /msg (kind "dm") the target is a direct message and the
-// rest of args is put in its composer, not sent. For /open (and /join)
-// a channel the user is not in is looked up on Slack and joined.
+// by name. For /msg (kind "dm") the target is a direct message or group
+// DM, else a person, whose DM is opened (or started); the rest of args
+// is put in its composer, not sent. For /open (and /join) a channel the
+// user is not in is looked up on Slack and joined.
 func (b *composeBox) openNamed(typed, args, kind string) {
 	convs, err := b.h.conversations()
 	if err != nil {
@@ -522,12 +523,22 @@ func (b *composeBox) openNamed(typed, args, kind string) {
 		b.openChannel(typed, target, convs)
 		return
 	}
-	conv, rest, ok := findConversation(convs, target, kind == "dm")
-	if !ok {
-		b.box.post(sendFailed{text: typed, note: "No conversation named " + strings.Fields(target)[0]})
+	if conv, rest, ok := findConversation(convs, target, true); ok {
+		b.h.openChatWith(conv, strings.TrimSpace(rest))
 		return
 	}
-	b.h.openChatWith(conv, strings.TrimSpace(rest))
+	// Someone the user has no DM with: a mention the composer completed
+	// is sent as <@U1>, so read the target in that form.
+	var people []backend.Person
+	if b.people != nil {
+		people = b.people()
+	}
+	p, rest, ok := findPerson(people, b.mentions.Wire(target))
+	if !ok {
+		b.box.post(sendFailed{text: typed, note: "No one called " + strings.Fields(target)[0]})
+		return
+	}
+	b.h.openDM([]string{p.ID}, rest, b.box)
 }
 
 // openChannel is /open and /join: a <#C1|name> mention by its ID, else

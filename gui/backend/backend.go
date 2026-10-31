@@ -614,6 +614,11 @@ type Backend interface {
 	// describes it. It is also reported through Run as a
 	// ConversationOpened.
 	Join(ctx context.Context, channelID string) (Conversation, error)
+	// OpenConversation opens the DM with one person, or the group DM
+	// with up to MaxRecipients (conversations.open): an existing one is
+	// reused. The user and repeats are left out of userIDs. A new one is
+	// also reported through Run as a ConversationOpened.
+	OpenConversation(ctx context.Context, userIDs []string) (Conversation, error)
 	// Details fetches a conversation's topic, purpose and size.
 	Details(ctx context.Context, channelID string) (Details, error)
 	// Members lists who is in a conversation: from the cache when it

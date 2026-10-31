@@ -15,6 +15,7 @@ func TestPopupTagsAreDistinct(t *testing.T) {
 	var menu msgMenu
 	var confirm confirmDelete
 	var info infoPanel
+	var newMsg newMessagePicker
 	for _, c := range []struct {
 		name         string
 		scrim, panel event.Tag
@@ -23,6 +24,7 @@ func TestPopupTagsAreDistinct(t *testing.T) {
 		{"message menu", &menu.scrim, &menu.panel},
 		{"delete confirmation", &confirm.scrim, &confirm.panel},
 		{"info panel", &info.scrim, &info.tag},
+		{"new message", &newMsg.scrim, &newMsg.panel},
 	} {
 		if c.scrim == c.panel {
 			t.Errorf("%s: scrim and panel are the same tag", c.name)

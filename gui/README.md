@@ -249,6 +249,16 @@ nothing you are in matches, joins it (`conversations.join`) and opens
 its window. `/open #channel` and `/join #channel` do the same for a
 channel named exactly that.
 
+To start a DM or a group DM, choose "New message…" at the top of the
+switcher (or the pencil in the list's header): type a name, Space or
+Tab adds the person lit (up to eight), Backspace in an empty filter
+takes the last one out, Enter opens the conversation (with nobody
+added, the DM of the person lit). Apps and you are not offered. An
+existing DM or group DM is reused; a new one comes from
+`conversations.open` and joins the list. `/msg @person [text]` (or
+`/dm`) does the same for one person, putting the text in the DM's
+composer unless something is already written there.
+
 At the top of the list, **Threads** counts the threads you follow
 (ones you started, replied in or were mentioned in) that have replies
 you have not read. It opens the Threads window: each thread with its
@@ -317,7 +327,7 @@ marked "Only visible to you" until the window reloads. A refused command
 the text put back. `/open #channel` (or `/join`) and `/msg @person [text]` are handled
 locally, as Slack's client does, and open that conversation's window
 (`/msg` puts the text in its composer); `/open` joins a channel you
-are not in. A leading space sends `/text` as
+are not in, and `/msg` starts a DM with someone you have none with. A leading space sends `/text` as
 a plain message.
 
 ### Editing keys
@@ -482,8 +492,7 @@ with `GIORENDERER=opengl` and without.
 
 - **Sending files.** Pasting or dropping a picture or file into the
   composer does nothing yet; attachments can only be shown and saved.
-- **Starting conversations.** Starting a new DM with someone you have
-  no DM with (`/msg`) is not there; nor `/leave`.
+- **Leaving conversations.** `/leave` is not there.
 - **Interactive apps.** Dialogs some commands open (an app's modal) and
   the buttons on ephemeral replies (`/giphy`'s Shuffle and Send) do
   nothing yet.

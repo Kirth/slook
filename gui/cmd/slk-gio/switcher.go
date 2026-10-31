@@ -30,16 +30,20 @@ const switcherRows = 8
 // finds for the filter (asked once typing pauses; see
 // chat.RemoteSearch). Choosing a conversation opens its window, here:
 // an open window on another workspace is moved to this one. Choosing a
-// channel the user is not in joins it.
+// channel the user is not in joins it. With the filter empty, its first
+// line is "New message…" (newMessagePicker).
 type switcher struct {
 	open  bool
 	focus bool // move the keyboard to the filter next frame
 	ed    widget.Editor
 	rl    readline
 	sel   int
-	// rows are the lines' clickables by position: the conversations,
-	// the channels to join, then "All conversations".
-	rows    [2*switcherRows + 1]widget.Clickable
+	// rows are the lines' clickables by position: "New message…" (when
+	// the filter is empty), the conversations, the channels to join,
+	// then "All conversations".
+	rows    [2*switcherRows + 2]widget.Clickable
+	newMsg  bool // the first line is "New message…"
+	reset   bool // light the first conversation next update
 	results []backend.Conversation
 	// remote is the channel search; joinable is its answer for the
 	// filter, without the channels the user is in; remoteErr is a
@@ -52,12 +56,13 @@ type switcher struct {
 }
 
 // switcherPick is what the switcher's update chose: a conversation to
-// open, a channel to join, or the list (all); closed is whether it
-// closed.
+// open, a channel to join, the list (all) or a new message; closed is
+// whether it closed.
 type switcherPick struct {
 	conv   *backend.Conversation
 	join   *backend.ChannelResult
 	all    bool
+	newMsg bool
 	closed bool
 }
 
@@ -76,7 +81,7 @@ func (s *switcher) toggle() {
 		s.openedAt = time.Now()
 		s.ed.SingleLine, s.ed.Submit = true, true
 		s.ed.SetText("")
-		s.sel, s.focus = 0, true
+		s.sel, s.focus, s.reset = 0, true, true
 	}
 }
 
@@ -148,12 +153,13 @@ func (s *switcher) update(gtx C, convs []backend.Conversation, current string, s
 		}
 		switch ev.(type) {
 		case widget.ChangeEvent:
-			s.sel = 0
+			s.reset = true
 		case widget.SubmitEvent:
 			submitted = true
 		}
 	}
 	q := s.ed.Text()
+	s.newMsg = q == ""
 	s.results = switcherMatches(convs, q, current)
 	s.remote.Type(q, gtx.Now)
 	if rq, ok := s.remote.Due(gtx.Now); ok && search != nil {
@@ -165,6 +171,14 @@ func (s *switcher) update(gtx C, convs []backend.Conversation, current string, s
 	s.joinable = chat.Unjoined(s.remote.Results(q), convs)
 	if len(s.joinable) > switcherRows {
 		s.joinable = s.joinable[:switcherRows]
+	}
+	if s.reset {
+		// The first conversation is lit, not "New message…": Enter
+		// with nothing typed opens what is waiting.
+		s.sel, s.reset = 0, false
+		if len(s.results) > 0 {
+			s.sel = s.lead()
+		}
 	}
 	if s.sel >= s.n() {
 		s.sel = 0
@@ -178,10 +192,17 @@ func (s *switcher) update(gtx C, convs []backend.Conversation, current string, s
 			pick = i
 		}
 	}
+	lead := s.lead()
 	local, remote := len(s.results), len(s.joinable)
 	switch {
 	case pick < 0:
 		return switcherPick{}
+	case pick < lead:
+		s.open = false
+		return switcherPick{newMsg: true, closed: true}
+	}
+	pick -= lead
+	switch {
 	case pick < local:
 		c := s.results[pick]
 		s.open = false
@@ -196,9 +217,18 @@ func (s *switcher) update(gtx C, convs []backend.Conversation, current string, s
 	}
 }
 
-// n is how many lines the switcher lists: conversations, channels to
-// join, and "All conversations".
-func (s *switcher) n() int { return len(s.results) + len(s.joinable) + 1 }
+// n is how many lines the switcher lists: "New message…",
+// conversations, channels to join, and "All conversations".
+func (s *switcher) n() int { return s.lead() + len(s.results) + len(s.joinable) + 1 }
+
+// lead is how many lines come before the conversations: 1 for "New
+// message…".
+func (s *switcher) lead() int {
+	if s.newMsg {
+		return 1
+	}
+	return 0
+}
 
 // layout draws the switcher as a panel over the window's top, under the
 // header.
@@ -225,12 +255,22 @@ func (s *switcher) panel(gtx C, th *material.Theme, view *richView) D {
 				layout.Rigid(framedEditor(th, &s.ed, "Jump to a conversation")),
 				layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
 			}
-			for i, c := range s.results {
+			lead := s.lead()
+			if lead > 0 {
 				children = append(children, layout.Rigid(func(gtx C) D {
-					return s.row(gtx, th, view, i, func(gtx C) D { return switcherConv(gtx, th, view, c) })
+					return s.row(gtx, th, view, 0, func(gtx C) D {
+						lbl := bodyLabel(th, "New message…")
+						lbl.Color = colAccent
+						return layout.Inset{Left: unit.Dp(30)}.Layout(gtx, lbl.Layout)
+					})
 				}))
 			}
-			n := len(s.results)
+			for i, c := range s.results {
+				children = append(children, layout.Rigid(func(gtx C) D {
+					return s.row(gtx, th, view, lead+i, func(gtx C) D { return switcherConv(gtx, th, view, c) })
+				}))
+			}
+			n := lead + len(s.results)
 			if len(s.joinable) > 0 || s.remoteErr != "" {
 				children = append(children, layout.Rigid(func(gtx C) D {
 					text := "Channels you're not in"

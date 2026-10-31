@@ -45,6 +45,10 @@ type Fake struct {
 	// unjoined is channels the user is not in, which SearchChannels
 	// finds and Join moves into convs.
 	unjoined map[string]*Conversation
+	// groups is the group DMs by their members (sorted IDs joined by
+	// ","), and dmSeq numbers the conversations OpenConversation makes.
+	groups map[string]string
+	dmSeq  int
 	// followed is the threads the user follows in C1, by parent ts:
 	// true while it has unread replies.
 	followed map[string]bool
@@ -145,6 +149,8 @@ func NewFake(now time.Time) *Fake {
 		seq:      now.Add(-2 * time.Hour).Unix(),
 		convs:    map[string]*Conversation{},
 		unjoined: map[string]*Conversation{},
+		groups:   map[string]string{"U2,U4": "D2"},
+		dmSeq:    100,
 	}
 	for _, c := range fakeUnjoined {
 		c := c

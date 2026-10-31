@@ -72,6 +72,7 @@ type chatWindow struct {
 	// sw is the quick switcher; peer is the DM partner's presence;
 	// sizeDp is the window's size, for a moved copy.
 	sw     switcher
+	newMsg newMessagePicker
 	peer   presence
 	sizeDp image.Point
 	moved  bool // handed to a new window; closing
@@ -583,6 +584,14 @@ func (c *chatWindow) layout(gtx C) {
 			c.h.joinAndOpen(*pick.join, "", &c.box)
 		case pick.all:
 			c.h.showList()
+		case pick.newMsg:
+			c.newMsg.show()
+		}
+	}
+	if ids, closed := c.newMsg.update(gtx, c.h.people(), c.h.be.Self()); closed {
+		gtx.Execute(key.FocusCmd{Tag: &c.composer})
+		if ids != nil {
+			c.h.openDM(ids, "", &c.box)
 		}
 	}
 	if c.pickerUpdate(gtx) || c.menuUpdate(gtx) {
@@ -629,6 +638,7 @@ func (c *chatWindow) layout(gtx C) {
 	)
 	c.infoLayout(gtx, gtx.Dp(headerHeight))
 	c.sw.layout(gtx, c.th, &c.view)
+	c.newMsg.layout(gtx, c.th, &c.view)
 	c.pickerLayout(gtx)
 	c.menuLayout(gtx)
 	c.hoverCard(gtx)

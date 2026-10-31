@@ -106,15 +106,27 @@ func (p *commandPopup) open() bool { return p.n() > 0 }
 // preferring the longest name. dmOnly limits it to direct messages.
 // rest is what follows the name.
 func findConversation(convs []backend.Conversation, target string, dmOnly bool) (backend.Conversation, string, bool) {
-	t := strings.TrimLeft(target, "#@")
-	folded := text.Fold(t)
-	var best backend.Conversation
-	bestLen := -1
-	for _, cv := range convs {
-		if dmOnly && cv.Kind != backend.KindDM && cv.Kind != backend.KindGroupDM {
-			continue
+	names := make([]string, len(convs))
+	for i, cv := range convs {
+		if !dmOnly || cv.Kind == backend.KindDM || cv.Kind == backend.KindGroupDM {
+			names[i] = cv.Name
 		}
-		name := text.Fold(cv.Name)
+	}
+	i, rest := namePrefix(strings.TrimLeft(target, "#@"), names)
+	if i < 0 {
+		return backend.Conversation{}, "", false
+	}
+	return convs[i], rest, true
+}
+
+// namePrefix is the longest of names that t starts with, as a whole
+// word, case- and accent-blind, and what follows it in t; -1 when none
+// does. Empty names never match.
+func namePrefix(t string, names []string) (int, string) {
+	folded := text.Fold(t)
+	best, bestLen := -1, -1
+	for i, n := range names {
+		name := text.Fold(n)
 		if name == "" || !strings.HasPrefix(folded, name) {
 			continue
 		}
@@ -122,19 +134,48 @@ func findConversation(convs []backend.Conversation, target string, dmOnly bool) 
 			continue
 		}
 		if len(name) > bestLen {
-			best, bestLen = cv, len(name)
+			best, bestLen = i, len(name)
 		}
 	}
-	if bestLen < 0 {
-		return backend.Conversation{}, "", false
+	if best < 0 {
+		return -1, ""
 	}
 	// Folding can change byte lengths; cut by the name's rune count.
 	runes := []rune(t)
-	n := utf8.RuneCountInString(best.Name)
-	if n > len(runes) {
-		n = len(runes)
+	n := min(utf8.RuneCountInString(names[best]), len(runes))
+	return best, string(runes[n:])
+}
+
+// findPerson is who /msg's target starts with: a <@U1> mention, else
+// the person whose whole name begins it (the longest), else the one
+// whose names fit its first word best (chat.BestPerson). rest is what
+// follows, trimmed; ok is false when no one fits.
+func findPerson(people []backend.Person, target string) (p backend.Person, rest string, ok bool) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return backend.Person{}, "", false
 	}
-	return best, string(runes[n:]), true
+	first := strings.Fields(target)[0]
+	after := strings.TrimSpace(strings.TrimPrefix(target, first))
+	if ids := slackfmt.MentionedUserIDs(first); len(ids) == 1 && first == "<@"+ids[0]+">" {
+		for _, q := range people {
+			if q.ID == ids[0] {
+				return q, after, true
+			}
+		}
+		return backend.Person{ID: ids[0]}, after, true
+	}
+	names := make([]string, len(people))
+	for i, q := range people {
+		names[i] = q.Name
+	}
+	if i, r := namePrefix(strings.TrimPrefix(target, "@"), names); i >= 0 {
+		return people[i], strings.TrimSpace(r), true
+	}
+	if q, ok := chat.BestPerson(first, people); ok {
+		return q, after, true
+	}
+	return backend.Person{}, "", false
 }
 
 // popupList draws a completion popup's n rows (at most popupRows), row

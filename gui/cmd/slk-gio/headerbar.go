@@ -38,6 +38,7 @@ var (
 	iconExpand   = mustIcon(icons.NavigationExpandMore)
 	iconCopy     = mustIcon(icons.ContentContentCopy)
 	iconDND      = mustIcon(icons.SocialNotificationsPaused)
+	iconCompose  = mustIcon(icons.ContentCreate)
 )
 
 func mustIcon(data []byte) *widget.Icon {

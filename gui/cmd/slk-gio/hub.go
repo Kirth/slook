@@ -504,6 +504,38 @@ func (h *hub) joinAndOpen(r backend.ChannelResult, text string, from *inbox) {
 	}()
 }
 
+// openDM opens the DM with one person, or the group DM with several,
+// and its window, with text in its composer when that is empty (never
+// over a draft). A DM the list has opens with no request; anything else
+// goes through conversations.open. It returns at once; a failure is
+// reported to from as a note.
+func (h *hub) openDM(ids []string, text string, from *inbox) {
+	if len(ids) == 1 {
+		h.mu.Lock()
+		var found *backend.Conversation
+		for _, c := range h.convs {
+			if c.Kind == backend.KindDM && c.PeerID == ids[0] {
+				found = &c
+				break
+			}
+		}
+		h.mu.Unlock()
+		if found != nil {
+			h.openChatWith(*found, text)
+			return
+		}
+	}
+	go func() {
+		conv, err := h.be.OpenConversation(h.ctx, ids)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "slk-gio: open conversation:", err)
+			from.post(sendFailed{note: "Could not start the conversation: " + err.Error()})
+			return
+		}
+		h.openChatWith(conv, text)
+	}()
+}
+
 // channelsFound is Slack's answer to a filter's channel search (see
 // chat.RemoteSearch).
 type channelsFound struct {

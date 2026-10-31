@@ -488,3 +488,84 @@ func TestFakeJoinOpensTheChannel(t *testing.T) {
 		}
 	}
 }
+
+func TestFakeOpenConversationReusesTheDM(t *testing.T) {
+	f := NewFake(time.Unix(1_700_000_000, 0))
+	f.Interval = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan Event, 16)
+	go f.Run(ctx, func(ev Event) { got <- ev })
+
+	conv, err := f.OpenConversation(ctx, []string{"U1", fakeSelf, "U1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conv.ID != "D1" || conv.PeerID != "U1" {
+		t.Fatalf("opened %#v, want Ada's DM D1", conv)
+	}
+	// A new DM is made and reported.
+	conv, err = f.OpenConversation(ctx, []string{"U2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conv.Kind != KindDM || conv.PeerID != "U2" || conv.Name != "Grace Hopper" {
+		t.Fatalf("opened %#v, want a DM with Grace Hopper", conv)
+	}
+	for ev := range got {
+		if o, ok := ev.(ConversationOpened); ok {
+			if o.Conv.ID == "D1" {
+				t.Fatal("reusing D1 reported it as opened")
+			}
+			if o.Conv.ID != conv.ID {
+				t.Fatalf("opened %#v, want %s", o.Conv, conv.ID)
+			}
+			break
+		}
+	}
+	if again, _ := f.OpenConversation(ctx, []string{"U2"}); again.ID != conv.ID {
+		t.Fatalf("second open = %s, want %s", again.ID, conv.ID)
+	}
+	if _, err := f.History(ctx, conv.ID); err != nil {
+		t.Fatalf("history of the new DM: %v", err)
+	}
+	if _, err := f.OpenConversation(ctx, []string{fakeSelf}); err == nil {
+		t.Fatal("opening a DM with no one but the user did not fail")
+	}
+}
+
+func TestFakeOpenConversationMakesAGroup(t *testing.T) {
+	f := NewFake(time.Unix(1_700_000_000, 0))
+	f.Interval = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan Event, 16)
+	go f.Run(ctx, func(ev Event) { got <- ev })
+
+	conv, err := f.OpenConversation(ctx, []string{"U4", "U2"})
+	if err != nil || conv.ID != "D2" {
+		t.Fatalf("Grace and Linus = %#v, %v; want the existing D2", conv, err)
+	}
+	conv, err = f.OpenConversation(ctx, []string{"U2", "U3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conv.Kind != KindGroupDM || conv.Name != "Grace Hopper, Margaret Hamilton" {
+		t.Fatalf("opened %#v, want the group DM of Grace and Margaret", conv)
+	}
+	for ev := range got {
+		if o, ok := ev.(ConversationOpened); ok {
+			if o.Conv.ID != conv.ID {
+				t.Fatalf("opened %#v, want %s", o.Conv, conv.ID)
+			}
+			break
+		}
+	}
+	nine := []string{"U1", "U2", "U3", "U4", "U5", "U6", "U7", "U8", "U9"}
+	if _, err := f.OpenConversation(ctx, nine); err == nil {
+		t.Fatal("nine people opened a group DM")
+	}
+	if _, err := f.OpenConversation(ctx, nine[:8]); err != nil {
+		t.Fatalf("eight people: %v", err)
+	}
+}

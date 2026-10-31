@@ -100,3 +100,30 @@ func TestIsShortcode(t *testing.T) {
 		}
 	}
 }
+
+func TestFindPerson(t *testing.T) {
+	people := []backend.Person{
+		{ID: "U1", Name: "Ada Lovelace", Handle: "ada"},
+		{ID: "U2", Name: "Grace Hopper", Handle: "grace.hopper"},
+		{ID: "U3", Name: "Grace"},
+	}
+	cases := []struct {
+		target, id, rest string
+		ok               bool
+	}{
+		{"<@U2> hi", "U2", "hi", true},
+		{"<@U9>", "U9", "", true},                        // a mention of someone slk has not seen
+		{"@Grace Hopper see you", "U2", "see you", true}, // a whole name
+		{"@grace hello", "U3", "hello", true},            // the longest whole name: Grace
+		{"@Ada hello", "U1", "hello", true},              // a first name
+		{"@adlv hello", "U1", "hello", true},             // letters in order
+		{"@nobody", "", "", false},
+		{"", "", "", false},
+	}
+	for _, tc := range cases {
+		p, rest, ok := findPerson(people, tc.target)
+		if ok != tc.ok || p.ID != tc.id || rest != tc.rest {
+			t.Errorf("findPerson(%q) = (%s, %q, %v), want (%s, %q, %v)", tc.target, p.ID, rest, ok, tc.id, tc.rest, tc.ok)
+		}
+	}
+}
