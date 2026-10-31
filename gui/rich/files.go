@@ -5,7 +5,7 @@ import (
 
 	"github.com/slack-go/slack"
 
-	"github.com/gammons/slk/internal/ui/messages/blockkit"
+	"github.com/gammons/slk/internal/blockkit"
 )
 
 // FromFiles converts a message's uploads: images become Image blocks

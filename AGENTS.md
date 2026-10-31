@@ -146,7 +146,8 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Run a slash command from the UI | `core.CommandService.Run` (App field `a.commandSvc`); wired in `cmd/slk` via `runCommand` to the `Client.RunCommand` of the workspace the command was typed in (`teamID`, looked up with `router.ByID`, not the active one). Slack's refusal arrives as `*core.CommandError{Code}` |
 | A web-client `client_token` (`web-<unix ms>`) for any request that sends one | `newClientToken()` (`internal/slack`); the only generator |
 | Emoji shortcode → glyph | `emoji.Sprint`, `emoji.CodeMap`, `emoji.StripSkinTone` |
-| Does Block Kit already render the message body? | `blockkit.RendersBody(blocks)`, `messages.BlocksCarryBody(msg)` |
+| Does Block Kit already render the message body? | `blockkit.RendersBody(blocks)` (`internal/blockkit`), `messages.BlocksCarryBody(msg)` |
+| Parse Block Kit blocks / legacy attachments into `core/blocks` values; mrkdwn back from a rich_text block; a message's body source (the rich_text reconstruction, else `Text`) | `internal/blockkit`: `Parse`, `ParseAttachments`, `RichTextToMrkdwn`, `MessageText(msg)` (parse-only; the TUI's `internal/ui/messages/blockkit` delegates to it and keeps only the renderer, `messages.MessageTextSource` wraps `MessageText`) |
 | Current DND state from a Slack API result | `slack.DNDStateFromStatus` |
 | Persist a full Web API profile's custom status and huddle (including clears) | `cmd/slk/applyProfileStatus(teamID, userID, profile, db, send)` after `UpsertUser`, before any resolved-user notice or row repair; `UpsertUser` alone deliberately preserves status on conflict |
 | Drop cached thread replies a complete `conversations.replies` response no longer contains (missed deletes, Slackbot ephemerals) | `(*cache.DB).PruneThreadReplies(channelID, threadTS, returnedTS, fetchStartUnix)`; soft-deletes, never touches the parent or rows cached after the fetch began |
@@ -190,7 +191,7 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 | Copy text to the clipboard | `App.clipboardWrite` / `SetClipboardWriter`; `cmd/slk/newClipboardWriter` selects local macOS `pbcopy` or terminal OSC 52 |
 | slk's XDG directories (config, data with tokens and cache.db, cache with images) | `paths.Config()`, `paths.Data()`, `paths.Cache()` (`internal/paths`); `cmd/slk/paths.go`'s `xdg*` names wrap them |
 | Open a URL or file with the desktop's default handler | `launch.Open(target)` (`internal/launch`); `cmd/slk/launchOS` wraps it |
-| A `slack.File`'s thumbnails as `core.ThumbSpec`s, smallest first | `blockkit.FileThumbs(f)` (`internal/ui/messages/blockkit/files.go`); `cmd/slk/collectThumbs` wraps it |
+| A `slack.File`'s thumbnails as `core.ThumbSpec`s, smallest first | `blockkit.FileThumbs(f)` (`internal/blockkit/files.go`); `cmd/slk/collectThumbs` wraps it |
 | Disk-cache key for one user's avatar at one URL (shared by both frontends) | `avatar.FetchKey(userID, url)` |
 | A message's display form for a non-terminal frontend (blocks of styled spans from rich_text, mrkdwn, Block Kit, attachments, files) | `gui/rich`: `Body`, `FromRichText`, `FromMrkdwn`, `FromBlocks`, `FromAttachments`, `FromFiles` |
 | A thread for the Gio frontend: read it (cache first, then one `conversations.replies` fetch arriving as a `HistoryUpdated` with `ThreadTS` set), reply (optionally broadcast), mark it read | `backend.Backend.Thread`, `SendReply`, `MarkThreadRead` (`gui/backend`); `RunCommand` takes a thread ts |

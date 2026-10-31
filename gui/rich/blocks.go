@@ -3,8 +3,8 @@ package rich
 import (
 	"time"
 
+	"github.com/gammons/slk/internal/blockkit"
 	"github.com/gammons/slk/internal/core/blocks"
-	"github.com/gammons/slk/internal/ui/messages/blockkit"
 )
 
 // Body is a message's main content: its rich_text block when it has one

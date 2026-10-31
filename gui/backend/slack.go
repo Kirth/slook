@@ -19,6 +19,7 @@ import (
 
 	"github.com/gammons/slk/gui/rich"
 	"github.com/gammons/slk/internal/avatar"
+	"github.com/gammons/slk/internal/blockkit"
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/core"
@@ -34,7 +35,6 @@ import (
 	"github.com/gammons/slk/internal/slackfmt"
 	"github.com/gammons/slk/internal/slackhttp"
 	"github.com/gammons/slk/internal/text"
-	"github.com/gammons/slk/internal/ui/messages/blockkit"
 )
 
 // historyLimit is how many messages a newly opened window starts with,

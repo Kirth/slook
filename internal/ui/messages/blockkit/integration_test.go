@@ -11,7 +11,8 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// fixturePayload mirrors the shape of the JSON files in testdata/.
+// fixturePayload mirrors the shape of the JSON files in
+// internal/blockkit/testdata/.
 // Not all fields are populated for every fixture; that's fine —
 // json.Unmarshal leaves missing fields zero-valued.
 type fixturePayload struct {
@@ -21,7 +22,7 @@ type fixturePayload struct {
 
 func loadFixture(t *testing.T, name string) fixturePayload {
 	t.Helper()
-	path := filepath.Join("testdata", name)
+	path := filepath.Join("..", "..", "..", "blockkit", "testdata", name)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)

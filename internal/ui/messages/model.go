@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	bkparse "github.com/gammons/slk/internal/blockkit"
 	"github.com/gammons/slk/internal/bubbles/entrylist"
 	"github.com/gammons/slk/internal/core"
 	"github.com/gammons/slk/internal/debuglog"
@@ -404,16 +405,7 @@ func (m *Model) Version() int64 { return m.version + m.list.Version() }
 // When no RichTextBlock is present (the overwhelmingly common case
 // for user-typed messages) this is a zero-cost passthrough of
 // msg.Text.
-func MessageTextSource(msg MessageItem) string {
-	for _, b := range msg.Blocks {
-		if rt, ok := b.(blockkit.RichTextBlock); ok {
-			if reconstructed := blockkit.RichTextToMrkdwn(rt); reconstructed != "" {
-				return reconstructed
-			}
-		}
-	}
-	return msg.Text
-}
+func MessageTextSource(msg MessageItem) string { return bkparse.MessageText(msg) }
 
 // BlocksCarryBody reports whether msg's blocks already render its body,
 // in which case the host adds no row for msg.Text. A non-empty rich_text

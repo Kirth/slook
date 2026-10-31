@@ -175,34 +175,6 @@ func TestRenderMessagePlainOmitsHintWhenNotInteractive(t *testing.T) {
 	}
 }
 
-// TestMessageTextSource_NoBlocksReturnsRawText: the common case for
-// user-typed messages. With no rich_text block on hand, the helper
-// just hands msg.Text through unchanged.
-func TestMessageTextSource_NoBlocksReturnsRawText(t *testing.T) {
-	msg := MessageItem{Text: "hello world"}
-	if got := MessageTextSource(msg); got != "hello world" {
-		t.Errorf("got %q, want %q", got, "hello world")
-	}
-}
-
-// TestMessageTextSource_NonRichTextBlocksReturnRawText: messages that
-// have block-kit content (header/section/etc.) but no rich_text body
-// continue to return msg.Text, which is what copying the message yields.
-// Those block types render separately via the blockkit renderer; whether
-// msg.Text also gets a body row is BlocksCarryBody's call.
-func TestMessageTextSource_NonRichTextBlocksReturnRawText(t *testing.T) {
-	msg := MessageItem{
-		Text: "PR opened",
-		Blocks: []blockkit.Block{
-			blockkit.HeaderBlock{Text: "Pull Request opened"},
-			blockkit.SectionBlock{Text: "details"},
-		},
-	}
-	if got := MessageTextSource(msg); got != "PR opened" {
-		t.Errorf("got %q, want %q", got, "PR opened")
-	}
-}
-
 // TestBlocksCarryBody_ContentBlocks: content-bearing blocks draw the
 // body themselves, so msg.Text is only Slack's notification fallback and
 // must not get a body row of its own.
@@ -236,31 +208,6 @@ func TestBlocksCarryBody_KeepsBodyRow(t *testing.T) {
 				t.Error("blocks with no content must keep the body row")
 			}
 		})
-	}
-}
-
-// TestMessageTextSource_RichTextOverridesLossyText: the bug-fix
-// contract. When a message has a rich_text block, the helper
-// reconstructs the body from it instead of using Slack's
-// newline-stripped text fallback.
-func TestMessageTextSource_RichTextOverridesLossyText(t *testing.T) {
-	rt := blockkit.RichTextBlock{Elements: []slack.RichTextElement{
-		&slack.RichTextSection{
-			Type: slack.RTESection,
-			Elements: []slack.RichTextSectionElement{
-				&slack.RichTextSectionTextElement{Type: slack.RTSEText, Text: "line1"},
-				&slack.RichTextSectionTextElement{Type: slack.RTSEText, Text: "\n"},
-				&slack.RichTextSectionTextElement{Type: slack.RTSEText, Text: "line2"},
-			},
-		},
-	}}
-	msg := MessageItem{
-		Text:   "line1 line2", // Slack's lossy fallback (newline → space)
-		Blocks: []blockkit.Block{rt},
-	}
-	got := MessageTextSource(msg)
-	if !strings.Contains(got, "line1\nline2") {
-		t.Errorf("got %q, want it to contain %q (newline preserved from rich_text)", got, "line1\nline2")
 	}
 }
 
