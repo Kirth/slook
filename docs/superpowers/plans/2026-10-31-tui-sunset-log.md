@@ -759,3 +759,181 @@ Built to the scratchpad (`go build -o <scratch>/slk-gio ./cmd/slk-gio`, at the 4
 - Usergroup mentions (`mention.InGroups`) are not counted in `mentionsAfter`, as in the TUI.
 - `SetPresence(false)` sends `auto`: Slack may still report the user away while idle elsewhere; the optimistic green dot then goes grey on the next `presence_change` only if one arrives for the user.
 - A custom `/status` (emoji + text) is not there; `users.profile.set` would be the call.
+
+
+## Phase 4.6 — Forward; 4.7 — Attachment buttons; 4.8 — Permalinks in-app
+
+### 4.7 step 1 — `rich: buttons carry which attachment action they press`
+
+- Commit: `cbe77471`
+- `rich.Buttons{Items []Button}`, `Button{Label, Style, URL string; Action int}`. `FromBlocks` (actions block, section label accessory): `Action: -1`. `FromAttachments` numbers every action of every attachment in order (unlabelled ones and menus counted, so the number indexes `Message.Actions`); a menu (`Type != "button"`) gets -1; Style and URL carried. `PlainBlocks` unchanged (buttons were never in it; its test updated to the new shape). `richView.buttons` takes the items, still drawing labels only. Test added: `TestFromAttachmentsNumbersActionsAcrossAttachments`.
+
+### 4.6 — `gui: forward a message to another conversation`
+
+- Commit: `5d49f925`
+- Root: `(*slackclient.Client).ForwardMessage(ctx, src, ts, dst, comment)`; text = comment + "\n" + permalink when the comment is not empty, else the permalink as before; the untested alternative (`text=comment`, `attachments=[{"from_url": permalink}]`) is a comment inside it. `forward_test.go`: a "with comment" case (posted `text` = `"fyi\n"+permalink`), the other cases pass `""`.
+- Backend: `Forward(ctx, m, toChannelID, comment)` after `Permalink`. `gui/backend/forward.go`: `ForwardMessage`, then queue `rawMessage{to, self, postedTS, comment + "\n" + "<"+permalink+">"}` as `Send` does. `TestForward_QueuesThePostedMessage` (slacktest: `chat.getPermalink`, `chat.postMessage` with `text=fyi\n<link>`, the queued raw message). Fake (`fake_forward.go`): "You" message with the comment and `rich.Card{Blocks: author line + original body, Footer: "Shared from #general"}`, `Text` = comment + `<permalink>`; unknown message → `message_not_found`, unknown destination → `channel_not_found`. `TestFakeForwardPostsALinkCard`.
+- `gui/chat/actions.go`: `ForwardedLink(text)` — the text is exactly `<url>` or `<url|label>` with `url` an archive permalink (`&amp;` decoded); a comment or other text → false. `TestForwardedLink`.
+- Windows: `confirmDelete` → `confirmDialog{title, body, okLabel, cancelLabel, danger, ed *widget.Editor, hint, onOK(text), onCancel}` with its own `update`/`layout` (Enter in the editor is OK, Escape in it is Cancel; the editor takes the keyboard); `msgView.deleteDialog(m)` is the delete confirmation, unchanged in look. Menu: "Forward…" (non-ephemerals) after "Open in Slack" → `msgView.onForward`. `switcher.togglePick(title)`: pick mode lists the user's conversations, the window's own included, no "New message…", no channel search, no "All conversations…"; hint = title. `chatWindow.startForward(m)` → pick "Forward to…" → `msgView.forwardDialog(m, to)` (title "Forward to #name" / "Forward to Ada Lovelace", body "Author: preview", editor "Add a message (optional)", OK "Forward") → `go be.Forward` → `forwarded{to, err}`: "Forwarded to …" or "Could not forward: …". Thread window: `hub.forward(conv, m)` raises (or opens) the conversation's chat window and posts `forwardRequest{m}`. `msgMenu.items` is `[9]`.
+- README: actions-menu paragraph. AGENTS.md: one Gio row; the "Edit, delete, link to a message" row now names `confirmDialog` / `msgView.deleteDialog`.
+
+### 4.7 — `gui: press an attachment's buttons on a reply only you can see`
+
+- Commit: `d48709bc`
+- Root: `slackclient.legacyActionIDs` exported as `LegacyActionIDs` (no other change); `TestLegacyActionIDs`. `cmd/slk/interactions.go` (+ test) deleted: no caller in `cmd/slk` (`grep pressAttachmentAction` finds only itself). `attachment_action.go` untouched; `TestMarshalAttachmentAction_MatchesWebClientCapture` (`capturedDismissPayload`) passes.
+- Backend: `Message.Actions []Action`; `Action{Index, Label, Type, Style, URL, Confirm; legacy, attachmentID, callbackID, serviceID}`; `PressAction(ctx, m, a)` after `RunCommand`. `gui/backend/actions.go`: `messageActions(atts, serviceID)` (every action, flat, as `FromAttachments` numbers them), `pressable` (ephemeral, a button, not a URL, the same action at `a.Index`), `PressAction` → `client.AttachmentAction` with `Ephemeral: true`, 10 s timeout. `rawMessage.actionIDs` from `EphemeralMessage.ActionIDs`; `message()` parses the attachments once, and for an ephemeral applies `blocks.ApplyActionIDs` and builds `Actions` with `serviceID = r.botID`. `TestPressAction_EchoesTheEphemeralsButton` (slacktest: the payload carries action id "2", `attachment_id` "1", the callback, `is_ephemeral`; `service_id=B9`; a menu is refused; a non-ephemeral has no actions).
+- Fake (`fake_actions.go`): `/standup <notes>` → Standup Bot (`B1`) ephemeral "Here is your standup. Send it to the channel?" with the notes and Send (primary) / Shuffle / Cancel (danger, `Confirm{Title: "Cancel?", Text: "Discard the preview?"}`); `PressAction`: Send posts the notes as Standup Bot + `MessageDeleted`; Shuffle → the same ts edited with the words rotated; Cancel → `MessageDeleted`; a preview no longer there or an unknown value → `invalid_action`; non-ephemeral → refused. `TestFakePressActionDeletesTheEphemeral`.
+- `gui/chat/actions.go`: `ButtonActions`, `HasButtonActions` (Type "button", in order). `TestButtonActionsSkipSelects`.
+- Windows: `msgWidgets.msg` (the message drawn), `openClick.action`; `richView.button`: a URL button opens its URL, a button of `msg.Actions` with Type "button" is clickable (pointer, `colControl` hover, `colError` frame for danger, `colAccent` for primary), anything else drawn as before. `msgWidgets.handle` gains `press`; `msgView.pressAction(m, a)`: with `Confirm` → `confirmDialog` (title/OK/Cancel defaulting to "Are you sure?"/"Okay"/"Cancel", red OK for a danger button), else `press` → `go be.PressAction`; a refusal → "Couldn't send <label>: <err>". The ephemeral's caption reads "Only visible to you · buttons work here" when `chat.HasButtonActions`.
+- README: Block Kit bullet says Block Kit buttons are not pressable; new bullet for an ephemeral's buttons; "Interactive apps" → "Dialogs some commands open (an app's modal) and Block Kit buttons do nothing yet." AGENTS.md: one Gio row; "Legacy attachment action ids slack-go drops" mentions `LegacyActionIDs`; "Press a legacy attachment button from the UI" no longer names the deleted `cmd/slk/pressAttachmentAction` and points at `backend.Backend.PressAction`.
+
+### 4.8 — `gui: open a link to a message in this workspace in its window`
+
+- Commit: `7881c48c`
+- Backend: `Domain()` after `WebURL` (Slack: `client.TeamSubdomain()`; Fake: "demo").
+- `gui/chat/links.go`: `LinkTarget(url, domain) (channelID, ts, threadTS, ok)` over `slackurl.Parse`; ok only for the workspace's subdomain (case-blind) and never for an empty domain. Tests `TestLinkTargetAcceptsOwnWorkspaceOnly`, `TestLinkTargetReadsThreadReplies`, `TestLinkTargetRejectsNonArchiveURLs`. `TestFakeDomainMatchesItsPermalinks` (`package backend_test`, so it can use `chat`): a fake permalink and a forwarded message's text (through `chat.ForwardedLink`) both lead back to the message.
+- `hub.openLink(url)`: miss → `openURL`; hit → the list's conversation, else `be.Conversation` off the event loop (error → stderr + browser) → `openChatAt(conv, ts)`, or for a reply (`threadTS != ts`) `openChatAt(conv, threadTS)` + `openThread(conv, threadTS, ts)`. `richView.open` (set to `h.openLink` in `newMsgView`), passed to `msgWidgets.handle` for span links and URL buttons (chat, thread and info-panel views); the search and list windows keep the browser; the header's and menu's "Open in Slack" keep `openURL`.
+- README: the "Links open in the browser…" sentence. AGENTS.md: one Gio row.
+
+### Verify (4.6, 4.7, 4.8) — run at `7881c48c`, gui module (`cd gui && nix-shell shell.nix --run ...`)
+
+```
+$ go test -count=1 -v ./backend -run "TestFakeForward|TestForward_|TestFakePressAction|TestPressAction_|TestFakeDomain"
+--- PASS: TestPressAction_EchoesTheEphemeralsButton (0.01s)
+--- PASS: TestFakeForwardPostsALinkCard (0.00s)
+--- PASS: TestFakePressActionDeletesTheEphemeral (0.00s)
+--- PASS: TestForward_QueuesThePostedMessage (0.01s)
+--- PASS: TestFakeDomainMatchesItsPermalinks (0.00s)
+ok  	github.com/gammons/slk/gui/backend	0.036s
+$ go test -count=1 -v ./chat -run "TestForwardedLink|TestButtonActions|TestLinkTarget"
+--- PASS: TestForwardedLink (0.00s)
+--- PASS: TestButtonActionsSkipSelects (0.00s)
+--- PASS: TestLinkTargetAcceptsOwnWorkspaceOnly (0.00s)
+--- PASS: TestLinkTargetReadsThreadReplies (0.00s)
+--- PASS: TestLinkTargetRejectsNonArchiveURLs (0.00s)
+ok  	github.com/gammons/slk/gui/chat	0.005s
+$ go test -count=1 -v ./rich
+--- PASS: TestFromRichTextStylesAndEntities (0.00s)
+--- PASS: TestFromRichTextBlocks (0.00s)
+--- PASS: TestUserIDs (0.00s)
+--- PASS: TestFromMrkdwn (0.00s)
+--- PASS: TestFromMrkdwnQuoteRestAndCode (0.00s)
+--- PASS: TestBodyPrecedence (0.00s)
+--- PASS: TestFromBlocks (0.00s)
+--- PASS: TestFromAttachments (0.00s)
+--- PASS: TestFromAttachmentsNumbersActionsAcrossAttachments (0.00s)
+--- PASS: TestFromFiles (0.00s)
+--- PASS: TestSpansFlattens (0.00s)
+--- PASS: TestFromMrkdwnKeepsBackslashes (0.00s)
+--- PASS: TestFromMrkdwnDecodesEntitiesOnce (0.00s)
+--- PASS: TestItalicize (0.00s)
+--- PASS: TestEmojiGlyph (0.00s)
+--- PASS: TestPlainBlocks (0.00s)
+--- PASS: TestFromRichTextDateFormatFirst (0.00s)
+ok  	github.com/gammons/slk/gui/rich	0.003s
+$ go test -count=1 -v ./cmd/slk-gio -run TestPopupTags
+--- PASS: TestPopupTagsAreDistinct (0.00s)
+ok  	github.com/gammons/slk/gui/cmd/slk-gio	0.006s
+```
+
+Root module at `7881c48c`:
+
+```
+$ go build ./... && go vet ./... && gofmt -l .
+clean
+$ go test -count=1 -v ./internal/slack -run "Forward|ActionIDs|AttachmentAction"
+--- PASS: TestMarshalAttachmentAction_MatchesWebClientCapture (0.00s)
+--- PASS: TestMarshalAttachmentAction_EchoesConfirm (0.00s)
+--- PASS: TestAttachmentAction_PostsPayloadForm (0.00s)
+--- PASS: TestAttachmentAction_SendsServiceID (0.00s)
+--- PASS: TestAttachmentAction_OmitsEmptyServiceID (0.00s)
+--- PASS: TestAttachmentAction_OKFalseIsAnError (0.00s)
+--- PASS: TestDispatchMessageForwardsBlocks (0.00s)
+--- PASS: TestDispatchEphemeralMessage_NumericActionIDs (0.00s)
+--- PASS: TestLegacyActionIDs (0.00s)
+--- PASS: TestForwardMessageRequests (0.00s)
+--- PASS: TestForwardMessageContextAndErrors (0.00s)
+ok  	github.com/gammons/slk/internal/slack	0.009s
+$ go test -count=1 ./... (non-ok lines)
+exit=1
+```
+
+(`exit=1` is grep's: no line other than `ok` / "no test files".) `git diff ace9995f..HEAD -- internal/slack/attachment_action*.go internal/slack/testdata internal/slackhttp/testdata internal/blockkit/testdata docs/superpowers/specs` is empty. At `cbe77471`, `5d49f925` and `d48709bc` both modules were build/vet/gofmt-clean and `cd gui && go test ./... -race` all `ok`; the root tests run there were `./internal/slack` (`Forward|ActionIDs|AttachmentAction`), and at `d48709bc` `./cmd/... ./internal/slack/... ./internal/core/...`.
+
+### Verify (Phase 4, whole) — run at `7881c48c`
+
+```
+$ cd gui && nix-shell shell.nix --run 'go build ./... && go vet ./... && gofmt -l . && go test ./... -race'
+ok  	github.com/gammons/slk/gui/backend	5.211s
+ok  	github.com/gammons/slk/gui/chat	1.019s
+ok  	github.com/gammons/slk/gui/cmd/slk-gio	10.337s
+?   	github.com/gammons/slk/gui/internal/richtext	[no test files]
+?   	github.com/gammons/slk/gui/internal/styledtext	[no test files]
+ok  	github.com/gammons/slk/gui/motion	1.011s
+ok  	github.com/gammons/slk/gui/notifications	1.029s
+ok  	github.com/gammons/slk/gui/palette	1.010s
+ok  	github.com/gammons/slk/gui/rich	1.018s
+ok  	github.com/gammons/slk/gui/search	1.018s
+ok  	github.com/gammons/slk/gui/selection	1.010s
+ok  	github.com/gammons/slk/gui/sidebar	1.016s
+ok  	github.com/gammons/slk/gui/textedit	1.011s
+exit=0
+$ grep -c "^- \*\*" gui/README.md
+16
+$ sed -n "/^## Not there yet/,\$p" gui/README.md | grep "^- \*\*"
+- **Dropping files** onto a window does nothing: Gio has no drag-and-drop
+- **Leaving conversations.** `/leave` is not there.
+- **Interactive apps.** Dialogs some commands open (an app's modal) and
+- **Strike-through** is drawn dimmed instead.
+- **More than one workspace** at a time.
+$ grep -n "SearchChannels\|OpenConversation\|Upload(\|MarkUnread\|SetPresence\|Forward(\|PressAction\|Domain()" gui/backend/backend.go
+592:	Upload(ctx context.Context, channelID, threadTS string, files []core.PendingAttachment, caption string, progress func(done, total int)) error
+608:	Forward(ctx context.Context, m Message, toChannelID, comment string) error
+618:	// MarkUnread moves the read mark of a conversation (threadTS empty)
+624:	MarkUnread(ctx context.Context, channelID, threadTS, boundaryTS string) error
+656:	// PressAction presses a button of a message only the user can see
+660:	PressAction(ctx context.Context, m Message, a Action) error
+672:	// SearchChannels asks Slack which channels match query, joined or
+676:	SearchChannels(ctx context.Context, query string) ([]ChannelResult, error)
+681:	// OpenConversation opens the DM with one person, or the group DM
+685:	OpenConversation(ctx context.Context, userIDs []string) (Conversation, error)
+700:	Domain() string
+708:	// SetPresence sets the user away, or back to active (Slack's
+713:	SetPresence(ctx context.Context, away bool) error
+$ for t in ...; do grep -q "func $t" gui/backend/*_test.go || echo MISSING $t; done
+(no output: none missing)
+```
+
+The "Not there yet" list: Dropping files, `/leave`, Interactive apps (modals + Block Kit buttons), Strike-through, more than one workspace. Strike-through was there before Phase 4 and is not a Phase 4 item; the plan's expected list leaves it out.
+
+### Manual (`-fake`), performed
+
+Same isolation as 4.4–4.5: binary built to the scratchpad, `Xvfb :97` (`nix-shell -p xvfb`), `WAYLAND_DISPLAY` unset, `DISPLAY=:97`, `DBUS_SESSION_BUS_ADDRESS` at a socket that does not exist, scratch `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_CACHE_HOME` with `[gui] tray = false` and `[notifications] enabled = false`, `GDK_DEBUG=no-portals`; additionally a stub `xdg-open` first on `PATH` that only appends its argument to `<scratch>/opened.log`, so no browser was started. `<scratch>/slk-gio -fake -fake-every 0`, driven with `xdotool`, frames with `ffmpeg -f x11grab -i :97`. The user's `slk-gio` (pid 450995) was untouched throughout.
+
+- 4.6: #general, right-click Margaret's "Can someone review the cache migration…" → menu Copy text / Copy link / Open in Slack / Forward… / Mark unread from here. Forward… → switcher with the filter hint "Forward to…", rows incidents, Ada Lovelace, general, Grace Hopper + Linus Torvalds, eng-backend, random, release-train, office-amsterdam; no "New message…", no "All conversations…". Typed "ada", Enter → dialog "Forward to Ada Lovelace", body "Margaret Hamilton: Can someone review the cache migration…", editor "Add a message (optional)", Cancel / Forward. Typed "fyi", Enter → note "Forwarded to Ada Lovelace" in #general; Ada's window shows "You: fyi" and the card "Margaret Hamilton / Can someone review … / Shared from #general". From a thread window (Margaret's broadcast reply): Forward… raised #general with the pick switcher; chose random, note "from the thread", Forward → #random shows it with the card.
+- 4.7: `/standup shipped the cache` in #general → ephemeral "Only visible to you · buttons work here", Standup Bot, "Here is your standup. Send it to the channel?", "shipped the cache", buttons Send (accent frame), Shuffle, Cancel (red frame). Cancel → dialog "Cancel?" / "Discard the preview?" / Cancel / Okay (red); Escape → preview kept. Shuffle → "the cache shipped", "(edited)". Send → "Standup Bot: the cache shipped" posted in #general and the ephemeral gone.
+- 4.8: #general, right-click Grace's "Morning! Anyone else seeing the deploy queue back up?" → Copy link → clipboard `https://demo.slack.com/archives/C1/p1793442385000100` (`xclip -display :97 -o`). In Ada's DM, Ctrl+V, Enter → link message. #general scrolled to its newest message, then the link clicked → #general (moved, as `openChatAt` does for an open window) scrolled to "Morning! …" and lit it; `opened.log` stayed absent. Sent `https://other.slack.com/archives/C1/p1793442385000100` and clicked it → `opened.log`: `xdg-open https://other.slack.com/archives/C1/p1793442385000100`.
+- Not exercised by hand: a link to a thread reply (the fake's permalinks carry no `thread_ts`; `hub.openLink`'s thread branch is the `openNote` shape and `TestLinkTargetReadsThreadReplies` covers the parsing); a link to a conversation the list lacks (`Backend.Conversation` path); a URL button (the fake has none); Slack refusing a press or a forward; the real workspace.
+- Observed, not part of these sub-phases: (1) the jump target ended under the header (author line hidden, body line at the top edge) after `openChatAt` moved an already open window; the same path serves search results and notifications. (2) The first Ctrl+V of text that slk-gio itself had put on the clipboard landed in the composer more than a second later (after Enter had already sent "see"); a second Ctrl+V landed at once. (3) `xdotool windowclose` on a chat window made the whole process exit with an X `BadWindow` error (an external destroy, not a user action; noted for completeness).
+
+### Deviations (4.6–4.8)
+
+1. `ForwardMessage` had no TUI caller to update: the TUI's composition root was removed in Phase 2, and `grep -rn ForwardMessage` finds only `internal/slack`. Only the test changed.
+2. The forwarding flag (does Slack unfurl a permalink after comment text?) was not stopped on as the hand-over contract says: as instructed for this run, the comment + newline + permalink shape is implemented and the `from_url` alternative is a comment in `ForwardMessage`; the question is a follow-up below.
+3. `confirmDialog` has `cancelLabel` and `onCancel` beyond the plan's fields (Slack's `dismiss_text` for 4.7); `onOK` gets the editor's trimmed text. A dialog with an editor gives the keyboard to the editor and reads Escape/Enter from it.
+4. The pick-mode switcher includes the window's own conversation (the plan said nothing); forwarding a thread reply to its channel is a real choice. It never searches Slack (the plan's "no remote section").
+5. `Message.Actions` is set only for ephemerals, and `PressAction` refuses anything else: the action-dialog spec restricts presses to ephemerals (non-ephemeral history has no action ids; a press without one is a request shape the web client never sends). The plan's `LegacyActionIDs` wiring in `applyEvent` and `fromCache` was therefore not added (neither path carries ephemerals); `LegacyActionIDs` is exported and listed in AGENTS.md as planned, its caller still `dispatchEphemeral`.
+6. `Action` keeps the whole `blocks.LegacyAction` (`legacy`) rather than separate `id/name/value` fields, so a press echoes every field Slack sent (`AttachmentActionRequest.Action` is that struct); it also carries `Type`, which `chat.ButtonActions` filters on.
+7. `msgWidgets.handle`'s press callback takes the message too (`press(m, a)`), and handle also takes `open` (4.8) instead of reading a richView field, since `handle` is a `msgWidgets` method.
+8. A legacy button with a URL is a link and opens on any message (as any link does; nothing is sent to Slack); the TUI offered URL buttons only in an ephemeral's dialog.
+9. The fake's Forward card starts with the original's author line (Slack's preview shows the author too); its destination must be a conversation the fake has (`channel_not_found` otherwise).
+10. `TestFakeDomainMatchesItsPermalinks` is in `package backend_test` (`gui/backend/fake_domain_test.go`): `chat` imports `backend`, so the internal test package cannot import `chat`.
+11. Tests beyond the plan: `TestFromAttachmentsNumbersActionsAcrossAttachments`, `TestForward_QueuesThePostedMessage`, `TestPressAction_EchoesTheEphemeralsButton`, `TestLegacyActionIDs`.
+
+### Follow-ups (4.6–4.8)
+
+- **For the user, on the real workspace:** forward a message with a note and check that Slack still shows the original's preview under the note. If it does not, switch `ForwardMessage` to `text=comment` + `attachments=[{"from_url": permalink}]` (the comment in `internal/slack/forward.go`). Without a note the request is unchanged from the TUI's.
+- The forward note is sent as typed (no `@name` → `<@U…>` conversion as the composer does with `chat.Mentions`).
+- `chat.ForwardedLink` exists but no window uses it yet (the TUI opened the original on Enter); a click on the link itself now opens it in-app.
+- Enterprise Grid permalinks may carry a different host than `TeamSubdomain()` (e.g. an org subdomain); such links still open in the browser.
+- The two observations under "Manual" (jump target under the header after `moveHere`; a delayed self-owned clipboard paste) are outside these sub-phases and unchanged by them.
