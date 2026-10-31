@@ -30,8 +30,14 @@ func UniqueSlug(base string, existing map[string]bool) string {
 // AppendWorkspaceConfigBlock appends a [workspaces.<slug>] block with
 // team_id set, prefixed by a "# <teamName>" comment line. The file
 // is created if it does not exist. Existing content is preserved
-// verbatim (textual append, not TOML re-marshal).
+// verbatim (textual append, not TOML re-marshal). Like every in-place
+// config.toml edit it holds config.LockWrites across the
+// read-modify-write and replaces the file atomically (config.WriteAtomic),
+// so a concurrent version_ts save (versionts.Save) neither loses this
+// block nor reads a half-written file.
 func AppendWorkspaceConfigBlock(configPath, slug, teamID, teamName string) error {
+	defer config.LockWrites()()
+
 	var existing []byte
 	if data, err := os.ReadFile(configPath); err == nil {
 		existing = data
@@ -58,7 +64,7 @@ func AppendWorkspaceConfigBlock(configPath, slug, teamID, teamName string) error
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, []byte(b.String()), 0644)
+	return config.WriteAtomic(configPath, []byte(b.String()))
 }
 
 // ExistingSlugs reads configPath (if present) and returns the set of

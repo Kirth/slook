@@ -1,6 +1,7 @@
-package main
+package versionts
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/slack/slacktest"
 	"github.com/gammons/slk/internal/slackhttp"
 )
 
@@ -18,7 +20,7 @@ func TestSaveWorkspaceVersionTS_UpdatesExisting(t *testing.T) {
 	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if err := saveWorkspaceVersionTS(path, "acme", "T04T4TH8W", "My Team", "1785403654"); err != nil {
+	if err := Save(path, "acme", "T04T4TH8W", "My Team", "1785403654"); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	out, _ := os.ReadFile(path)
@@ -45,7 +47,7 @@ func TestSaveWorkspaceVersionTS_AddsToExistingSection(t *testing.T) {
 	if err := os.WriteFile(path, []byte("[workspaces.acme]\nteam_id = \"T04T4TH8W\"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if err := saveWorkspaceVersionTS(path, "acme", "T04T4TH8W", "My Team", "1785403654"); err != nil {
+	if err := Save(path, "acme", "T04T4TH8W", "My Team", "1785403654"); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	out, _ := os.ReadFile(path)
@@ -64,7 +66,7 @@ func TestSaveWorkspaceVersionTS_DoesNotTouchOtherWorkspaces(t *testing.T) {
 	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if err := saveWorkspaceVersionTS(path, "acme", "T111", "Acme", "9999999999"); err != nil {
+	if err := Save(path, "acme", "T111", "Acme", "9999999999"); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	out := string(mustRead(t, path))
@@ -79,7 +81,7 @@ func TestSaveWorkspaceVersionTS_DoesNotTouchOtherWorkspaces(t *testing.T) {
 func TestSaveWorkspaceVersionTS_CreatesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "config.toml")
-	if err := saveWorkspaceVersionTS(path, "acme", "T04T4TH8W", "My Team", "1785403654"); err != nil {
+	if err := Save(path, "acme", "T04T4TH8W", "My Team", "1785403654"); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	out, err := os.ReadFile(path)
@@ -113,7 +115,7 @@ func TestSaveWorkspaceVersionTS_ConcurrentSavesDoNotLoseUpdates(t *testing.T) {
 		wg.Add(1)
 		go func(key, teamID, ts string) {
 			defer wg.Done()
-			if err := saveWorkspaceVersionTS(path, key, teamID, key, ts); err != nil {
+			if err := Save(path, key, teamID, key, ts); err != nil {
 				errs <- err
 			}
 		}(w.key, w.teamID, w.ts)
@@ -138,7 +140,7 @@ func TestSeedVersionTS_UsesCachedValue(t *testing.T) {
 	cfg := config.Config{Workspaces: map[string]config.Workspace{
 		"acme": {TeamID: "T111", VersionTS: "1799999999"},
 	}}
-	seedVersionTS(env, cfg, "T111")
+	Seed(env, cfg, "T111")
 	if got := env.VersionTS(); got != "1799999999" {
 		t.Errorf("VersionTS = %q; want the cached 1799999999", got)
 	}
@@ -149,7 +151,7 @@ func TestSeedVersionTS_UnknownWorkspaceKeepsFallback(t *testing.T) {
 	cfg := config.Config{Workspaces: map[string]config.Workspace{
 		"acme": {TeamID: "T111", VersionTS: "1799999999"},
 	}}
-	seedVersionTS(env, cfg, "T999")
+	Seed(env, cfg, "T999")
 	if got := env.VersionTS(); got != slackhttp.DefaultVersionTS {
 		t.Errorf("VersionTS = %q; want the compiled-in fallback %q", got, slackhttp.DefaultVersionTS)
 	}
@@ -160,7 +162,7 @@ func TestSeedVersionTS_EmptyCachedValueKeepsFallback(t *testing.T) {
 	cfg := config.Config{Workspaces: map[string]config.Workspace{
 		"acme": {TeamID: "T111"},
 	}}
-	seedVersionTS(env, cfg, "T111")
+	Seed(env, cfg, "T111")
 	if got := env.VersionTS(); got != slackhttp.DefaultVersionTS {
 		t.Errorf("VersionTS = %q; want the compiled-in fallback %q", got, slackhttp.DefaultVersionTS)
 	}
@@ -170,7 +172,7 @@ func TestSeedVersionTS_NilEnvelopeIsNoOp(t *testing.T) {
 	cfg := config.Config{Workspaces: map[string]config.Workspace{
 		"acme": {TeamID: "T111", VersionTS: "1799999999"},
 	}}
-	seedVersionTS(nil, cfg, "T111") // must not panic
+	Seed(nil, cfg, "T111") // must not panic
 }
 
 func mustRead(t *testing.T, p string) []byte {
@@ -180,4 +182,57 @@ func mustRead(t *testing.T, p string) []byte {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	return b
+}
+
+// refreshServer is a fake Slack that signs in to T111 and recommends
+// build 1785403654.
+func refreshServer(t *testing.T) *slacktest.Server {
+	return slacktest.NewServer(t, map[string]string{
+		"/api/auth.test":           `{"ok":true,"url":"https://acme.slack.com/","team":"Acme","user":"grant","team_id":"T111","user_id":"U1"}`,
+		"/api/client.shouldReload": `{"ok":true,"should_reload":false,"recommended_build_version":1785403654}`,
+	})
+}
+
+func TestRefresh_AppliesAndSaves(t *testing.T) {
+	srv := refreshServer(t)
+	c := slacktest.NewClient(t, srv.Server)
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[workspaces.acme]\nteam_id = \"T111\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Workspaces: map[string]config.Workspace{"acme": {TeamID: "T111"}}}
+
+	Refresh(context.Background(), c, cfg, path, "Acme", func(f string, a ...any) { t.Errorf("logged: "+f, a...) })
+
+	if got := c.Envelope().VersionTS(); got != "1785403654" {
+		t.Errorf("envelope VersionTS = %q; want the recommended build", got)
+	}
+	if out := string(mustRead(t, path)); !strings.Contains(out, "[workspaces.acme]\nversion_ts = \"1785403654\"") {
+		t.Errorf("config not saved under the workspace's own block:\n%s", out)
+	}
+	if got := srv.RequestTo(t, "/api/client.shouldReload").Form.Get("team_ids"); got != "T111" {
+		t.Errorf("team_ids = %q; want T111", got)
+	}
+}
+
+// TestRefresh_EmptyConfigPathDoesNotWrite: a caller whose config.toml
+// did not load passes "", and the value is used for the session only.
+func TestRefresh_EmptyConfigPathDoesNotWrite(t *testing.T) {
+	srv := refreshServer(t)
+	c := slacktest.NewClient(t, srv.Server)
+	if err := c.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	dir := t.TempDir()
+	t.Chdir(dir) // a stray relative write would land here
+	Refresh(context.Background(), c, config.Config{}, "", "Acme", nil)
+	if got := c.Envelope().VersionTS(); got != "1785403654" {
+		t.Errorf("envelope VersionTS = %q; want the recommended build", got)
+	}
+	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+		t.Errorf("Refresh with no config path wrote %v", ents)
+	}
 }
