@@ -69,9 +69,7 @@ func TestUserResolver_BoundsConcurrentRequests(t *testing.T) {
 		time.Sleep(25 * time.Millisecond)
 		atomic.AddInt32(&inFlight, -1)
 		w.Header().Set("Content-Type", "application/json")
-		// image_32 is deliberately absent: avatar.Cache.Preload
-		// returns before touching its receiver when the URL is empty,
-		// which is what lets this test pass a nil avatar cache.
+		// No profile images: the test counts requests, not avatars.
 		_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U1","name":"someone","team_id":"T1","profile":{"display_name":"Someone"}}}`))
 	}))
 	defer srv.Close()

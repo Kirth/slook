@@ -108,7 +108,6 @@ scrollbars, date formatting, case folding, or ID formatting: it already exists.
 |---|---|
 | Word wrap to a width | `messages.WordWrap(s, limit)` |
 | Plain-text line segmentation (grapheme-correct) | `entrylist.PlainLines`, `entrylist.DisplayWidth`, `entrylist.SliceColumns` (`bubbles/entrylist`; `messages.PlainLines`/`DisplayWidthOfPlain`/`SliceColumns` delegate for existing callers) |
-| Display width of a string (emoji-aware) | `emoji.Width(s)` |
 | Case/accent-insensitive fold for matching | `text.Fold(s)` |
 | Slack mrkdwn → plain text | `slackfmt.FlattenMrkdwn`, `slackfmt.FlattenMrkdwnWithUserGroups` (`internal/slackfmt/flatten.go`; `messages.FlattenMrkdwn*` delegate for existing callers); the lossier notification form is `slackfmt.StripMarkup` |
 | Slack mrkdwn → CommonMark (the Markdown export) | `slackfmt.MrkdwnToCommonMark`, `slackfmt.MrkdwnToCommonMarkWithUserGroups` (`internal/slackfmt/commonmark.go`; `messages.SlackMrkdwnToCommonMark*` delegate) |

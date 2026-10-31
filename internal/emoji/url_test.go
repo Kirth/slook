@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -242,5 +243,15 @@ func TestURLForShortcode(t *testing.T) {
 			t.Errorf("URLForShortcode(%q) = (%q, %v), want (%q, %v)",
 				c.name, got, ok, c.wantURL, c.wantOK)
 		}
+	}
+}
+
+func TestEmojiCacheKey(t *testing.T) {
+	a := EmojiCacheKey("https://emoji.slack-edge.com/T1/party/abc.png")
+	if !strings.HasPrefix(a, "E-") || len(a) != 2+16 {
+		t.Errorf("EmojiCacheKey = %q; want E- and 16 hex digits", a)
+	}
+	if a == EmojiCacheKey("https://emoji.slack-edge.com/T1/party/abd.png") {
+		t.Error("two URLs share a key")
 	}
 }

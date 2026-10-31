@@ -11,8 +11,11 @@ import (
 )
 
 // guiBannedImports are the import-path trees the GUI must never import:
-// the retired bubbletea TUI (removed in 2026-10) and the terminal toolkit
-// it was built on. A direct import of any of them would bring the TUI's
+// the retired bubbletea TUI (removed in 2026-10), the terminal toolkit
+// it was built on, and the terminal image encoders (sixel) that went with
+// it. lipgloss is also covered by "charm.land/"; it is named on its own
+// because cmd/slk's prompts still use it, so it is the one most likely to
+// be reached for. A direct import of any of them would bring the TUI's
 // code or its dependencies back into slk-gio. Only direct imports are
 // checked; what internal/ packages import in turn is theirs to answer.
 var guiBannedImports = []string{
@@ -21,7 +24,9 @@ var guiBannedImports = []string{
 	"github.com/gammons/slk/internal/demo",
 	"github.com/gammons/slk/internal/editor",
 	"charm.land/",
+	"charm.land/lipgloss",
 	"github.com/charmbracelet/",
+	"github.com/mattn/go-sixel",
 }
 
 // banned reports whether path is one of guiBannedImports or lies under
@@ -87,6 +92,8 @@ func TestBoundaryBannedMatchesTreesNotNeighbours(t *testing.T) {
 		"github.com/gammons/slk/internal/editor":         true,
 		"charm.land/lipgloss/v2":                         true,
 		"github.com/charmbracelet/x/ansi":                true,
+		"github.com/mattn/go-sixel":                      true,
+		"github.com/mattn/go-sqlite3":                    false,
 		"github.com/gammons/slk/internal/usergroups":     false,
 		"github.com/gammons/slk/internal/editorconfig":   false,
 		"github.com/gammons/slk/internal/demographics":   false,

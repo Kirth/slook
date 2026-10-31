@@ -1,6 +1,8 @@
 package emoji
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"strings"
 )
@@ -227,4 +229,12 @@ func splitSkinToneSuffix(name string) (string, rune, bool) {
 		}
 	}
 	return "", 0, false
+}
+
+// EmojiCacheKey is the image-cache key for an emoji picture at url: a
+// stable hash of the URL with an "E-" prefix to keep emoji entries apart
+// from avatars and file images in the shared disk cache.
+func EmojiCacheKey(url string) string {
+	sum := sha1.Sum([]byte(url))
+	return "E-" + hex.EncodeToString(sum[:8])
 }

@@ -17,7 +17,7 @@
           pname = "slk";
           version = "0.0.0";
           src = ./.;
-          vendorHash = "sha256-kcaddhrDhI9TfADvtmjmMxdlyGXifxyItjImFWp4lyI=";
+          vendorHash = "sha256-3zdIahgS0Z8hcuUO/Z6YR5MhTIruhXJwDKd1KUMJJH4=";
           # gui/ is its own module (slk-gio); buildGoModule's package
           # search would otherwise try to build it from this one.
           excludedPackages = [ "gui" ];
