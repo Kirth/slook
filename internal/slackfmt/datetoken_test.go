@@ -144,3 +144,27 @@ func TestFlattenMrkdwn_DateTokenFormatted(t *testing.T) {
 		t.Errorf("FlattenMrkdwn = %q, want %q", got, want)
 	}
 }
+
+// TestFormatDateToken_CalendarPrefersFormat: a calendar bot's rich_text
+// date element carries a ts, a FORMAT with the time in it and a
+// date-only FALLBACK. The time must show, so FORMAT wins.
+func TestFormatDateToken_CalendarPrefersFormat(t *testing.T) {
+	ts := time.Date(2026, 10, 13, 11, 30, 0, 0, time.UTC).Unix()
+	got := FormatDateToken(ts, "{date_short} {time}", "10/13/26")
+	want := time.Unix(ts, 0).Format("Jan 2, 2006") + " " + time.Unix(ts, 0).Format(dateTokenTimeLayout)
+	if got != want {
+		t.Errorf("FormatDateToken = %q, want %q (the formatted time, not the fallback)", got, want)
+	}
+}
+
+func TestFormatDateToken_FallbackWhenFormatUnusable(t *testing.T) {
+	if got := FormatDateToken(1779996974, "", "yesterday"); got != "yesterday" {
+		t.Errorf("empty format: got %q, want the fallback", got)
+	}
+	if got := FormatDateToken(1779996974, "plain text", "yesterday"); got != "yesterday" {
+		t.Errorf("format without tokens: got %q, want the fallback", got)
+	}
+	if got := FormatDateToken(1779996974, "", ""); got != "" {
+		t.Errorf("nothing usable: got %q, want \"\"", got)
+	}
+}

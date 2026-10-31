@@ -38,6 +38,8 @@ import (
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/paths"
 	slackclient "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/slackfmt"
+	"github.com/gammons/slk/internal/theme"
 )
 
 // connectTimeout bounds sign-in, so a wedged network fails visibly.
@@ -71,6 +73,13 @@ func main() {
 			os.Exit(2)
 		}
 	}
+	// <!date tokens' {time} follows appearance.timestamp_format, as in
+	// the TUI.
+	slackfmt.SetDateTokenTimeLayout(cfg.Appearance.TimestampFormat)
+	// The user's own theme files (config/themes/*.toml), so a custom
+	// theme name works in [gui.theme] and -theme. A missing directory
+	// is no themes.
+	theme.LoadCustom(os.DirFS(filepath.Join(paths.Config(), "themes")))
 	name, colors := cfg.GUI.Theme.Settings()
 	if *themeName != "" {
 		name = *themeName

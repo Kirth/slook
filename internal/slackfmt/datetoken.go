@@ -123,6 +123,17 @@ func formatSlackDateToken(ts, format, fallback, raw string) string {
 	return formatSlackDateTokenIn(ts, format, fallback, raw, time.Local)
 }
 
+// FormatDateToken renders a date given as parts rather than as a
+// <!date^…> token (a rich_text "date" element): ts in unix seconds, the
+// FORMAT string with Slack's {tokens}, and the precomputed FALLBACK. It
+// follows the token rule: FORMAT expanded in local time, FALLBACK only
+// when FORMAT is unusable (empty, or without a recognized {token}). It
+// returns "" when neither gives anything, so the caller picks its own
+// last resort.
+func FormatDateToken(ts int64, format, fallback string) string {
+	return formatSlackDateToken(strconv.FormatInt(ts, 10), format, fallback, "")
+}
+
 // formatSlackDateTokenIn is formatSlackDateToken with an explicit
 // location so tests can pin a timezone.
 func formatSlackDateTokenIn(ts, format, fallback, raw string, loc *time.Location) string {

@@ -8,6 +8,7 @@ import (
 	"github.com/slack-go/slack"
 
 	"github.com/gammons/slk/internal/emoji"
+	"github.com/gammons/slk/internal/slackfmt"
 )
 
 // FromRichText turns a rich_text block's elements into blocks. It is the
@@ -140,11 +141,22 @@ func inlineSpan(e slack.RichTextSectionElement, n Names) (Span, bool) {
 	case *slack.RichTextSectionEmojiElement:
 		return styled(emojiSpan(v), v.Style), true
 	case *slack.RichTextSectionDateElement:
-		if v.Fallback != nil && *v.Fallback != "" {
-			return styled(Span{Text: *v.Fallback}, v.Style), true
+		// Slack's date rule (slackfmt.FormatDateToken): the FORMAT in
+		// local time, the fallback only when the FORMAT is unusable or
+		// there is no timestamp. Calendar bots put the event's time only
+		// in the FORMAT, so a fallback-first rendering dropped it.
+		fallback := ""
+		if v.Fallback != nil {
+			fallback = *v.Fallback
 		}
-		t := time.Unix(int64(v.Timestamp), 0)
-		return styled(Span{Text: t.Local().Format("Jan 2, 2006 15:04")}, v.Style), true
+		text := fallback
+		if v.Timestamp != 0 {
+			text = slackfmt.FormatDateToken(int64(v.Timestamp), v.Format, fallback)
+		}
+		if text == "" {
+			text = time.Unix(int64(v.Timestamp), 0).Local().Format("Jan 2, 2006 15:04")
+		}
+		return styled(Span{Text: text}, v.Style), true
 	case *slack.RichTextSectionColorElement:
 		return Span{Text: v.Value}, true
 	case *slack.RichTextSectionTeamElement:

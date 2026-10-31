@@ -4,10 +4,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/slack-go/slack"
 
 	"github.com/gammons/slk/internal/core/blocks"
+	"github.com/gammons/slk/internal/slackfmt"
 )
 
 var names = MapNames{
@@ -323,5 +325,24 @@ func TestPlainBlocks(t *testing.T) {
 	}
 	if PlainBlocks(nil) != "" {
 		t.Fatal("PlainBlocks(nil)")
+	}
+}
+
+// TestFromRichTextDateFormatFirst: a calendar bot's date element has a
+// timestamp, a FORMAT carrying the time and a date-only fallback; the
+// time must show, as Slack's own clients show it.
+func TestFromRichTextDateFormatFirst(t *testing.T) {
+	ts := time.Date(2026, 10, 13, 11, 30, 0, 0, time.UTC).Unix()
+	fallback := "10/13/26"
+	els := []slack.RichTextElement{&slack.RichTextSection{Elements: []slack.RichTextSectionElement{
+		&slack.RichTextSectionDateElement{Timestamp: slack.JSONTime(ts), Format: "{time}", Fallback: &fallback},
+	}}}
+	got := FromRichText(els, names)
+	want := []Block{Paragraph{Spans: []Span{{Text: slackfmt.FormatDateToken(ts, "{time}", "")}}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+	if strings.Contains(want[0].(Paragraph).Spans[0].Text, fallback) {
+		t.Fatalf("rendered the fallback %q", fallback)
 	}
 }

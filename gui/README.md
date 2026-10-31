@@ -79,7 +79,8 @@ Colours come from `[gui.theme]` in slk's `config.toml`. `preset` (or
 - `light`.
 
 Any slk TUI theme name also works ("nord", "gruvbox dark", …), mapped
-onto the GUI's colours. Single colours can be overridden by key, in
+onto the GUI's colours, and so does a custom theme from a `.toml` file
+in slk's `themes` directory (`~/.config/slk/themes/`, the TUI's format). Single colours can be overridden by key, in
 the block itself or under `[gui.theme.colors]`. `-theme NAME` picks a
 palette for one run.
 
