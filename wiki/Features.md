@@ -72,7 +72,7 @@ this page used to describe, was retired on 2026-10-31.
 - Your presence and do-not-disturb on the list's header tile: Active, Away,
   snooze for 20 minutes to 24 hours or until tomorrow morning, end DND. The
   tray menu offers the common ones.
-- Other people's custom status, DND and huddles show in headers and hover
+- Other people's custom status and DND show in headers and hover
   cards, and follow changes live.
 - Desktop notifications for mentions (usergroups you are in included), DMs
   and keywords while no slk-gio window has the keyboard; per conversation:

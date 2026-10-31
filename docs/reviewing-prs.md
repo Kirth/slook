@@ -217,18 +217,18 @@ Do every step; the order matters less than completeness.
    `_windows.go` files; nix's sandbox has no `/bin/sh`), and side
    effects of reusing an existing function for a new purpose.
 
-7. **Check it against `AGENTS.md`.** The `internal/ui` I/O boundary,
-   new behaviour in a `reducer_*.go` rather than `Update`, reuse of
+7. **Check it against `AGENTS.md`.** The GUI boundary
+   (`gui/boundary_test.go`), a feature being a `backend.Backend` method
+   implemented by both `Slack` and `Fake` with tests of each, window
+   logic kept in `gui/chat` (or `search`, `sidebar`) where it can be
+   tested, no new request at boot and no unpaced history sweep, reuse of
    listed helpers instead of a new copy, new reusable helpers added to
-   the table, a new `messages`/`thread` difference being an `entrylist` option or
-   `RenderOptions` field rather than a pane-local copy, `main.go` scope
-   (`main_scope_test.go`), and refactors that change behaviour. Check it
-   against the re-architecture plan
-   (`docs/superpowers/plans/2026-09-06-architecture-refactor.md`) too.
+   the table, `cmd/slk/main.go` scope (`main_scope_test.go`), and
+   refactors that change behaviour.
 
-8. **Check docs and goldens.** Wiki pages and design docs match the
-   code. A re-blessed golden must be current (CI's test run fails if it
-   isn't), and every changed line must be explained.
+8. **Check docs.** Wiki pages, `gui/README.md` and design docs match the
+   code, and a new design doc is listed in
+   `docs/superpowers/specs/README.md`.
 
 9. **Decide whether it needs human review.** See below.
 

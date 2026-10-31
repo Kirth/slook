@@ -1,5 +1,7 @@
 # slk Implementation Status
 
+> **Historical:** this is the terminal client's status as of 2026-05-03. The terminal client was retired on 2026-10-31; slk is now `slk-gio` and the `slk` CLI (see the README and `gui/README.md`).
+
 Last updated: 2026-05-03
 
 ## What's Working
