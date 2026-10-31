@@ -46,7 +46,7 @@ func FromBlocks(bs []blocks.Block, n Names) []Block {
 				out = append(out, Image{URL: acc.URL, Alt: acc.AltText, Open: acc.URL, Small: true})
 			case blocks.LabelAccessory:
 				if acc.Label != "" {
-					out = append(out, Buttons{Labels: []string{acc.Label}})
+					out = append(out, Buttons{Items: []Button{{Label: acc.Label, Action: -1}}})
 				}
 			}
 		case blocks.HeaderBlock:
@@ -74,14 +74,14 @@ func FromBlocks(bs []blocks.Block, n Names) []Block {
 		case blocks.ImageBlock:
 			out = append(out, Image{URL: v.URL, Title: v.Title, Alt: v.Alt, W: v.Width, H: v.Height, Open: v.URL})
 		case blocks.ActionsBlock:
-			var labels []string
+			var bs Buttons
 			for _, el := range v.Elements {
 				if el.Label != "" {
-					labels = append(labels, el.Label)
+					bs.Items = append(bs.Items, Button{Label: el.Label, Action: -1})
 				}
 			}
-			if len(labels) > 0 {
-				out = append(out, Buttons{Labels: labels})
+			if len(bs.Items) > 0 {
+				out = append(out, bs)
 			}
 		}
 	}
@@ -89,9 +89,12 @@ func FromBlocks(bs []blocks.Block, n Names) []Block {
 }
 
 // FromAttachments converts legacy attachments: each becomes its pretext
-// followed by a colored Card.
+// followed by a colored Card. A button's Action counts every action of
+// the attachments before it, so it indexes the message's actions in
+// order; a menu ("select") is drawn but has Action -1.
 func FromAttachments(atts []blocks.LegacyAttachment, n Names) []Block {
 	var out []Block
+	action := 0
 	for _, a := range atts {
 		out = append(out, FromMrkdwn(a.Pretext, n)...)
 		card := Card{Color: a.Color}
@@ -121,16 +124,20 @@ func FromAttachments(atts []blocks.LegacyAttachment, n Names) []Block {
 		case a.ThumbURL != "":
 			card.Blocks = append(card.Blocks, Image{URL: a.ThumbURL, Open: a.ThumbURL, Small: true})
 		}
-		if len(a.Actions) > 0 {
-			var labels []string
-			for _, act := range a.Actions {
-				if act.Text != "" {
-					labels = append(labels, act.Text)
-				}
+		var bs Buttons
+		for _, act := range a.Actions {
+			i := action
+			action++
+			if act.Text == "" {
+				continue
 			}
-			if len(labels) > 0 {
-				card.Blocks = append(card.Blocks, Buttons{Labels: labels})
+			if act.Type != "button" {
+				i = -1
 			}
+			bs.Items = append(bs.Items, Button{Label: act.Text, Style: act.Style, URL: act.URL, Action: i})
+		}
+		if len(bs.Items) > 0 {
+			card.Blocks = append(card.Blocks, bs)
 		}
 		card.Footer = a.Footer
 		if a.TS > 0 {

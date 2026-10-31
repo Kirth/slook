@@ -394,7 +394,7 @@ func (v *richView) block(gtx C, w *msgWidgets, b rich.Block) D {
 		})
 	case rich.Buttons:
 		return layout.Inset{Top: unit.Dp(6), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx C) D {
-			return v.buttons(gtx, b.Labels)
+			return v.buttons(gtx, b.Items)
 		})
 	case rich.Card:
 		return insetSel(gtx, w, layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}, func(gtx C) D {
@@ -531,9 +531,10 @@ func (v *richView) context(gtx C, w *msgWidgets, c rich.Context) D {
 }
 
 // buttons draws action labels as outlined chips; they do nothing.
-func (v *richView) buttons(gtx C, labels []string) D {
-	children := make([]layout.FlexChild, 0, len(labels))
-	for _, label := range labels {
+func (v *richView) buttons(gtx C, items []rich.Button) D {
+	children := make([]layout.FlexChild, 0, len(items))
+	for _, it := range items {
+		label := it.Label
 		children = append(children, layout.Rigid(func(gtx C) D {
 			return layout.Inset{Right: unit.Dp(6)}.Layout(gtx, func(gtx C) D {
 				border := widget.Border{Color: colBorder, CornerRadius: unit.Dp(4), Width: unit.Dp(1)}

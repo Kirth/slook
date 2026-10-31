@@ -112,9 +112,18 @@ type Context struct {
 	Images []Image
 }
 
-// Buttons are the labels of an actions block or attachment actions.
-// They are drawn, not pressable.
-type Buttons struct{ Labels []string }
+// Buttons are an actions block's or an attachment's buttons, in order.
+type Buttons struct{ Items []Button }
+
+// Button is one button. Style is Slack's ("", "default", "primary" or
+// "danger"); URL, when set, makes it a link. Action is the button's
+// place among the message's legacy attachment actions (every action of
+// every attachment, in order), which a press names; -1 for a Block Kit
+// element or a menu, which cannot be pressed.
+type Button struct {
+	Label, Style, URL string
+	Action            int
+}
 
 // Card is a legacy attachment: a colored bar with content beside it.
 // Color is Slack's "good", "warning", "danger" or a hex color, or empty.

@@ -182,7 +182,7 @@ func TestFromBlocks(t *testing.T) {
 		Context{Items: []Span{{Text: "ctx"}}, Images: []Image{{URL: "https://i/c.png", Alt: "c", Open: "https://i/c.png", Small: true}}},
 		Divider{},
 		Image{URL: "https://i/big.png", Title: "Big", Alt: "big", W: 800, H: 600, Open: "https://i/big.png"},
-		Buttons{Labels: []string{"OK", "No"}},
+		Buttons{Items: []Button{{Label: "OK", Action: -1}, {Label: "No", Action: -1}}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got\n%#v\nwant\n%#v", got, want)
@@ -200,7 +200,7 @@ func TestFromAttachments(t *testing.T) {
 		Fields:     []blocks.LegacyField{{Title: "Branch", Value: "main", Short: true}},
 		ImageURL:   "https://ci/12.png",
 		Footer:     "ci.example",
-		Actions:    []blocks.LegacyAction{{Text: "Rerun"}},
+		Actions:    []blocks.LegacyAction{{Text: "Rerun", Type: "button", Style: "primary"}},
 	}}
 	got := FromAttachments(atts, names)
 	if len(got) != 2 {
@@ -219,10 +219,41 @@ func TestFromAttachments(t *testing.T) {
 		Paragraph{Spans: []Span{{Text: "passed"}}},
 		Fields{Items: []Field{{Spans: []Span{{Text: "Branch\n", Bold: true}, {Text: "main"}}, Short: true}}},
 		Image{URL: "https://ci/12.png", Open: "https://ci/12.png"},
-		Buttons{Labels: []string{"Rerun"}},
+		Buttons{Items: []Button{{Label: "Rerun", Style: "primary", Action: 0}}},
 	}
 	if !reflect.DeepEqual(card.Blocks, wantBlocks) {
 		t.Fatalf("card blocks\n%#v\nwant\n%#v", card.Blocks, wantBlocks)
+	}
+}
+
+// A button's Action counts every action before it, menus and unlabelled
+// ones included, across attachments; a menu cannot be pressed.
+func TestFromAttachmentsNumbersActionsAcrossAttachments(t *testing.T) {
+	atts := []blocks.LegacyAttachment{
+		{Actions: []blocks.LegacyAction{
+			{Text: "Pick", Type: "select"},
+			{Type: "button"},
+			{Text: "Send", Type: "button", Style: "primary"},
+		}},
+		{Actions: []blocks.LegacyAction{
+			{Text: "Docs", Type: "button", URL: "https://docs"},
+			{Text: "Cancel", Type: "button", Style: "danger"},
+		}},
+	}
+	var got [][]Button
+	for _, b := range FromAttachments(atts, names) {
+		for _, inner := range b.(Card).Blocks {
+			if bs, ok := inner.(Buttons); ok {
+				got = append(got, bs.Items)
+			}
+		}
+	}
+	want := [][]Button{
+		{{Label: "Pick", Action: -1}, {Label: "Send", Style: "primary", Action: 2}},
+		{{Label: "Docs", URL: "https://docs", Action: 3}, {Label: "Cancel", Style: "danger", Action: 4}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got\n%#v\nwant\n%#v", got, want)
 	}
 }
 
@@ -312,7 +343,7 @@ func TestPlainBlocks(t *testing.T) {
 		List{Items: [][]Span{{{Text: "one"}}, {{Text: "two"}}}},
 		Image{FileName: "sunset.png", Title: "Sunset"},
 		File{Name: "Notes", FileName: "notes.txt"},
-		Buttons{Labels: []string{"Go"}},
+		Buttons{Items: []Button{{Label: "Go", Action: 0}}},
 		Card{Blocks: []Block{Paragraph{Spans: []Span{{Text: "card"}}}}},
 	}
 	want := "hello world\nquoted\nx := 1\none\ntwo\nSunset\nNotes\ncard"
