@@ -1,4 +1,4 @@
-package main
+package onboard
 
 import (
 	"os"
@@ -11,25 +11,25 @@ import (
 
 func TestUniqueSlug(t *testing.T) {
 	existing := map[string]bool{"acme": true, "acme-2": true}
-	if got := uniqueSlug("acme", existing); got != "acme-3" {
+	if got := UniqueSlug("acme", existing); got != "acme-3" {
 		t.Errorf("uniqueSlug = %q, want acme-3", got)
 	}
-	if got := uniqueSlug("fresh", existing); got != "fresh" {
+	if got := UniqueSlug("fresh", existing); got != "fresh" {
 		t.Errorf("uniqueSlug = %q, want fresh", got)
 	}
 }
 
 func TestUniqueSlugEmptyInputUsesFallback(t *testing.T) {
 	existing := map[string]bool{}
-	if got := uniqueSlug("", existing); got != "workspace" {
-		t.Errorf("uniqueSlug(\"\") = %q, want workspace", got)
+	if got := UniqueSlug("", existing); got != "workspace" {
+		t.Errorf("UniqueSlug(\"\") = %q, want workspace", got)
 	}
 }
 
 func TestAppendWorkspaceConfigBlockNewFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	if err := appendWorkspaceConfigBlock(path, "work", "T01ABCDEF", "ACME Corp"); err != nil {
+	if err := AppendWorkspaceConfigBlock(path, "work", "T01ABCDEF", "ACME Corp"); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	cfg, err := config.Load(path)
@@ -55,7 +55,7 @@ theme = "dracula"
 	if err := os.WriteFile(path, []byte(initial), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendWorkspaceConfigBlock(path, "work", "T01ABCDEF", "ACME"); err != nil {
+	if err := AppendWorkspaceConfigBlock(path, "work", "T01ABCDEF", "ACME"); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	got, _ := os.ReadFile(path)

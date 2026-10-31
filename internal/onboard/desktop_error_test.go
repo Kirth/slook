@@ -1,4 +1,4 @@
-package main
+package onboard
 
 import (
 	"errors"
@@ -14,7 +14,7 @@ import (
 func TestDesktopErrorMessageKeepsDecryptDetail(t *testing.T) {
 	err := fmt.Errorf("%w: decrypted value is not printable text (wrong Safe Storage key?)", slackdesktop.ErrDecryptFailed)
 
-	got := desktopErrorMessage(err)
+	got := DesktopErrorMessage(err)
 	if !strings.Contains(got, "not printable text") {
 		t.Errorf("message = %q, want it to carry the wrapped detail", got)
 	}
@@ -35,8 +35,8 @@ func TestDesktopErrorMessageKnownCauses(t *testing.T) {
 		{errors.New("boom"), "boom"},
 	}
 	for _, tc := range tests {
-		if got := desktopErrorMessage(tc.err); !strings.Contains(got, tc.want) {
-			t.Errorf("desktopErrorMessage(%v) = %q, want it to contain %q", tc.err, got, tc.want)
+		if got := DesktopErrorMessage(tc.err); !strings.Contains(got, tc.want) {
+			t.Errorf("DesktopErrorMessage(%v) = %q, want it to contain %q", tc.err, got, tc.want)
 		}
 	}
 }

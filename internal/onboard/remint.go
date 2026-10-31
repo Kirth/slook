@@ -1,16 +1,19 @@
-package main
+package onboard
 
 import (
 	"context"
 	"log"
 
 	slackclient "github.com/gammons/slk/internal/slack"
+	"github.com/gammons/slk/internal/slackdesktop"
 )
 
-// remintTokens refreshes every token's xoxc from the live desktop cookie. On
+// RemintTokens refreshes every token's xoxc from the live desktop cookie. On
 // any failure for a given token it keeps the cached token (offline-friendly).
 // cookieFn is read once up front; mintFn/saveFn are injected for testing.
-func remintTokens(
+// Tokens signed in from a browser session are left alone. Remint is the
+// form a caller with a token store uses.
+func RemintTokens(
 	ctx context.Context,
 	tokens []slackclient.Token,
 	cookieFn func() (string, error),
@@ -57,4 +60,21 @@ func remintTokens(
 		}
 	}
 	return out
+}
+
+// Remint is RemintTokens over a token store: it lists the stored tokens,
+// re-mints each from the Slack desktop app's live session (its stored
+// tokens first, mint as the fallback) and saves every refreshed token back
+// to store. The result is the full list, refreshed where that worked and
+// as stored where it did not; the only error is failing to list the store.
+// Callers run it once at startup, before connecting.
+func Remint(ctx context.Context, store *slackclient.TokenStore, mint Minter) ([]slackclient.Token, error) {
+	tokens, err := store.List()
+	if err != nil {
+		return nil, err
+	}
+	if len(tokens) == 0 {
+		return tokens, nil
+	}
+	return RemintTokens(ctx, tokens, slackdesktop.Cookie, slackdesktop.Tokens, mint, store.Save), nil
 }

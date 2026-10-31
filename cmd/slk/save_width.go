@@ -7,13 +7,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/gammons/slk/internal/config"
 )
 
 // saveWorkspaceWidth rewrites or appends a sidebar_width entry in
 // [workspaces.<tomlKey>]. Mirrors saveWorkspaceTheme.
 func saveWorkspaceWidth(configPath, tomlKey, teamID, teamName string, width int) error {
-	configWriteMu.Lock()
-	defer configWriteMu.Unlock()
+	defer config.LockWrites()()
 
 	data, err := os.ReadFile(configPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -61,19 +62,19 @@ func saveWorkspaceWidth(configPath, tomlKey, teamID, teamName string, width int)
 			newLines = append(newLines, lines[sectionStart+1:]...)
 			lines = newLines
 		}
-		return writeConfigAtomic(configPath, []byte(strings.Join(lines, "\n")))
+		return config.WriteAtomic(configPath, []byte(strings.Join(lines, "\n")))
 	}
 
 	// No existing section — append a legacy-keyed block.
 	if len(lines) > 0 && lines[len(lines)-1] != "" {
 		lines = append(lines, "")
 	}
-	safeName := sanitizeComment(teamName)
+	safeName := config.SanitizeComment(teamName)
 	if safeName == "" {
 		safeName = teamID
 	}
 	commentLine := "# " + safeName
 	legacyHeader := fmt.Sprintf("[workspaces.%s]", teamID)
 	lines = append(lines, commentLine, legacyHeader, "sidebar_width = "+strconv.Itoa(width))
-	return writeConfigAtomic(configPath, []byte(strings.Join(lines, "\n")))
+	return config.WriteAtomic(configPath, []byte(strings.Join(lines, "\n")))
 }

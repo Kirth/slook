@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/onboard"
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slackdesktop"
 )
@@ -452,14 +453,14 @@ func TestDesktopChoicesLeavesBrowserSessionsUnselected(t *testing.T) {
 		{TeamID: "T1", Source: slackclient.TokenSourceBrowser},
 		{TeamID: "T2"}, // from the desktop app: refreshed as before
 	}
-	choices, chosen := desktopChoices(ws, saved)
+	choices, chosen := onboard.DesktopChoices(ws, saved)
 	if len(choices) != 3 {
 		t.Fatalf("%d rows, want every workspace listed", len(choices))
 	}
 	if strings.Join(chosen, ",") != "T2,T3" {
 		t.Errorf("pre-selected %v, want T2 and T3 only", chosen)
 	}
-	if !strings.Contains(choices[0].label, "browser session") || strings.Contains(choices[1].label, "browser session") {
-		t.Errorf("labels = %q / %q, want only the browser one marked", choices[0].label, choices[1].label)
+	if !strings.Contains(choices[0].Label, "browser session") || strings.Contains(choices[1].Label, "browser session") {
+		t.Errorf("labels = %q / %q, want only the browser one marked", choices[0].Label, choices[1].Label)
 	}
 }

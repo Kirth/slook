@@ -1,21 +1,20 @@
-package main
+package config
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
-
-	"github.com/gammons/slk/internal/config"
 )
 
 // TestConfigSavers_ReaderNeverSeesPartialFile is the regression guard
 // for non-atomic config writes.
 //
-// configWriteMu only covers writers inside ONE process. Two slk
+// writeMu only covers writers inside ONE process. Two slk
 // instances against the same config.toml are not serialized at all,
 // and with a truncate-then-write os.WriteFile the second one can read
 // the file while it is half-written. Every saver here is a
@@ -26,7 +25,7 @@ import (
 // re-parses the file while writers hammer it, and demands that every
 // single read be a complete config, never a prefix of one. With
 // os.WriteFile this fails within a few hundred iterations; with
-// writeConfigAtomic's rename it cannot fail, because a rename swaps
+// WriteAtomic's rename it cannot fail, because a rename swaps
 // whole inodes.
 func TestConfigSavers_ReaderNeverSeesPartialFile(t *testing.T) {
 	dir := t.TempDir()
@@ -39,11 +38,11 @@ func TestConfigSavers_ReaderNeverSeesPartialFile(t *testing.T) {
 	// implementation.
 	var b strings.Builder
 	b.WriteString("[appearance]\ntheme = \"dark\"\n\n")
-	b.WriteString("# Acme\n[workspaces.acme]\nteam_id = \"T04T4TH8W\"\n")
+	b.WriteString("# Acme\n[workspaces.acme]\nteam_id = \"T04T4TH8W\"\nversion_ts = \"1\"\n")
 	for i := 0; i < 2000; i++ {
 		fmt.Fprintf(&b, "# padding line %d, here to widen the truncate-then-write window\n", i)
 	}
-	b.WriteString("\n# Other\n[workspaces.other]\nteam_id = \"T05U5UI9X\"\n")
+	b.WriteString("\n# Other\n[workspaces.other]\nteam_id = \"T05U5UI9X\"\nsidebar_width = 20\n")
 	if err := os.WriteFile(path, []byte(b.String()), 0644); err != nil {
 		t.Fatalf("seed config: %v", err)
 	}
@@ -52,14 +51,17 @@ func TestConfigSavers_ReaderNeverSeesPartialFile(t *testing.T) {
 	var wg sync.WaitGroup
 	writeErr := make(chan error, 4)
 
+	// Each writer is a read-modify-write the way every config saver
+	// is: lock, read the file, rewrite one line, WriteAtomic.
 	writers := []func(i int) error{
-		func(i int) error { return saveGlobalTheme(path, fmt.Sprintf("theme-%d", i)) },
 		func(i int) error {
-			return saveWorkspaceTheme(path, "acme", "T04T4TH8W", "Acme", fmt.Sprintf("t-%d", i))
+			return rewriteLine(path, `(?m)^theme = .*$`, "theme = "+TOMLString(fmt.Sprintf("theme-%d", i)))
 		},
-		func(i int) error { return saveWorkspaceWidth(path, "other", "T05U5UI9X", "Other", 20+i%30) },
 		func(i int) error {
-			return saveWorkspaceVersionTS(path, "acme", "T04T4TH8W", "Acme", fmt.Sprintf("17854%05d", i))
+			return rewriteLine(path, `(?m)^version_ts = .*$`, "version_ts = "+TOMLString(fmt.Sprintf("17854%05d", i)))
+		},
+		func(i int) error {
+			return rewriteLine(path, `(?m)^sidebar_width = .*$`, fmt.Sprintf("sidebar_width = %d", 20+i%30))
 		},
 	}
 	for _, w := range writers {
@@ -77,7 +79,7 @@ func TestConfigSavers_ReaderNeverSeesPartialFile(t *testing.T) {
 
 	const reads = 500
 	for i := 0; i < reads; i++ {
-		cfg, err := config.Load(path)
+		cfg, err := Load(path)
 		if err != nil {
 			stop.Store(true)
 			wg.Wait()
@@ -109,19 +111,19 @@ func TestConfigSavers_ReaderNeverSeesPartialFile(t *testing.T) {
 	}
 }
 
-// TestWriteConfigAtomic_PreservesMode checks the saved file keeps the
+// TestWriteAtomic_PreservesMode checks the saved file keeps the
 // mode it already had. os.CreateTemp makes its file 0600, so without
 // an explicit Chmod every save would silently tighten permissions the
 // user chose.
-func TestWriteConfigAtomic_PreservesMode(t *testing.T) {
+func TestWriteAtomic_PreservesMode(t *testing.T) {
 	dir := t.TempDir()
 
 	existing := filepath.Join(dir, "config.toml")
 	if err := os.WriteFile(existing, []byte("# old\n"), 0640); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := writeConfigAtomic(existing, []byte("# new\n")); err != nil {
-		t.Fatalf("writeConfigAtomic: %v", err)
+	if err := WriteAtomic(existing, []byte("# new\n")); err != nil {
+		t.Fatalf("WriteAtomic: %v", err)
 	}
 	fi, err := os.Stat(existing)
 	if err != nil {
@@ -136,8 +138,8 @@ func TestWriteConfigAtomic_PreservesMode(t *testing.T) {
 
 	// A file that did not exist yet gets the default, not 0600.
 	fresh := filepath.Join(dir, "fresh.toml")
-	if err := writeConfigAtomic(fresh, []byte("# fresh\n")); err != nil {
-		t.Fatalf("writeConfigAtomic (new file): %v", err)
+	if err := WriteAtomic(fresh, []byte("# fresh\n")); err != nil {
+		t.Fatalf("WriteAtomic (new file): %v", err)
 	}
 	fi, err = os.Stat(fresh)
 	if err != nil {
@@ -148,14 +150,14 @@ func TestWriteConfigAtomic_PreservesMode(t *testing.T) {
 	}
 }
 
-// TestWriteConfigAtomic_LeavesNoTempFiles guards the cleanup path: a
+// TestWriteAtomic_LeavesNoTempFiles guards the cleanup path: a
 // stale .config-*.toml.tmp beside the user's config is litter, and one
 // left with the old contents is a trap for anyone debugging by hand.
-func TestWriteConfigAtomic_LeavesNoTempFiles(t *testing.T) {
+func TestWriteAtomic_LeavesNoTempFiles(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	if err := writeConfigAtomic(path, []byte("# a\n")); err != nil {
-		t.Fatalf("writeConfigAtomic: %v", err)
+	if err := WriteAtomic(path, []byte("# a\n")); err != nil {
+		t.Fatalf("WriteAtomic: %v", err)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -167,5 +169,39 @@ func TestWriteConfigAtomic_LeavesNoTempFiles(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Errorf("directory contains %v; want only config.toml", names)
+	}
+}
+
+// rewriteLine is a minimal config saver for the tests above: under
+// the write lock, it replaces every line matching pattern with line.
+func rewriteLine(path, pattern, line string) error {
+	defer LockWrites()()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	out := regexp.MustCompile(pattern).ReplaceAllLiteral(data, []byte(line))
+	return WriteAtomic(path, out)
+}
+
+func TestTOMLString(t *testing.T) {
+	cases := map[string]string{
+		"plain":       `"plain"`,
+		`say "hi"`:    `"say \"hi\""`,
+		`back\slash`:  `"back\\slash"`,
+		"tab\there":   `"tab\there"`,
+		"line\nbreak": `"line\nbreak"`,
+		"bell\x07":    `"bell\u0007"`,
+	}
+	for in, want := range cases {
+		if got := TOMLString(in); got != want {
+			t.Errorf("TOMLString(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestSanitizeComment(t *testing.T) {
+	if got := SanitizeComment("  Acme\r\nInjected = 1\x00 "); got != "Acme  Injected = 1" {
+		t.Errorf("SanitizeComment = %q", got)
 	}
 }

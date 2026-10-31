@@ -1,4 +1,4 @@
-package main
+package onboard
 
 import (
 	"context"
@@ -12,7 +12,7 @@ func TestRemintTokens(t *testing.T) {
 		{AccessToken: "old1", Cookie: "c-old", Domain: "acme", TeamID: "T1", TeamName: "Acme"},
 	}
 	saved := map[string]slackclient.Token{}
-	out := remintTokens(context.Background(), in,
+	out := RemintTokens(context.Background(), in,
 		func() (string, error) { return "c-new", nil },
 		func() (map[string]string, error) { return nil, nil }, // no desktop tokens → fall back to mint
 		func(_ context.Context, domain, cookie string) (string, error) { return "xoxc-" + domain, nil },
@@ -34,7 +34,7 @@ func TestRemintTokensPrefersDesktopToken(t *testing.T) {
 	}
 	saved := map[string]slackclient.Token{}
 	mintCalled := false
-	out := remintTokens(context.Background(), in,
+	out := RemintTokens(context.Background(), in,
 		func() (string, error) { return "c-new", nil },
 		func() (map[string]string, error) { return map[string]string{"T1": "xoxc-from-leveldb"}, nil },
 		func(_ context.Context, _, _ string) (string, error) { mintCalled = true; return "xoxc-minted", nil },
@@ -53,7 +53,7 @@ func TestRemintTokensPrefersDesktopToken(t *testing.T) {
 
 func TestRemintTokensKeepsOldOnMintFailure(t *testing.T) {
 	in := []slackclient.Token{{AccessToken: "old1", Cookie: "c-old", Domain: "acme", TeamID: "T1"}}
-	out := remintTokens(context.Background(), in,
+	out := RemintTokens(context.Background(), in,
 		func() (string, error) { return "", context.Canceled }, // cookie read fails
 		func() (map[string]string, error) { return nil, nil },
 		func(_ context.Context, _, _ string) (string, error) { return "should-not-be-used", nil },
@@ -68,7 +68,7 @@ func TestRemintTokensKeepsOldOnMintFailure(t *testing.T) {
 // credentials untouched (the more common partial-failure case).
 func TestRemintTokensKeepsOldOnPerTokenMintFailure(t *testing.T) {
 	in := []slackclient.Token{{AccessToken: "old1", Cookie: "c-old", Domain: "acme", TeamID: "T1"}}
-	out := remintTokens(context.Background(), in,
+	out := RemintTokens(context.Background(), in,
 		func() (string, error) { return "c-new", nil }, // cookie OK
 		func() (map[string]string, error) { return nil, nil },
 		func(_ context.Context, _, _ string) (string, error) { return "", context.Canceled }, // mint fails
@@ -93,7 +93,7 @@ func TestRemintTokensLeavesBrowserSessionsAlone(t *testing.T) {
 	desktop := slackclient.Token{AccessToken: "old2", Cookie: "c-old", Domain: "other", TeamID: "T2", TeamName: "Other"}
 	saved := map[string]slackclient.Token{}
 	mintedFor := []string{}
-	out := remintTokens(context.Background(), []slackclient.Token{browser, desktop},
+	out := RemintTokens(context.Background(), []slackclient.Token{browser, desktop},
 		func() (string, error) { return "c-desktop", nil },
 		func() (map[string]string, error) { return map[string]string{"T1": "xoxc-desktop-user"}, nil },
 		func(_ context.Context, domain, _ string) (string, error) {

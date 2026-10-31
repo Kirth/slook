@@ -27,7 +27,7 @@ import (
 // user pastes that (the bash, cmd or PowerShell form); a bare xoxc token
 // followed by the d cookie also works.
 //
-// Such a token is saved with Source = TokenSourceBrowser and remintTokens
+// Such a token is saved with Source = TokenSourceBrowser and onboard.RemintTokens
 // skips it, even when a desktop cookie is readable: the desktop app may hold
 // the same workspace under another account. So it lasts as long as the
 // browser session it came from.

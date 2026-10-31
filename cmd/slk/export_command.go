@@ -22,6 +22,7 @@ import (
 	"github.com/gammons/slk/internal/cache"
 	"github.com/gammons/slk/internal/config"
 	"github.com/gammons/slk/internal/export"
+	"github.com/gammons/slk/internal/onboard"
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slackdesktop"
 	"github.com/slack-go/slack"
@@ -191,8 +192,8 @@ func exportChannel(args []string) error {
 	defer stop()
 	context.AfterFunc(ctx, stop)
 	// xoxc tokens expire; refresh from the desktop app as the TUI does
-	// at launch. remintTokens keeps the stored token on any failure.
-	tok = remintTokens(ctx, []slackclient.Token{tok}, slackdesktop.Cookie, slackdesktop.Tokens, slackclient.MintToken, store.Save)[0]
+	// at launch. onboard.RemintTokens keeps the stored token on any failure.
+	tok = onboard.RemintTokens(ctx, []slackclient.Token{tok}, slackdesktop.Cookie, slackdesktop.Tokens, slackclient.MintToken, store.Save)[0]
 	client := slackclient.NewClient(tok.AccessToken, tok.Cookie)
 	if err := client.Connect(ctx); err != nil {
 		return fmt.Errorf("connecting to %s: %w", tok.TeamName, err)

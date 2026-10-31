@@ -1,4 +1,4 @@
-package main
+package onboard
 
 import (
 	"fmt"
@@ -9,10 +9,10 @@ import (
 	"github.com/gammons/slk/internal/config"
 )
 
-// uniqueSlug returns base if it is non-empty and not in existing,
+// UniqueSlug returns base if it is non-empty and not in existing,
 // otherwise appends -2, -3, ... until it finds an unused slug.
 // An empty base falls back to "workspace".
-func uniqueSlug(base string, existing map[string]bool) string {
+func UniqueSlug(base string, existing map[string]bool) string {
 	if base == "" {
 		base = "workspace"
 	}
@@ -27,11 +27,11 @@ func uniqueSlug(base string, existing map[string]bool) string {
 	}
 }
 
-// appendWorkspaceConfigBlock appends a [workspaces.<slug>] block with
+// AppendWorkspaceConfigBlock appends a [workspaces.<slug>] block with
 // team_id set, prefixed by a "# <teamName>" comment line. The file
 // is created if it does not exist. Existing content is preserved
 // verbatim (textual append, not TOML re-marshal).
-func appendWorkspaceConfigBlock(configPath, slug, teamID, teamName string) error {
+func AppendWorkspaceConfigBlock(configPath, slug, teamID, teamName string) error {
 	var existing []byte
 	if data, err := os.ReadFile(configPath); err == nil {
 		existing = data
@@ -47,13 +47,13 @@ func appendWorkspaceConfigBlock(configPath, slug, teamID, teamName string) error
 		}
 		b.WriteByte('\n')
 	}
-	safeName := sanitizeComment(teamName)
+	safeName := config.SanitizeComment(teamName)
 	if safeName == "" {
 		safeName = teamID
 	}
 	fmt.Fprintf(&b, "# %s\n", safeName)
 	fmt.Fprintf(&b, "[workspaces.%s]\n", slug)
-	fmt.Fprintf(&b, "team_id = %s\n", tomlString(teamID))
+	fmt.Fprintf(&b, "team_id = %s\n", config.TOMLString(teamID))
 
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
 		return err
@@ -61,10 +61,10 @@ func appendWorkspaceConfigBlock(configPath, slug, teamID, teamName string) error
 	return os.WriteFile(configPath, []byte(b.String()), 0644)
 }
 
-// existingSlugs reads configPath (if present) and returns the set of
-// already-used [workspaces.<key>] keys. Used by addWorkspace to
+// ExistingSlugs reads configPath (if present) and returns the set of
+// already-used [workspaces.<key>] keys. Used by SaveWorkspace to
 // avoid colliding with existing slug or legacy entries.
-func existingSlugs(configPath string) map[string]bool {
+func ExistingSlugs(configPath string) map[string]bool {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return map[string]bool{}

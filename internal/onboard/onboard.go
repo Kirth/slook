@@ -1,4 +1,10 @@
-package main
+// Package onboard is workspace sign-in and token upkeep without a
+// terminal or a window: which desktop-app workspaces to offer, the
+// tokens to save for the ones chosen, saving one (token store plus its
+// config.toml block), and the startup re-mint of every stored token
+// from the desktop app's session. The prompts that ask the user (huh,
+// lipgloss) stay in cmd/slk; the GUI calls Remint at startup.
+package onboard
 
 import (
 	"context"
@@ -8,17 +14,17 @@ import (
 	"github.com/gammons/slk/internal/slackdesktop"
 )
 
-// minter matches slackclient.MintToken; injected for testing.
-type minter func(ctx context.Context, domain, cookie string) (string, error)
+// Minter matches slackclient.MintToken; injected for testing.
+type Minter func(ctx context.Context, domain, cookie string) (string, error)
 
-// buildWorkspaceTokens resolves a token for each selected workspace and returns
+// BuildWorkspaceTokens resolves a token for each selected workspace and returns
 // the Token records to persist. Workspaces whose TeamID is not in `selected`
 // are skipped.
 //
 // The token comes from the desktop app's Local Storage (desktopTokens, keyed by
 // team ID) — modern Slack (client-v2) no longer embeds it in page HTML. Minting
 // via page-scrape is kept only as a fallback for older workspaces that still do.
-func buildWorkspaceTokens(ctx context.Context, cookie string, desktopTokens map[string]string, ws []slackdesktop.Workspace, selected map[string]bool, mint minter) ([]slackclient.Token, error) {
+func BuildWorkspaceTokens(ctx context.Context, cookie string, desktopTokens map[string]string, ws []slackdesktop.Workspace, selected map[string]bool, mint Minter) ([]slackclient.Token, error) {
 	var out []slackclient.Token
 	for _, w := range ws {
 		if !selected[w.TeamID] {
@@ -43,24 +49,24 @@ func buildWorkspaceTokens(ctx context.Context, cookie string, desktopTokens map[
 	return out, nil
 }
 
-// workspaceChoice is one row of the desktop flow's workspace picker.
-type workspaceChoice struct {
-	label, teamID string
+// WorkspaceChoice is one row of the desktop flow's workspace picker.
+type WorkspaceChoice struct {
+	Label, TeamID string
 }
 
-// desktopChoices builds the picker's rows and its pre-selection. Every
+// DesktopChoices builds the picker's rows and its pre-selection. Every
 // workspace is pre-selected, except one that saved already holds as a
 // browser-session token: selecting it replaces that session with the desktop
 // app's, which may be another account, so that must be a deliberate tick, not
 // a side effect of adding some other workspace.
-func desktopChoices(ws []slackdesktop.Workspace, saved []slackclient.Token) ([]workspaceChoice, []string) {
+func DesktopChoices(ws []slackdesktop.Workspace, saved []slackclient.Token) ([]WorkspaceChoice, []string) {
 	browser := map[string]bool{}
 	for _, tok := range saved {
 		if tok.Source == slackclient.TokenSourceBrowser {
 			browser[tok.TeamID] = true
 		}
 	}
-	choices := make([]workspaceChoice, 0, len(ws))
+	choices := make([]WorkspaceChoice, 0, len(ws))
 	chosen := make([]string, 0, len(ws))
 	for _, w := range ws {
 		label := fmt.Sprintf("%s  (%s.slack.com)", w.Name, w.Domain)
@@ -69,7 +75,7 @@ func desktopChoices(ws []slackdesktop.Workspace, saved []slackclient.Token) ([]w
 		} else {
 			chosen = append(chosen, w.TeamID)
 		}
-		choices = append(choices, workspaceChoice{label: label, teamID: w.TeamID})
+		choices = append(choices, WorkspaceChoice{Label: label, TeamID: w.TeamID})
 	}
 	return choices, chosen
 }

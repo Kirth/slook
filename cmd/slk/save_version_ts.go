@@ -46,8 +46,7 @@ func workspaceTOMLKey(cfg config.Config, teamID string) string {
 // a textual line rewrite rather than a TOML re-marshal, so user comments
 // and field ordering survive the write.
 func saveWorkspaceVersionTS(configPath, tomlKey, teamID, teamName, versionTS string) error {
-	configWriteMu.Lock()
-	defer configWriteMu.Unlock()
+	defer config.LockWrites()()
 
 	data, err := os.ReadFile(configPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -83,7 +82,7 @@ func saveWorkspaceVersionTS(configPath, tomlKey, teamID, teamName, versionTS str
 		for j := sectionStart + 1; j < end; j++ {
 			t := strings.TrimSpace(lines[j])
 			if strings.HasPrefix(t, "version_ts") && strings.Contains(t, "=") {
-				lines[j] = "version_ts = " + tomlString(versionTS)
+				lines[j] = "version_ts = " + config.TOMLString(versionTS)
 				updated = true
 				break
 			}
@@ -91,23 +90,23 @@ func saveWorkspaceVersionTS(configPath, tomlKey, teamID, teamName, versionTS str
 		if !updated {
 			newLines := make([]string, 0, len(lines)+1)
 			newLines = append(newLines, lines[:sectionStart+1]...)
-			newLines = append(newLines, "version_ts = "+tomlString(versionTS))
+			newLines = append(newLines, "version_ts = "+config.TOMLString(versionTS))
 			newLines = append(newLines, lines[sectionStart+1:]...)
 			lines = newLines
 		}
-		return writeConfigAtomic(configPath, []byte(strings.Join(lines, "\n")))
+		return config.WriteAtomic(configPath, []byte(strings.Join(lines, "\n")))
 	}
 
 	// No existing section — append a legacy-keyed block.
 	if len(lines) > 0 && lines[len(lines)-1] != "" {
 		lines = append(lines, "")
 	}
-	safeName := sanitizeComment(teamName)
+	safeName := config.SanitizeComment(teamName)
 	if safeName == "" {
 		safeName = teamID
 	}
 	commentLine := "# " + safeName
 	legacyHeader := fmt.Sprintf("[workspaces.%s]", teamID)
-	lines = append(lines, commentLine, legacyHeader, "version_ts = "+tomlString(versionTS))
-	return writeConfigAtomic(configPath, []byte(strings.Join(lines, "\n")))
+	lines = append(lines, commentLine, legacyHeader, "version_ts = "+config.TOMLString(versionTS))
+	return config.WriteAtomic(configPath, []byte(strings.Join(lines, "\n")))
 }

@@ -2,14 +2,13 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/gammons/slk/internal/config"
+	"github.com/gammons/slk/internal/onboard"
 	slackclient "github.com/gammons/slk/internal/slack"
 	"github.com/gammons/slk/internal/slackdesktop"
 	"golang.org/x/term"
@@ -57,22 +56,22 @@ func addWorkspace(forceBrowser bool) error {
 	// Read cookie + workspaces from the desktop app.
 	cookie, err := slackdesktop.Cookie()
 	if err != nil {
-		fmt.Println(errorStyle.Render("  " + desktopErrorMessage(err)))
+		fmt.Println(errorStyle.Render("  " + onboard.DesktopErrorMessage(err)))
 		return offerBrowserFallback(term.IsTerminal(int(os.Stdin.Fd())), askBrowserFallback, browser, err)
 	}
 	workspaces, err := slackdesktop.Workspaces()
 	if err != nil {
-		fmt.Println(errorStyle.Render("  " + desktopErrorMessage(err)))
+		fmt.Println(errorStyle.Render("  " + onboard.DesktopErrorMessage(err)))
 		return offerBrowserFallback(term.IsTerminal(int(os.Stdin.Fd())), askBrowserFallback, browser, err)
 	}
 
 	// Multi-select (all pre-selected, but for the teams signed in from a
-	// browser session: see desktopChoices).
+	// browser session: see onboard.DesktopChoices).
 	saved, _ := tokenStore.List()
-	choices, chosen := desktopChoices(workspaces, saved)
+	choices, chosen := onboard.DesktopChoices(workspaces, saved)
 	var opts []huh.Option[string]
 	for _, c := range choices {
-		opts = append(opts, huh.NewOption(c.label, c.teamID))
+		opts = append(opts, huh.NewOption(c.Label, c.TeamID))
 	}
 	// huh sizes the MultiSelect option viewport to (Height - title/description
 	// lines); when Height is unset the viewport collapses to a row or two and
@@ -109,7 +108,7 @@ func addWorkspace(forceBrowser bool) error {
 
 	fmt.Println()
 	fmt.Println(stepStyle.Render("Connecting..."))
-	tokens, err := buildWorkspaceTokens(context.Background(), cookie, desktopTokens, workspaces, selected, slackclient.MintToken)
+	tokens, err := onboard.BuildWorkspaceTokens(context.Background(), cookie, desktopTokens, workspaces, selected, slackclient.MintToken)
 	if err != nil {
 		fmt.Println(errorStyle.Render("  Failed to obtain token: " + err.Error()))
 		return err
@@ -134,62 +133,24 @@ func addWorkspace(forceBrowser bool) error {
 	return nil
 }
 
-// saveWorkspace persists a validated token and appends its
-// [workspaces.<slug>] config block (best-effort). Re-adding a workspace
-// already in config.toml (the browser flow's documented recovery when its
-// session expires) only refreshes the token: a second block for the same
-// team_id would make config.Load reject the file.
+// saveWorkspace saves a validated token and its config.toml block
+// (onboard.SaveWorkspace) and reports what it did.
 func saveWorkspace(tokenStore *slackclient.TokenStore, tok slackclient.Token, st onboardingStyles) error {
-	if err := tokenStore.Save(tok); err != nil {
-		return fmt.Errorf("saving token for %s: %w", tok.TeamName, err)
-	}
-	configPath := filepath.Join(xdgConfig(), "config.toml")
-	cfg, err := config.Load(configPath)
+	res, err := onboard.SaveWorkspace(tokenStore, tok, filepath.Join(xdgConfig(), "config.toml"))
 	if err != nil {
-		// Appending to a file that already fails to load (a duplicate an
-		// earlier run left) cannot fix it, and may add one more block.
-		fmt.Println(st.success.Render("  Added ") + st.dim.Render(tok.TeamName))
-		fmt.Println(st.dim.Render("  Note: config.toml does not load (" + err.Error() + "), left as is."))
-		return nil
+		return err
 	}
-	if _, ok := cfg.WorkspaceByTeamID(tok.TeamID); ok {
-		fmt.Println(st.success.Render("  Updated ") + st.dim.Render(tok.TeamName))
-		return nil
-	}
-	slug := uniqueSlug(config.Slugify(tok.TeamName), existingSlugs(configPath))
-	if err := appendWorkspaceConfigBlock(configPath, slug, tok.TeamID, tok.TeamName); err != nil {
-		fmt.Println(st.dim.Render("  Note: could not write config.toml: " + err.Error()))
-	}
-	fmt.Println(st.success.Render("  Added ") + st.dim.Render(tok.TeamName))
-	return nil
-}
-
-// desktopErrorMessage maps a slackdesktop error to an actionable message.
-func desktopErrorMessage(err error) string {
 	switch {
-	case errors.Is(err, slackdesktop.ErrDesktopNotFound):
-		return "Slack desktop app not found. Install it and sign in, then retry."
-	case errors.Is(err, slackdesktop.ErrNotSignedIn):
-		return "No Slack workspaces are signed in. Open Slack, sign in, then retry."
-	case errors.Is(err, slackdesktop.ErrCookieDBMissing):
-		return "Slack is installed but has never signed in on this machine."
-	case errors.Is(err, slackdesktop.ErrKeyringLocked):
-		return "Your system keyring is locked. Unlock it (log in to your desktop session) and retry."
-	case errors.Is(err, slackdesktop.ErrNoSecretService):
-		return "No system keyring/secret service found. slk needs it to read the Slack session."
-	case errors.Is(err, slackdesktop.ErrSecretNotFound):
-		return "No Slack entry found in your keyring or KWallet. Sign in to the Slack desktop app, then retry. " +
-			"If Slack was launched with --password-store=basic it never stored a key at all, and slk cannot read that session."
-	case errors.Is(err, slackdesktop.ErrDecryptFailed):
-		// Keep the wrapped detail: it names which step failed (padding, length,
-		// non-printable result), which is the difference between a diagnosable
-		// report and a round-trip asking what actually broke.
-		return "Could not decrypt the Slack session cookie: " + err.Error() +
-			". If you have had more than one Slack build installed (App Store and standalone), " +
-			"sign out of the one you no longer use. Otherwise please file an issue with your OS + Slack version."
-	case errors.Is(err, slackdesktop.ErrCookieLocked):
-		return "Your Slack cookie is locked by a running process of Slack. Close Slack and try again."
+	case res.LoadErr != nil:
+		fmt.Println(st.success.Render("  Added ") + st.dim.Render(tok.TeamName))
+		fmt.Println(st.dim.Render("  Note: config.toml does not load (" + res.LoadErr.Error() + "), left as is."))
+	case res.Updated:
+		fmt.Println(st.success.Render("  Updated ") + st.dim.Render(tok.TeamName))
 	default:
-		return "Could not read Slack desktop session: " + err.Error()
+		if res.WriteErr != nil {
+			fmt.Println(st.dim.Render("  Note: could not write config.toml: " + res.WriteErr.Error()))
+		}
+		fmt.Println(st.success.Render("  Added ") + st.dim.Render(tok.TeamName))
 	}
+	return nil
 }
